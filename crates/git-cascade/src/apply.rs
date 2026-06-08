@@ -160,6 +160,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     let new_tip_ref = git.symbolic_full_name(&options.new_tip_input)?;
     let ordered = topological_order(plan)?;
+    ensure_target_branches_not_checked_out(git, &ordered)?;
     let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
     let branch_tips = branch_replays
         .iter()
@@ -271,6 +272,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
 
     state.phase = Phase::FinalUpdate;
     state_file.write_state(&mut state)?;
+    ensure_target_branches_not_checked_out(git, &ordered)?;
     test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
@@ -470,6 +472,7 @@ fn continue_replay_after_resolved_commit(
 
     state.phase = Phase::FinalUpdate;
     state_file.write_state(&mut state)?;
+    ensure_target_branches_not_checked_out(git, &ordered)?;
     let new_tip_ref = if state.new_tip.input_was_ref {
         Some(
             git.symbolic_full_name(&state.new_tip.input)?
@@ -607,6 +610,23 @@ fn temp_ref(plan: &Plan, branch: &str) -> String {
         plan.plan_id,
         encode_component(branch)
     )
+}
+
+fn ensure_target_branches_not_checked_out(git: &Git, branches: &[String]) -> Result<()> {
+    let checked_out = git.checked_out_branches()?;
+    let blocked = branches
+        .iter()
+        .filter(|branch| checked_out.contains(branch))
+        .cloned()
+        .collect::<Vec<_>>();
+    if blocked.is_empty() {
+        return Ok(());
+    }
+
+    Err(Error::InvalidInvocation(format!(
+        "cannot apply while target branch(es) are checked out in a worktree: {}. Switch those worktrees to another branch or a detached HEAD before running apply.",
+        blocked.join(", ")
+    )))
 }
 
 fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<String, String>> {

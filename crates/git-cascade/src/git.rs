@@ -162,6 +162,23 @@ impl Git {
         Ok(branches)
     }
 
+    pub fn checked_out_branches(&self) -> Result<Vec<String>> {
+        let output = self.output(["worktree", "list", "--porcelain"])?;
+        let mut branches = Vec::new();
+        for line in output.lines() {
+            let Some(refname) = line.strip_prefix("branch ") else {
+                continue;
+            };
+            let Some(branch) = refname.strip_prefix("refs/heads/") else {
+                continue;
+            };
+            branches.push(branch.to_owned());
+        }
+        branches.sort();
+        branches.dedup();
+        Ok(branches)
+    }
+
     pub fn merge_base(&self, left: &str, right: &str) -> Result<Option<String>> {
         Ok(self
             .try_output(["merge-base", left, right])?

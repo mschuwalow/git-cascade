@@ -207,6 +207,30 @@ fn apply_refuses_when_state_exists() {
 }
 
 #[test]
+fn apply_refuses_when_target_branch_is_checked_out() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    rewrite_anchor(&repo);
+    let old_pr2 = repo.rev_parse("pr-2");
+    repo.switch("pr-2");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("target branch(es) are checked out")
+                .and(predicate::str::contains("pr-2")),
+        );
+
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
 fn apply_refuses_when_dependent_branch_moved() {
     let repo = linear_stack();
     repo.cascade()
