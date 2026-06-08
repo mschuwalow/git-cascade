@@ -35,7 +35,10 @@ pub struct Node {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NodeKind {
-    Anchor,
+    Root {
+        old_base: String,
+        commits: Vec<String>,
+    },
     Dependent {
         parent: String,
         old_base: String,
@@ -46,27 +49,27 @@ pub enum NodeKind {
 impl Node {
     pub fn parent(&self) -> Option<&str> {
         match &self.kind {
-            NodeKind::Anchor => None,
+            NodeKind::Root { .. } => None,
             NodeKind::Dependent { parent, .. } => Some(parent),
         }
     }
 
     pub fn old_base(&self) -> Option<&str> {
         match &self.kind {
-            NodeKind::Anchor => None,
+            NodeKind::Root { old_base, .. } => Some(old_base),
             NodeKind::Dependent { old_base, .. } => Some(old_base),
         }
     }
 
     pub fn commits(&self) -> &[String] {
         match &self.kind {
-            NodeKind::Anchor => &[],
+            NodeKind::Root { commits, .. } => commits,
             NodeKind::Dependent { commits, .. } => commits,
         }
     }
 
-    pub fn is_anchor(&self) -> bool {
-        matches!(self.kind, NodeKind::Anchor)
+    pub fn is_root(&self) -> bool {
+        matches!(self.kind, NodeKind::Root { .. })
     }
 }
 

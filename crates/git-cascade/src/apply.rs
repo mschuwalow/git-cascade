@@ -37,7 +37,6 @@ enum ReplayBase {
 }
 
 struct ActualReplayContext<'a> {
-    anchor: &'a Node,
     nodes: &'a HashMap<&'a str, &'a Node>,
     selected_bases: &'a HashMap<String, String>,
     temp_tips: &'a HashMap<String, String>,
@@ -84,14 +83,6 @@ pub fn dry_run(
         .iter()
         .map(|node| (node.branch.as_str(), node))
         .collect::<HashMap<_, _>>();
-    let anchor = plan
-        .nodes
-        .iter()
-        .find(|node| node.is_anchor())
-        .ok_or_else(|| {
-            Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
-        })?;
-
     let mut selected_bases = HashMap::<String, ReplayBase>::new();
     let mut output = String::new();
     let worktree = storage.worktrees_dir().join(&plan.plan_id);
@@ -107,14 +98,7 @@ pub fn dry_run(
         let node = nodes
             .get(branch.as_str())
             .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
-        let base = replay_base(
-            node,
-            anchor,
-            &nodes,
-            &selected_bases,
-            &new_tip,
-            options.strategy,
-        )?;
+        let base = replay_base(node, &nodes, &selected_bases, &new_tip, options.strategy)?;
         selected_bases.insert(node.branch.clone(), base.clone());
 
         writeln!(output).unwrap();
@@ -190,14 +174,6 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         .iter()
         .map(|node| (node.branch.as_str(), node))
         .collect::<HashMap<_, _>>();
-    let anchor = plan
-        .nodes
-        .iter()
-        .find(|node| node.is_anchor())
-        .ok_or_else(|| {
-            Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
-        })?;
-
     let mut mappings = BTreeMap::new();
     mappings.insert(plan.source.old_tip.clone(), new_tip.clone());
     let worktree = storage.worktrees_dir().join(&plan.plan_id);
@@ -232,7 +208,6 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         let base = actual_replay_base(
             node,
             ActualReplayContext {
-                anchor,
                 nodes: &nodes,
                 selected_bases: &selected_bases,
                 temp_tips: &temp_tips,
@@ -399,13 +374,6 @@ fn continue_replay_after_resolved_commit(
         .iter()
         .map(|node| (node.branch.as_str(), node))
         .collect::<HashMap<_, _>>();
-    let anchor = plan
-        .nodes
-        .iter()
-        .find(|node| node.is_anchor())
-        .ok_or_else(|| {
-            Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
-        })?;
     let worktree = std::path::PathBuf::from(&state.worktree);
     let worktree_git = Git::new(&worktree);
     let mut mappings = state.mappings.clone();
@@ -438,7 +406,6 @@ fn continue_replay_after_resolved_commit(
             let base = actual_replay_base(
                 node,
                 ActualReplayContext {
-                    anchor,
                     nodes: &nodes,
                     selected_bases: &selected_bases,
                     temp_tips: &temp_tips,
@@ -535,22 +502,21 @@ fn continue_replay_after_resolved_commit(
 
 fn replay_base(
     node: &Node,
-    anchor: &Node,
     nodes: &HashMap<&str, &Node>,
     selected_bases: &HashMap<String, ReplayBase>,
     new_tip: &str,
     strategy: Strategy,
 ) -> Result<ReplayBase> {
+    if node.is_root() {
+        return Ok(ReplayBase::ResolvedCommit(new_tip.to_owned()));
+    }
+
     let parent_branch = node.parent().ok_or_else(|| {
-        Error::InvalidPlan(format!("anchor node `{}` cannot be replayed", node.branch))
+        Error::InvalidPlan(format!("root node `{}` has no branch parent", node.branch))
     })?;
     let parent = nodes
         .get(parent_branch)
         .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
-
-    if parent.branch == anchor.branch {
-        return Ok(ReplayBase::ResolvedCommit(new_tip.to_owned()));
-    }
 
     if strategy == Strategy::MoveToPlannedTips {
         return Ok(ReplayBase::RewrittenPlannedTip {
@@ -581,17 +547,17 @@ fn replay_base(
 }
 
 fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<String> {
+    if node.is_root() {
+        return Ok(context.new_tip.to_owned());
+    }
+
     let parent_branch = node.parent().ok_or_else(|| {
-        Error::InvalidPlan(format!("anchor node `{}` cannot be replayed", node.branch))
+        Error::InvalidPlan(format!("root node `{}` has no branch parent", node.branch))
     })?;
     let parent = context
         .nodes
         .get(parent_branch)
         .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
-
-    if parent.branch == context.anchor.branch {
-        return Ok(context.new_tip.to_owned());
-    }
 
     if context.strategy == Strategy::MoveToPlannedTips {
         return context

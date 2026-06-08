@@ -38,7 +38,7 @@ fn validation_rejects_tampered_commit_list() {
     let NodeKind::Dependent { commits, .. } = &mut node.kind else {
         panic!("pr-3 should be dependent");
     };
-    commits.clear();
+    commits.push(commits[0].clone());
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
@@ -116,11 +116,8 @@ fn validation_rejects_direct_child_at_anchor_base() {
         .iter_mut()
         .find(|node| node.branch == "pr-2")
         .unwrap();
-    let NodeKind::Dependent {
-        old_base, commits, ..
-    } = &mut node.kind
-    else {
-        panic!("pr-2 should be dependent");
+    let NodeKind::Root { old_base, commits } = &mut node.kind else {
+        panic!("pr-2 should be root");
     };
     *old_base = plan.source.old_base.clone();
     *commits = repo.rev_list_reverse(&format!("{}..{}", old_base, node.old_tip));

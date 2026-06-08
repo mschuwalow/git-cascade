@@ -48,24 +48,31 @@ pub fn topological_order(plan: &Plan) -> Result<Vec<String>> {
         children.sort_unstable();
     }
 
-    let anchor = anchor_node(plan)?;
     let mut ordered = Vec::new();
     let mut visiting = HashSet::new();
     let mut visited = HashSet::new();
-    visit(
-        anchor.branch.as_str(),
-        &node_by_branch,
-        &children_by_parent,
-        &mut visiting,
-        &mut visited,
-        &mut ordered,
-    )?;
-
-    if visited.len() != plan.nodes.len() {
-        return invalid("dependency graph does not connect every node to the anchor");
+    let mut roots = plan
+        .nodes
+        .iter()
+        .filter(|node| node.is_root())
+        .map(|node| node.branch.as_str())
+        .collect::<Vec<_>>();
+    roots.sort_unstable();
+    for root in roots {
+        visit(
+            root,
+            &node_by_branch,
+            &children_by_parent,
+            &mut visiting,
+            &mut visited,
+            &mut ordered,
+        )?;
     }
 
-    ordered.retain(|branch| branch != &anchor.branch);
+    if visited.len() != plan.nodes.len() {
+        return invalid("dependency graph does not connect every node to a root");
+    }
+
     Ok(ordered)
 }
 
@@ -75,20 +82,9 @@ fn validate_shape(plan: &Plan) -> Result<()> {
     }
     validate_ref_component("plan_id", &plan.plan_id)?;
 
-    if plan.nodes.is_empty() {
-        return invalid("plan must contain at least one node");
-    }
-
     let node_by_branch = node_by_branch(plan)?;
-    let anchor = anchor_node(plan)?;
     if plan.source.name.is_empty() {
         return invalid("source name must not be empty");
-    }
-    if anchor.branch != plan.source.name {
-        return invalid("source name does not match the anchor node");
-    }
-    if anchor.old_tip != plan.source.old_tip {
-        return invalid("source old_tip does not match the anchor node");
     }
     if plan.source.old_base == plan.source.old_tip {
         return invalid("source old_base must differ from old_tip");
@@ -98,6 +94,12 @@ fn validate_shape(plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
         if node.branch.is_empty() {
             return invalid("node branch names must not be empty");
+        }
+        if node.commits().is_empty() {
+            return invalid(format!(
+                "node `{}` must contain at least one commit",
+                node.branch
+            ));
         }
 
         let Some(parent) = node.parent() else {
@@ -193,20 +195,21 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
 
     let node_by_branch = node_by_branch(plan)?;
     for node in &plan.nodes {
-        let Some(parent) = node.parent() else {
-            continue;
-        };
         let old_base = node.old_base().expect("dependent node has an old base");
-        let parent = node_by_branch[parent];
-        if parent.is_anchor()
-            && (old_base == plan.source.old_base
-                || !git.is_ancestor(&plan.source.old_base, old_base)?)
-        {
-            return invalid(format!(
-                "old_base `{}` for branch `{}` is outside root range {}..{}",
-                old_base, node.branch, plan.source.old_base, parent.old_tip
-            ));
+        if node.is_root() {
+            if old_base == plan.source.old_base
+                || !git.is_ancestor(&plan.source.old_base, old_base)?
+                || !git.is_ancestor(old_base, &plan.source.old_tip)?
+            {
+                return invalid(format!(
+                    "old_base `{}` for branch `{}` is outside root range {}..{}",
+                    old_base, node.branch, plan.source.old_base, plan.source.old_tip
+                ));
+            }
+            continue;
         }
+
+        let parent = node_by_branch[node.parent().expect("dependent node has a parent")];
         if !git.is_ancestor(old_base, &parent.old_tip)? {
             return invalid(format!(
                 "old_base `{}` for branch `{}` is not reachable from parent `{}` old_tip `{}`",
@@ -220,10 +223,6 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
 
 fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
-        if node.is_anchor() {
-            continue;
-        }
-
         let actual = git.local_branch_tip(&node.branch)?;
         if !git.is_ancestor(&node.old_tip, &actual)? {
             return invalid(format!(
@@ -249,13 +248,11 @@ fn validate_default_fork_point_mappability(
     node_by_branch: &HashMap<&str, &Node>,
 ) -> Result<()> {
     for node in &plan.nodes {
-        let Some(parent_branch) = node.parent() else {
-            continue;
-        };
-        let parent = node_by_branch[parent_branch];
-        if parent.is_anchor() {
+        if node.is_root() {
             continue;
         }
+        let parent_branch = node.parent().expect("dependent node has a parent");
+        let parent = node_by_branch[parent_branch];
         let old_base = node.old_base().expect("dependent node has an old base");
         let parent_old_base = parent.old_base().expect("dependent parent has an old base");
         if old_base != parent_old_base && !parent.commits().iter().any(|commit| commit == old_base)
@@ -361,18 +358,6 @@ fn dependency_set(plan: &Plan) -> Result<HashSet<(&str, &str)>> {
     Ok(dependencies)
 }
 
-fn anchor_node(plan: &Plan) -> Result<&Node> {
-    let mut anchors = plan.nodes.iter().filter(|node| node.is_anchor());
-    let Some(anchor) = anchors.next() else {
-        return invalid("plan must contain exactly one anchor node");
-    };
-    if anchors.next().is_some() {
-        return invalid("plan must contain exactly one anchor node");
-    }
-
-    Ok(anchor)
-}
-
 fn validate_ref_component(field: &str, value: &str) -> Result<()> {
     if value.is_empty() {
         return invalid(format!("{field} must not be empty"));
@@ -407,7 +392,10 @@ mod tests {
             node("grandchild", Some("child")),
         ]);
 
-        assert_eq!(topological_order(&plan).unwrap(), ["child", "grandchild"]);
+        assert_eq!(
+            topological_order(&plan).unwrap(),
+            ["anchor", "child", "grandchild"]
+        );
     }
 
     #[test]
@@ -450,11 +438,17 @@ mod tests {
         Node {
             branch: branch.to_owned(),
             old_tip: "0".repeat(40),
-            kind: parent.map_or(NodeKind::Anchor, |parent| NodeKind::Dependent {
-                parent: parent.to_owned(),
-                old_base: "0".repeat(40),
-                commits: Vec::new(),
-            }),
+            kind: parent.map_or(
+                NodeKind::Root {
+                    old_base: "0".repeat(40),
+                    commits: vec!["0".repeat(40)],
+                },
+                |parent| NodeKind::Dependent {
+                    parent: parent.to_owned(),
+                    old_base: "0".repeat(40),
+                    commits: vec!["0".repeat(40)],
+                },
+            ),
         }
     }
 }

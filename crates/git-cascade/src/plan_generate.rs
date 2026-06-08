@@ -23,7 +23,7 @@ pub struct GenerateOptions {
 #[derive(Debug, Clone)]
 struct Candidate {
     branch: LocalBranch,
-    parent_branch: String,
+    parent_branch: Option<String>,
     old_base: String,
     commits: Vec<String>,
 }
@@ -49,32 +49,40 @@ pub fn generate_plan(
     let old_tip = git.resolve_commit(old_tip_ref)?;
     let old_base = resolve_old_base(git, name.as_str(), old_tip_ref, &old_tip, old_base_ref)?;
 
-    let mut nodes = vec![Node {
-        branch: name.to_string(),
-        old_tip: old_tip.clone(),
-        kind: NodeKind::Anchor,
-    }];
+    let mut nodes = Vec::new();
     let mut dependencies = Vec::new();
-    let mut assigned = HashSet::from([name.to_string()]);
+    let mut assigned = HashSet::new();
     if let Some(local_branch) = old_tip_local_branch(git, old_tip_ref)? {
         assigned.insert(local_branch);
     }
     let branches = git.local_branches()?;
 
-    while let Some(candidate) = next_candidate(git, &branches, &nodes, &assigned, &old_base)? {
+    while let Some(candidate) =
+        next_candidate(git, &branches, &nodes, &assigned, &old_base, &old_tip)?
+    {
         assigned.insert(candidate.branch.name.clone());
-        dependencies.push(Dependency {
-            parent: candidate.parent_branch.clone(),
-            child: candidate.branch.name.clone(),
-        });
+        if let Some(parent_branch) = &candidate.parent_branch {
+            dependencies.push(Dependency {
+                parent: parent_branch.clone(),
+                child: candidate.branch.name.clone(),
+            });
+        }
+        let kind = if let Some(parent) = candidate.parent_branch {
+            NodeKind::Dependent {
+                parent,
+                old_base: candidate.old_base,
+                commits: candidate.commits,
+            }
+        } else {
+            NodeKind::Root {
+                old_base: candidate.old_base,
+                commits: candidate.commits,
+            }
+        };
         nodes.push(Node {
             branch: candidate.branch.name,
             old_tip: candidate.branch.tip,
-            kind: NodeKind::Dependent {
-                parent: candidate.parent_branch,
-                old_base: candidate.old_base,
-                commits: candidate.commits,
-            },
+            kind,
         });
     }
 
@@ -185,7 +193,8 @@ fn next_candidate(
     branches: &[LocalBranch],
     nodes: &[Node],
     assigned: &HashSet<String>,
-    anchor_base: &str,
+    source_old_base: &str,
+    source_old_tip: &str,
 ) -> Result<Option<Candidate>> {
     let node_by_branch = nodes
         .iter()
@@ -198,23 +207,33 @@ fn next_candidate(
             continue;
         }
 
+        if let Some(base) = git.merge_base(source_old_tip, &branch.tip)?
+            && !git.is_ancestor(&branch.tip, source_old_tip)?
+            && base != source_old_base
+            && git.is_ancestor(source_old_base, &base)?
+        {
+            let commits = owned_commits(git, &base, &branch.tip, &branch.name)?;
+            if !commits.is_empty() {
+                let candidate = Candidate {
+                    branch: branch.clone(),
+                    parent_branch: None,
+                    old_base: base,
+                    commits,
+                };
+                if is_better_candidate(&candidate, best.as_ref(), &node_by_branch) {
+                    best = Some(candidate);
+                }
+            }
+        }
+
         for parent in nodes {
             let Some(base) = git.merge_base(&parent.old_tip, &branch.tip)? else {
                 continue;
             };
 
-            if parent.is_anchor() {
-                if git.is_ancestor(&branch.tip, &parent.old_tip)? {
-                    continue;
-                }
-                if base == anchor_base || !git.is_ancestor(anchor_base, &base)? {
-                    continue;
-                }
-            } else {
-                let parent_old_base = parent.old_base().expect("dependent parent has an old base");
-                if base != parent_old_base && !parent.commits().contains(&base) {
-                    continue;
-                }
+            let parent_old_base = parent.old_base().expect("parent node has an old base");
+            if base != parent_old_base && !parent.commits().contains(&base) {
+                continue;
             }
 
             let commits = owned_commits(git, &base, &branch.tip, &branch.name)?;
@@ -224,7 +243,7 @@ fn next_candidate(
 
             let candidate = Candidate {
                 branch: branch.clone(),
-                parent_branch: parent.branch.clone(),
+                parent_branch: Some(parent.branch.clone()),
                 old_base: base,
                 commits,
             };
@@ -247,8 +266,14 @@ fn is_better_candidate(
         return true;
     };
 
-    let candidate_parent_depth = parent_depth(&candidate.parent_branch, node_by_branch);
-    let current_parent_depth = parent_depth(&current.parent_branch, node_by_branch);
+    let candidate_parent_depth = candidate
+        .parent_branch
+        .as_deref()
+        .map_or(0, |parent| parent_depth(parent, node_by_branch) + 1);
+    let current_parent_depth = current
+        .parent_branch
+        .as_deref()
+        .map_or(0, |parent| parent_depth(parent, node_by_branch) + 1);
     candidate_parent_depth
         .cmp(&current_parent_depth)
         .then_with(|| current.commits.len().cmp(&candidate.commits.len()))

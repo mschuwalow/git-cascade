@@ -372,15 +372,10 @@ source:
   old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
 
 nodes:
-  - branch: "agent-permissions-8"
-    old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
-    kind: anchor
-
   - branch: "agent-permissions-9"
     old_tip: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
-    kind: dependent
-    parent: "agent-permissions-8"
-    old_base: "1111111111111111111111111111111111111111"
+    kind: root
+    old_base: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
     commits:
       - "3333333333333333333333333333333333333333"
       - "5b58f121371d5e79ab4c769bbe8c7867958f939a"
@@ -395,8 +390,6 @@ nodes:
       - "7777777777777777777777777777777777777777"
 
 dependencies:
-  - parent: "agent-permissions-8"
-    child: "agent-permissions-9"
   - parent: "agent-permissions-9"
     child: "agent-permissions-10"
 ```
@@ -413,7 +406,7 @@ dependencies:
 
 `source` describes the plan name and old root range.
 
-`nodes` contains the captured branch graph. It must include exactly one anchor node.
+`nodes` contains the captured branch graph. Every node is a local branch that may be updated by apply. Branches attached directly to the source root range use `kind: root`.
 
 `dependencies` contains explicit parent-child DAG edges.
 
@@ -623,18 +616,19 @@ Before replay:
 - All `old_base`, `old_tip`, and `commits` objects exist locally.
 - The dependency graph is acyclic.
 - Every dependency references known nodes.
-- Exactly one anchor node exists.
+- Every node is either `kind: root` or `kind: dependent`.
+- Every root node has an `old_base` inside `source.old_base..source.old_tip`.
 - Every dependent node has a parent.
 - Every dependent `old_base` is reachable from its parent `old_tip`.
-- Every dependent commit list matches `old_base..old_tip`.
-- In the default fork-point-preserving mode, every non-anchor child `old_base` is mappable through its parent's replay.
-- Every dependent branch ref still equals `old_tip`, unless an explicit branch mapping override is supplied.
+- Every node commit list matches `old_base..old_tip`.
+- In the default fork-point-preserving mode, every dependent child `old_base` is mappable through its parent's replay.
+- Every planned branch `old_tip` is still reachable from the branch's current apply-time tip.
 
 Before final ref update:
 
-- Every dependent node has a temporary rewritten tip.
+- Every node has a temporary rewritten tip.
 - Every temporary rewritten tip exists.
-- Every dependent branch ref still equals `old_tip`.
+- Every branch ref still equals the apply-time tip captured before replay started.
 - The `--new-tip` ref still equals the resolved replacement tip when the replacement tip was a ref.
 
 ## Atomicity And Safety
