@@ -210,13 +210,11 @@ fn continue_can_stop_again_on_later_conflict() {
     std::fs::write(worktree.join("a.txt"), "resolved a\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "a.txt"]);
 
-    repo.cascade()
-        .arg("continue")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "apply stopped while replaying branch `pr-2`",
-        ));
+    repo.cascade().arg("continue").assert().failure().stderr(
+        predicate::str::contains("apply stopped while replaying branch `pr-2`")
+            .and(predicate::str::contains("git cascade continue"))
+            .and(predicate::str::contains("Do not run")),
+    );
 
     let second_state = read_state(&repo);
     assert_eq!(second_state.phase, Phase::Conflict);

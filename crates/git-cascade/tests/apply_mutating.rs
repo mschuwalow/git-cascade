@@ -251,9 +251,11 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
         .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "apply stopped while replaying branch `pr-2`",
-        ));
+        .stderr(
+            predicate::str::contains("apply stopped while replaying branch `pr-2`")
+                .and(predicate::str::contains("git cascade continue"))
+                .and(predicate::str::contains("Do not run")),
+        );
 
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert!(repo.common_dir().join("cascade/state.yaml").exists());
