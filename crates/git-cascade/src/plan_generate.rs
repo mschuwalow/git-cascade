@@ -8,6 +8,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::encoding::encode_component;
 use crate::git::{Git, LocalBranch};
 use crate::plan::{Dependency, Node, NodeRole, Plan, Repository, Source};
+use crate::plan_validate::validate_plan;
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -34,6 +35,7 @@ pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOption
         &options.name,
         options.main.as_deref(),
     )?;
+    validate_plan(git, &plan)?;
     write_named_plan(storage, &options.name, &plan, options.replace)?;
     Ok(plan)
 }

@@ -146,6 +146,16 @@ impl Git {
             .collect())
     }
 
+    pub fn commit_exists(&self, oid: &str) -> Result<bool> {
+        self.try_output(["cat-file", "-e", &format!("{oid}^{{commit}}")])
+            .map(|output| output.is_some())
+    }
+
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+        self.try_output(["merge-base", "--is-ancestor", ancestor, descendant])
+            .map(|output| output.is_some())
+    }
+
     pub fn upstream_tip(&self, branch: &str) -> Result<Option<String>> {
         self.try_rev_parse(&format!("{branch}@{{upstream}}^{{commit}}"))
     }

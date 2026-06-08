@@ -37,6 +37,9 @@ pub enum Error {
     #[error("plan `{name}` already exists at {path}; pass --replace to overwrite it")]
     PlanExists { name: String, path: PathBuf },
 
+    #[error("invalid plan: {0}")]
+    InvalidPlan(String),
+
     #[error("cannot start a new cascade operation while state file exists at {path}")]
     ActiveOperation { path: PathBuf },
 
