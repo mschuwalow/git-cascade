@@ -4,11 +4,13 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 
 use crate::Result;
-use crate::apply::{ApplyOptions, DryRunOptions, continue_apply, dry_run, execute};
+use crate::apply::{
+    ApplyOptions, DryRunOptions, abort as abort_apply, continue_apply, dry_run, execute,
+};
 use crate::git::Git;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
-use crate::recovery;
 use crate::state::Strategy;
+use crate::status;
 use crate::storage::{PlanName, Storage};
 
 #[derive(Debug, Parser)]
@@ -137,7 +139,7 @@ fn continue_operation() -> Result<()> {
 fn status() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    print!("{}", recovery::status(&git, &storage)?);
+    print!("{}", status::status(&storage)?);
 
     Ok(())
 }
@@ -145,7 +147,7 @@ fn status() -> Result<()> {
 fn abort() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    recovery::abort(&git, &storage)?;
+    abort_apply(&git, &storage)?;
     println!("aborted cascade operation");
 
     Ok(())

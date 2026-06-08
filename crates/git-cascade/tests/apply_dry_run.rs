@@ -171,6 +171,54 @@ fn apply_dry_run_includes_added_dependent_commits() {
 }
 
 #[test]
+fn apply_dry_run_in_place_includes_restore_checkout() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    let old_pr2 = repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("pr-1");
+    repo.git_ok(["rebase", "main"]);
+    repo.switch("pr-2");
+
+    repo.cascade()
+        .args([
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--dry-run",
+            "--in-place",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("worktree-mode in-place")
+                .and(predicate::str::contains(format!(
+                    "git -C {} switch --detach",
+                    repo.path().display()
+                )))
+                .and(predicate::str::contains("# restore checkout"))
+                .and(predicate::str::contains(format!(
+                    "git -C {} switch pr-2",
+                    repo.path().display()
+                ))),
+        );
+
+    assert_eq!(repo.git_output(["branch", "--show-current"]).trim(), "pr-2");
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
 fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");

@@ -138,7 +138,29 @@ fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
 }
 
 #[test]
-fn status_finishes_cleanup_for_deleting_state() {
+fn status_reports_deleting_state_without_cleanup() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure();
+    let mut state = read_state(&repo);
+    state.phase = Phase::Deleting;
+    write_state(&repo, &state);
+
+    repo.cascade().arg("status").assert().success().stdout(
+        predicate::str::contains("Active cascade operation:")
+            .and(predicate::str::contains("phase: deleting"))
+            .and(predicate::str::contains("plan: stack")),
+    );
+
+    assert!(repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(std::path::Path::new(state.worktree.path()).exists());
+}
+
+#[test]
+fn continue_finishes_cleanup_for_deleting_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
@@ -150,10 +172,10 @@ fn status_finishes_cleanup_for_deleting_state() {
     write_state(&repo, &state);
 
     repo.cascade()
-        .arg("status")
+        .arg("continue")
         .assert()
         .success()
-        .stdout("No active cascade operation.\n");
+        .stdout("continued cascade operation\n");
 
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!std::path::Path::new(state.worktree.path()).exists());
