@@ -31,7 +31,8 @@ fn apply_help_mentions_strategy_and_dry_run() {
         .stdout(
             predicate::str::contains("--strategy")
                 .and(predicate::str::contains("preserve-fork-points"))
-                .and(predicate::str::contains("move-to-heads"))
+                .and(predicate::str::contains("move-to-planned-tips"))
+                .and(predicate::str::contains("move-to-current-tips"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--new-tip"))
                 .and(predicate::str::contains("<NAME>"))

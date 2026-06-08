@@ -92,15 +92,18 @@ pub struct NewTipState {
 pub enum Strategy {
     /// Preserve old fork points between dependent branches.
     PreserveForkPoints,
-    /// Replay each dependent branch onto its parent's rewritten tip.
-    MoveToHeads,
+    /// Replay each dependent branch onto its parent's rewritten planned tip.
+    MoveToPlannedTips,
+    /// Replay each dependent branch onto its parent's rewritten apply-time tip.
+    MoveToCurrentTips,
 }
 
 impl Strategy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PreserveForkPoints => "preserve-fork-points",
-            Self::MoveToHeads => "move-to-heads",
+            Self::MoveToPlannedTips => "move-to-planned-tips",
+            Self::MoveToCurrentTips => "move-to-current-tips",
         }
     }
 }

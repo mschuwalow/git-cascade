@@ -52,7 +52,7 @@ fn apply_preserves_intermediate_fork_point() {
 }
 
 #[test]
-fn apply_strategy_replays_child_on_parent_tip() {
+fn apply_move_to_current_tips_replays_child_on_parent_tip() {
     let repo = intermediate_stack();
     repo.cascade()
         .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
@@ -67,12 +67,70 @@ fn apply_strategy_replays_child_on_parent_tip() {
             "--new-tip",
             "pr-1",
             "--strategy",
-            "move-to-heads",
+            "move-to-current-tips",
         ])
         .assert()
         .success();
 
     assert_eq!(repo.merge_base("pr-2", "pr-3"), repo.rev_parse("pr-2"));
+}
+
+#[test]
+fn apply_move_to_planned_tips_ignores_parent_commits_added_after_planning() {
+    let repo = intermediate_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("pr-2");
+    repo.commit_file("late-parent.txt", "late\n", "late parent work");
+    repo.switch("main");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-planned-tips",
+        ])
+        .assert()
+        .success();
+
+    let rewritten_pr2_commits = repo.rev_list_reverse("pr-1..pr-2");
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), rewritten_pr2_commits[1]);
+    assert_ne!(repo.merge_base("pr-2", "pr-3"), repo.rev_parse("pr-2"));
+    assert_eq!(repo.show("pr-2:late-parent.txt"), "late\n");
+}
+
+#[test]
+fn apply_move_to_current_tips_uses_parent_commits_added_after_planning() {
+    let repo = intermediate_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("pr-2");
+    repo.commit_file("late-parent.txt", "late\n", "late parent work");
+    repo.switch("main");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-current-tips",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), repo.rev_parse("pr-2"));
+    assert_eq!(repo.show("pr-2:late-parent.txt"), "late\n");
 }
 
 #[test]
@@ -98,7 +156,7 @@ fn apply_preserve_fork_points_keeps_added_dependent_commits() {
 }
 
 #[test]
-fn apply_move_to_heads_keeps_added_dependent_commits() {
+fn apply_move_to_current_tips_keeps_added_dependent_commits() {
     let repo = linear_stack();
     repo.cascade()
         .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
@@ -116,7 +174,7 @@ fn apply_move_to_heads_keeps_added_dependent_commits() {
             "--new-tip",
             "pr-1",
             "--strategy",
-            "move-to-heads",
+            "move-to-current-tips",
         ])
         .assert()
         .success();

@@ -41,10 +41,10 @@ Preview the Git commands without mutating refs, worktrees, or state:
 git cascade apply stack --new-tip pr-1 --dry-run
 ```
 
-Use the simpler strategy that replays every child onto the rewritten tip of its parent:
+Use the simpler strategy that replays every child onto the parent's rewritten apply-time tip:
 
 ```sh
-git cascade apply stack --new-tip pr-1 --strategy move-to-heads
+git cascade apply stack --new-tip pr-1 --strategy move-to-current-tips
 ```
 
 The default strategy is:

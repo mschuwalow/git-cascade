@@ -32,7 +32,8 @@ pub struct ApplyOptions {
 enum ReplayBase {
     ResolvedCommit(String),
     RewrittenCommit { branch: String, old_commit: String },
-    RewrittenTip { branch: String },
+    RewrittenPlannedTip { branch: String },
+    RewrittenCurrentTip { branch: String },
 }
 
 struct ActualReplayContext<'a> {
@@ -58,7 +59,12 @@ impl ReplayBase {
             Self::RewrittenCommit { branch, old_commit } => {
                 format!("<rewritten {branch}:{old_commit}>")
             }
-            Self::RewrittenTip { branch } => format!("<rewritten {branch} tip>"),
+            Self::RewrittenPlannedTip { branch } => {
+                format!("<rewritten {branch} planned tip>")
+            }
+            Self::RewrittenCurrentTip { branch } => {
+                format!("<rewritten {branch} current tip>")
+            }
         }
     }
 }
@@ -546,8 +552,14 @@ fn replay_base(
         return Ok(ReplayBase::ResolvedCommit(new_tip.to_owned()));
     }
 
-    if strategy == Strategy::MoveToHeads {
-        return Ok(ReplayBase::RewrittenTip {
+    if strategy == Strategy::MoveToPlannedTips {
+        return Ok(ReplayBase::RewrittenPlannedTip {
+            branch: parent.branch.clone(),
+        });
+    }
+
+    if strategy == Strategy::MoveToCurrentTips {
+        return Ok(ReplayBase::RewrittenCurrentTip {
             branch: parent.branch.clone(),
         });
     }
@@ -581,7 +593,20 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
         return Ok(context.new_tip.to_owned());
     }
 
-    if context.strategy == Strategy::MoveToHeads {
+    if context.strategy == Strategy::MoveToPlannedTips {
+        return context
+            .mappings
+            .get(&parent.old_tip)
+            .cloned()
+            .ok_or_else(|| {
+                Error::InvalidPlan(format!(
+                    "parent `{}` has no rewritten planned tip",
+                    parent.branch
+                ))
+            });
+    }
+
+    if context.strategy == Strategy::MoveToCurrentTips {
         return context
             .temp_tips
             .get(&parent.branch)

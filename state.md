@@ -17,7 +17,7 @@ Implemented so far:
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
 - `git cascade apply <name> --new-tip <ref> --dry-run` command preview.
-- `apply --dry-run --strategy move-to-heads` base preview.
+- `apply --dry-run --strategy move-to-planned-tips` and `move-to-current-tips` base preview.
 - Mutating `git cascade apply <name> --new-tip <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
@@ -80,12 +80,12 @@ Current tests include:
 - Real-Git integration tests for tampered plan rejection.
 - Real-Git integration tests for apply-mode validation rejecting moved dependent branches.
 - Real-Git integration tests for `apply --dry-run` command output.
-- Real-Git integration tests for `apply --dry-run --strategy move-to-heads` base descriptions.
+- Real-Git integration tests for `apply --dry-run` strategy base descriptions.
 - Real-Git integration tests proving dry-run leaves refs/state/temp refs unchanged.
 - Real-Git integration tests proving dry-run refuses moved dependent branches.
 - Real-Git integration tests for mutating apply on a clean linear stack.
 - Real-Git integration tests for mutating apply preserving intermediate fork points.
-- Real-Git integration tests for mutating apply with `--strategy move-to-heads`.
+- Real-Git integration tests for mutating apply with `--strategy move-to-planned-tips` and `move-to-current-tips`.
 - Real-Git integration tests for mutating apply refusing an existing state file.
 - Real-Git integration tests for mutating apply refusing moved dependent branches.
 - Real-Git integration tests for allowing appended dependent branch commits in both apply strategies.

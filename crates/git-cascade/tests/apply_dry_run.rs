@@ -89,12 +89,30 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
             "--new-tip",
             "pr-1",
             "--strategy",
-            "move-to-heads",
+            "move-to-planned-tips",
             "--dry-run",
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("replay-base <rewritten pr-2 tip>"));
+        .stdout(predicate::str::contains(
+            "replay-base <rewritten pr-2 planned tip>",
+        ));
+
+    repo.cascade()
+        .args([
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-current-tips",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "replay-base <rewritten pr-2 current tip>",
+        ));
 }
 
 #[test]
