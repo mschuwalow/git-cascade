@@ -38,7 +38,7 @@ Implemented so far:
 - `git cascade list` for named plans.
 - `git cascade show <name>` for named plans.
 - Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
-- `git cascade plan <name> --old-base <ref> --old-tip <ref>` for initial linear-stack planning.
+- `git cascade plan <name> --old-tip <ref> [--old-base <ref>]` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
 - Command and flag help text exposed through Clap help output.
 - `git cascade completions <shell>` for shell completion script generation.
@@ -48,7 +48,7 @@ Implemented so far:
 
 `git cascade plan` currently:
 
-- Resolves `--old-tip` as the old root range tip and resolves `--old-base` by taking `merge-base(<old-tip>, <old-base>)`.
+- Resolves `--old-tip` as the old root range tip and resolves `--old-base` by taking `merge-base(<old-tip>, <old-base>)`; when omitted, infers it from `origin/HEAD` or local `main`/`master`.
 - Discovers dependent branches by their attachment points to the anchor or already discovered dependents.
 - Captures owned commits with `git rev-list --reverse <base>..<tip>`.
 - Rejects merge commits in captured ranges.

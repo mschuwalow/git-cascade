@@ -56,6 +56,11 @@ pub enum Error {
     #[error("cannot start a new cascade operation while state file exists at {path}")]
     ActiveOperation { path: PathBuf },
 
+    #[error(
+        "cannot infer old base for plan `{name}` from old tip `{old_tip}`; pass --old-base <ref>"
+    )]
+    CannotInferOldBase { name: String, old_tip: String },
+
     #[error("{0}")]
     Unsupported(String),
 

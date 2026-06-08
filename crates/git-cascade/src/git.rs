@@ -197,10 +197,6 @@ impl Git {
             .map(|output| output.is_some())
     }
 
-    pub fn upstream_tip(&self, branch: &str) -> Result<Option<String>> {
-        self.try_rev_parse(&format!("{branch}@{{upstream}}^{{commit}}"))
-    }
-
     pub fn origin_default_branch_tip(&self) -> Result<Option<String>> {
         let Some(default_ref) =
             self.try_output(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])?

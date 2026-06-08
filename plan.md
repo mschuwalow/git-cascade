@@ -21,7 +21,7 @@ The plan exists so the tool does not need to infer the old stack structure after
 The intended workflow is:
 
 ```bash
-git cascade plan stack --old-base main --old-tip my-branch
+git cascade plan stack --old-tip my-branch
 git rebase --onto origin/main 3e1e56f91cad6cc45281f86849ee9e727ccac340
 git cascade apply stack --new-tip <new-tip>
 ```
@@ -72,7 +72,7 @@ The plan describes transformations over commits, not branches. The anchor can be
 ### 1. Create The Plan
 
 ```bash
-git cascade plan stack --old-base main --old-tip my-branch
+git cascade plan stack --old-tip my-branch
 ```
 
 This command is read-only. It inspects the current Git repository and captures the cascade rooted at the old range `old-base..old-tip`. The `--old-tip` value may be a branch, tag, full ref, or commit-ish.
@@ -177,7 +177,7 @@ With either option, every dependent branch is moved from any intermediate old pa
 
 ### Old Root Range
 
-The old root range is selected when creating the plan with `--old-base` and `--old-tip`. `--old-base` is combined with `--old-tip` through `merge-base`, so `--old-base main --old-tip pr-1` remains stable even if `main` has advanced.
+The old root range is selected when creating the plan with `--old-tip` and an inferred or explicit `--old-base`. `--old-base` is combined with `--old-tip` through `merge-base`, so `--old-base main --old-tip pr-1` remains stable even if `main` has advanced.
 
 The apply step does not rewrite the old tip. It only uses `--new-tip` as the replacement commit for replaying dependents.
 
@@ -258,7 +258,7 @@ Repository-local storage layout:
 Named plans are the default interface:
 
 ```bash
-git cascade plan stack --old-base main --old-tip my-branch
+git cascade plan stack --old-tip my-branch
 git cascade apply stack --new-tip my-branch
 ```
 
@@ -420,7 +420,7 @@ dependencies:
 ## Plan Generation
 
 ```bash
-git cascade plan <name> --old-base <base-ref> --old-tip <old-tip-ref>
+git cascade plan <name> --old-tip <old-tip-ref> [--old-base <base-ref>]
 ```
 
 Plan generation is a read-only phase.
@@ -449,7 +449,8 @@ Forbidden Git operations include:
 Generation rules:
 
 - Resolve the anchor and all saved commits to full object IDs.
-- Resolve the old root base as `merge-base(<old-tip-ref>, <base-ref>)`.
+- Resolve the old root base as `merge-base(<old-tip-ref>, <base-ref>)` when `--old-base` is provided.
+- When `--old-base` is omitted, infer the old root base from `origin/HEAD` or the local default branch (`main` then `master`).
 - Direct children of the root must fork after `old_base`; branches whose merge-base with `old_tip` is exactly `old_base` are treated as upstream/sibling branches, not dependents.
 - Reject merge commits unless merge replay is explicitly supported by a later schema version.
 - Reject a dependent branch if its `old_base` is not reachable from the `old_tip` of its declared parent.

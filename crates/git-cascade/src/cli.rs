@@ -28,8 +28,9 @@ enum Command {
         #[arg(value_name = "NAME")]
         name: PlanName,
         /// Ref used with --old-tip to compute the old range base via merge-base.
+        /// Inferred from default branches when omitted.
         #[arg(long, value_name = "REF")]
-        old_base: String,
+        old_base: Option<String>,
         /// Old top of the root range before rewriting.
         #[arg(long, value_name = "REF")]
         old_tip: String,
@@ -97,7 +98,7 @@ where
             old_base,
             old_tip,
             replace,
-        } => plan(name, &old_base, &old_tip, replace),
+        } => plan(name, old_base.as_deref(), &old_tip, replace),
         Command::Apply {
             name,
             new_tip,
@@ -181,7 +182,7 @@ fn apply(name: PlanName, new_tip: &str, strategy: Strategy, is_dry_run: bool) ->
     Ok(())
 }
 
-fn plan(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Result<()> {
+fn plan(name: PlanName, old_base: Option<&str>, old_tip: &str, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     generate_named_plan(
@@ -189,7 +190,7 @@ fn plan(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Result<
         &storage,
         GenerateOptions {
             name: name.clone(),
-            old_base: old_base.to_owned(),
+            old_base: old_base.map(str::to_owned),
             old_tip: old_tip.to_owned(),
             replace,
         },

@@ -15,7 +15,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
     pub name: PlanName,
-    pub old_base: String,
+    pub old_base: Option<String>,
     pub old_tip: String,
     pub replace: bool,
 }
@@ -29,7 +29,12 @@ struct Candidate {
 }
 
 pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
-    let plan = generate_plan(git, &options.name, &options.old_base, &options.old_tip)?;
+    let plan = generate_plan(
+        git,
+        &options.name,
+        options.old_base.as_deref(),
+        &options.old_tip,
+    )?;
     validate_plan(git, &plan)?;
     write_named_plan(storage, &options.name, &plan, options.replace)?;
     Ok(plan)
@@ -38,12 +43,11 @@ pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOption
 pub fn generate_plan(
     git: &Git,
     name: &PlanName,
-    old_base_ref: &str,
+    old_base_ref: Option<&str>,
     old_tip_ref: &str,
 ) -> Result<Plan> {
     let old_tip = git.resolve_commit(old_tip_ref)?;
-    let old_base_tip = git.resolve_commit(old_base_ref)?;
-    let old_base = old_range_base(git, name.as_str(), &old_tip, old_base_ref, &old_base_tip)?;
+    let old_base = resolve_old_base(git, name.as_str(), old_tip_ref, &old_tip, old_base_ref)?;
 
     let mut nodes = vec![Node {
         branch: name.to_string(),
@@ -95,6 +99,32 @@ pub fn generate_plan(
         },
         nodes,
         dependencies,
+    })
+}
+
+fn resolve_old_base(
+    git: &Git,
+    name: &str,
+    old_tip_input: &str,
+    old_tip: &str,
+    old_base_ref: Option<&str>,
+) -> Result<String> {
+    if let Some(old_base_ref) = old_base_ref {
+        let old_base_tip = git.resolve_commit(old_base_ref)?;
+        return old_range_base(git, name, old_tip, old_base_ref, &old_base_tip);
+    }
+
+    if let Some(default_tip) = git.origin_default_branch_tip()? {
+        return old_range_base(git, name, old_tip, "origin default branch", &default_tip);
+    }
+
+    if let Some(default_tip) = git.local_default_branch_tip()? {
+        return old_range_base(git, name, old_tip, "local default branch", &default_tip);
+    }
+
+    Err(Error::CannotInferOldBase {
+        name: name.to_owned(),
+        old_tip: old_tip_input.to_owned(),
     })
 }
 

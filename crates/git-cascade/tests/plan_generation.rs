@@ -127,6 +127,61 @@ fn plan_old_base_option_uses_merge_base_with_old_tip() {
 }
 
 #[test]
+fn plan_infers_old_base_from_local_default_branch() {
+    let repo = TestRepo::new();
+    let initial = repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+    repo.commit_file("main.txt", "new main\n", "advance main");
+
+    repo.cascade()
+        .args(["plan", "stack", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "stack");
+    assert_eq!(plan.source.old_base, initial);
+    let branches = plan
+        .nodes
+        .iter()
+        .map(|node| node.branch.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(branches, ["stack", "pr-2"]);
+}
+
+#[test]
+fn plan_inference_ignores_old_tip_branch_upstream() {
+    let repo = TestRepo::new();
+    let initial = repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.git_ok(["update-ref", "refs/remotes/origin/pr-1", "pr-1"]);
+    repo.git_ok(["config", "branch.pr-1.remote", "origin"]);
+    repo.git_ok(["config", "branch.pr-1.merge", "refs/heads/pr-1"]);
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+    repo.commit_file("main.txt", "new main\n", "advance main");
+
+    repo.cascade()
+        .args(["plan", "stack", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "stack");
+    assert_eq!(plan.source.old_base, initial);
+    let branches = plan
+        .nodes
+        .iter()
+        .map(|node| node.branch.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(branches, ["stack", "pr-2"]);
+}
+
+#[test]
 fn plan_supports_single_commit_root_range() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");

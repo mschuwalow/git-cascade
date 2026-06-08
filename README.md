@@ -13,10 +13,16 @@ git cascade <command>
 Create a repository-local plan before rewriting the root range:
 
 ```sh
+git cascade plan stack --old-tip pr-1
+```
+
+If inference picks the wrong default/base ref, pass it explicitly:
+
+```sh
 git cascade plan stack --old-base main --old-tip pr-1
 ```
 
-For a single-commit root rewrite, use that commit's parent as the old base:
+For a single-commit root rewrite, use that commit's parent as the explicit old base:
 
 ```sh
 git cascade plan stack --old-base '<old-commit>^' --old-tip <old-commit>
@@ -99,7 +105,7 @@ git cascade show stack
 Replace an existing plan:
 
 ```sh
-git cascade plan stack --old-base main --old-tip pr-1 --replace
+git cascade plan stack --old-tip pr-1 --replace
 ```
 
 ## Shell Completions
