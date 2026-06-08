@@ -19,7 +19,14 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
         .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success()
-        .stdout("applied cascade plan\n");
+        .stdout("applied cascade plan\n")
+        .stderr(
+            predicate::str::contains("Applying cascade plan `stack`")
+                .and(predicate::str::contains("Replaying branch 1/2 `pr-2`"))
+                .and(predicate::str::contains("  cherry-pick 1/1"))
+                .and(predicate::str::contains("Finished branch 2/2 `pr-3`"))
+                .and(predicate::str::contains("Updating branch refs")),
+        );
 
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     assert_ne!(repo.rev_parse("pr-3"), old_pr3);

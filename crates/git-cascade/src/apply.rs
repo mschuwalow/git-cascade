@@ -259,6 +259,10 @@ fn run_apply_state(
     mut state_file: StateFile,
     mut state: ApplyState,
 ) -> Result<()> {
+    eprintln!(
+        "Applying cascade plan `{}` with strategy `{}`",
+        state.plan_name, state.strategy
+    );
     loop {
         match state.phase {
             Phase::Replay => {
@@ -268,8 +272,10 @@ fn run_apply_state(
                 state_file.write_state(&mut state)?;
             }
             Phase::FinalUpdate => {
+                eprintln!("Updating branch refs");
                 finish_final_update(git, plan, &state)?;
                 let plan_name = state.plan_name.clone();
+                eprintln!("Cleaning temporary cascade state");
                 recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
                 storage.delete_plan(plan_name)?;
                 return Ok(());
@@ -304,11 +310,22 @@ fn replay_pending_branches(
     let mut temp_refs = state.completed.temp_refs.clone();
     let mut temp_tips = temp_tips_from_refs(git, &temp_refs)?;
     let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
+    let total_branches = topological_order(plan)?.len();
+
+    if total_branches == 0 {
+        eprintln!("No branches to replay");
+    }
 
     while let Some(branch) = state.pending.branches.first().cloned() {
         let node = nodes
             .get(branch.as_str())
             .ok_or_else(|| Error::InvalidPlan(format!("unknown pending branch `{branch}`")))?;
+        let branch_index = temp_refs.len() + 1;
+        let was_resuming = state.current.is_some();
+        eprintln!(
+            "Preparing branch {branch_index}/{total_branches} `{}`",
+            node.branch
+        );
         let mut progress = ReplayProgress {
             state_file,
             state,
@@ -326,7 +343,26 @@ fn replay_pending_branches(
         )?;
 
         let commits = replay_commits_from_extra(node, &state.extra_commits);
-        for commit in commits.iter().skip(start_commit_index) {
+        let remaining_commits = commits.len().saturating_sub(start_commit_index);
+        if was_resuming {
+            eprintln!(
+                "Resuming branch {branch_index}/{total_branches} `{}` with {remaining_commits} commit(s) remaining",
+                node.branch
+            );
+        } else {
+            eprintln!(
+                "Replaying branch {branch_index}/{total_branches} `{}` with {} commit(s)",
+                node.branch,
+                commits.len()
+            );
+        }
+        for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
+            eprintln!(
+                "  cherry-pick {}/{} {}",
+                commit_index + 1,
+                commits.len(),
+                short_oid(commit)
+            );
             state.phase = Phase::Replay;
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
@@ -353,6 +389,11 @@ fn replay_pending_branches(
         let rewritten_tip = worktree_git.head_oid()?;
         let temp_ref = temp_ref(plan, &node.branch);
         git.update_ref(&temp_ref, &rewritten_tip)?;
+        eprintln!(
+            "Finished branch {branch_index}/{total_branches} `{}` -> {}",
+            node.branch,
+            short_oid(&rewritten_tip)
+        );
         temp_tips.insert(node.branch.clone(), rewritten_tip);
         if !temp_refs.contains(&temp_ref) {
             temp_refs.push(temp_ref);
@@ -485,6 +526,10 @@ fn remove_pending_branch(state: &mut ApplyState, branch: &str) -> Result<()> {
     }
     state.pending.branches.remove(0);
     Ok(())
+}
+
+fn short_oid(oid: &str) -> &str {
+    oid.get(..12).unwrap_or(oid)
 }
 
 fn replay_base(
