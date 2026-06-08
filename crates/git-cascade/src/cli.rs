@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crate::Result;
-use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
+use crate::apply::{ApplyOptions, DryRunOptions, continue_apply, dry_run, execute};
 use crate::git::Git;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
 use crate::recovery;
@@ -45,6 +45,7 @@ enum Command {
     },
     Status,
     Abort,
+    Continue,
 }
 
 pub fn run() -> ExitCode {
@@ -81,7 +82,17 @@ where
         Command::Show { name } => show_plan(&name),
         Command::Status => status(),
         Command::Abort => abort(),
+        Command::Continue => continue_operation(),
     }
+}
+
+fn continue_operation() -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    continue_apply(&git, &storage)?;
+    println!("continued cascade operation");
+
+    Ok(())
 }
 
 fn status() -> Result<()> {

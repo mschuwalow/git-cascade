@@ -2,12 +2,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::fs;
 
-use crate::encoding::encode_component;
+use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
 use crate::state::{
-    ApplyStateInput, CurrentState, StateLock, initial_apply_state, write_state_atomic,
+    ApplyState, ApplyStateInput, CurrentState, StateLock, initial_apply_state, read_state,
+    remove_state, write_state_atomic,
 };
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
@@ -291,6 +292,207 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     Ok(())
 }
 
+pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
+    let mut state = read_state(storage)?
+        .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
+    if state.operation != "apply" {
+        return Err(Error::InvalidInvocation(format!(
+            "cannot continue unsupported operation `{}`",
+            state.operation
+        )));
+    }
+    if state.phase != "conflict" {
+        return Err(Error::InvalidInvocation(format!(
+            "cannot continue cascade operation in phase `{}`",
+            state.phase
+        )));
+    }
+
+    let current = state.current.clone().ok_or_else(|| {
+        Error::InvalidInvocation("active apply state has no current commit".to_owned())
+    })?;
+    let plan_name = PlanName::new(state.plan_name.clone().ok_or_else(|| {
+        Error::InvalidInvocation("active apply state does not record a named plan".to_owned())
+    })?)?;
+    let plan: Plan = serde_yaml::from_str(&storage.read_named_plan(&plan_name)?)?;
+    validate_plan_for_apply(git, &plan)?;
+
+    if state.new_anchor.input_was_ref {
+        let resolved = git.resolve_commit(&state.new_anchor.input)?;
+        if resolved != state.new_anchor.resolved {
+            return Err(Error::InvalidInvocation(format!(
+                "new anchor `{}` moved after apply started: expected `{}`, found `{resolved}`",
+                state.new_anchor.input, state.new_anchor.resolved
+            )));
+        }
+    }
+
+    let worktree = std::path::PathBuf::from(&current.worktree);
+    let worktree_git = Git::new(&worktree);
+    if !worktree_git.unmerged_entries()?.is_empty() {
+        return Err(Error::InvalidInvocation(format!(
+            "worktree {} still has unresolved conflicts; resolve them and git add the files before continuing",
+            worktree.display()
+        )));
+    }
+
+    worktree_git.cherry_pick_continue()?;
+    state
+        .mappings
+        .insert(current.commit.clone(), worktree_git.head_oid()?);
+    state.phase = "replay".to_owned();
+    write_state_atomic(storage, &mut state)?;
+
+    continue_replay_after_resolved_commit(
+        git,
+        storage,
+        &plan,
+        state,
+        &current.branch,
+        &current.commit,
+    )
+}
+
+fn continue_replay_after_resolved_commit(
+    git: &Git,
+    storage: &Storage,
+    plan: &Plan,
+    mut state: ApplyState,
+    current_branch: &str,
+    resolved_commit: &str,
+) -> Result<()> {
+    let ordered = topological_order(plan)?;
+    let nodes = plan
+        .nodes
+        .iter()
+        .map(|node| (node.branch.as_str(), node))
+        .collect::<HashMap<_, _>>();
+    let anchor = plan
+        .nodes
+        .iter()
+        .find(|node| node.parent.is_none())
+        .ok_or_else(|| {
+            Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
+        })?;
+    let worktree = storage.worktrees_dir().join(&plan.plan_id);
+    let worktree_git = Git::new(&worktree);
+    let mut mappings = state.mappings.clone();
+    let mut temp_refs = state.completed.temp_refs.clone();
+    let mut temp_tips = temp_tips_from_refs(git, &temp_refs)?;
+    let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
+    let current_index = ordered
+        .iter()
+        .position(|branch| branch == current_branch)
+        .ok_or_else(|| {
+            Error::InvalidPlan(format!("current branch `{current_branch}` is not in plan"))
+        })?;
+
+    for (index, branch) in ordered.iter().enumerate().skip(current_index) {
+        let node = nodes
+            .get(branch.as_str())
+            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+
+        let start_commit_index = if branch == current_branch {
+            node.commits
+                .iter()
+                .position(|commit| commit == resolved_commit)
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "current commit `{resolved_commit}` is not part of branch `{current_branch}`"
+                    ))
+                })?
+                + 1
+        } else {
+            let base = actual_replay_base(
+                node,
+                ActualReplayContext {
+                    anchor,
+                    nodes: &nodes,
+                    selected_bases: &selected_bases,
+                    temp_tips: &temp_tips,
+                    mappings: &mappings,
+                    new_anchor: &state.new_anchor.resolved,
+                    move_to_heads: state.strategy.move_to_heads,
+                },
+            )?;
+            selected_bases.insert(node.branch.clone(), base.clone());
+            mappings.insert(node.old_base.clone(), base.clone());
+            state.mappings = mappings.clone();
+            state.pending.branches = ordered[index..].to_vec();
+            write_state_atomic(storage, &mut state)?;
+            worktree_git.reset_hard(&base)?;
+            0
+        };
+
+        for commit in node.commits.iter().skip(start_commit_index) {
+            state.phase = "replay".to_owned();
+            state.current = Some(CurrentState {
+                branch: node.branch.clone(),
+                commit: commit.clone(),
+                worktree: worktree.display().to_string(),
+            });
+            write_state_atomic(storage, &mut state)?;
+
+            if let Err(error) = worktree_git.cherry_pick(commit) {
+                state.phase = "conflict".to_owned();
+                write_state_atomic(storage, &mut state)?;
+                return Err(Error::ApplyStopped {
+                    branch: node.branch.clone(),
+                    commit: commit.clone(),
+                    worktree: worktree.clone(),
+                    message: error.to_string(),
+                });
+            }
+            mappings.insert(commit.clone(), worktree_git.head_oid()?);
+            state.mappings = mappings.clone();
+            write_state_atomic(storage, &mut state)?;
+        }
+
+        let rewritten_tip = worktree_git.head_oid()?;
+        let temp_ref = temp_ref(plan, &node.branch);
+        git.update_ref(&temp_ref, &rewritten_tip)?;
+        temp_tips.insert(node.branch.clone(), rewritten_tip);
+        if !temp_refs.contains(&temp_ref) {
+            temp_refs.push(temp_ref);
+        }
+        state.completed.temp_refs = temp_refs.clone();
+        state.current = None;
+        state.pending.branches = ordered[index + 1..].to_vec();
+        write_state_atomic(storage, &mut state)?;
+    }
+
+    state.phase = "final_update".to_owned();
+    write_state_atomic(storage, &mut state)?;
+    let new_anchor_ref = if state.new_anchor.input_was_ref {
+        Some(
+            git.symbolic_full_name(&state.new_anchor.input)?
+                .ok_or_else(|| {
+                    Error::InvalidInvocation(format!(
+                        "new anchor `{}` no longer resolves to a ref",
+                        state.new_anchor.input
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+    git.update_ref_transaction(&final_ref_transaction(
+        &ordered,
+        &nodes,
+        &temp_tips,
+        new_anchor_ref.as_deref(),
+        &state.new_anchor.resolved,
+    )?)?;
+
+    for temp_ref in &temp_refs {
+        git.delete_ref(temp_ref)?;
+    }
+    git.worktree_remove_force(&worktree)?;
+    remove_state(storage)?;
+
+    Ok(())
+}
+
 fn replay_base(
     node: &Node,
     anchor: &Node,
@@ -382,6 +584,33 @@ fn temp_ref(plan: &Plan, branch: &str) -> String {
         plan.plan_id,
         encode_component(branch)
     )
+}
+
+fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<String, String>> {
+    let mut temp_tips = HashMap::new();
+    for temp_ref in temp_refs {
+        let Some(encoded_branch) = temp_ref.rsplit('/').next() else {
+            continue;
+        };
+        let branch = decode_component(encoded_branch)?;
+        temp_tips.insert(branch, git.resolve_commit(temp_ref)?);
+    }
+
+    Ok(temp_tips)
+}
+
+fn selected_bases_from_mappings(
+    plan: &Plan,
+    mappings: &BTreeMap<String, String>,
+) -> HashMap<String, String> {
+    plan.nodes
+        .iter()
+        .filter_map(|node| {
+            mappings
+                .get(&node.old_base)
+                .map(|base| (node.branch.clone(), base.clone()))
+        })
+        .collect()
 }
 
 fn final_ref_transaction(

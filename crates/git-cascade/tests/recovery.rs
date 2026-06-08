@@ -77,6 +77,62 @@ fn abort_without_active_operation_fails_clearly() {
         .stderr(predicate::str::contains("no active cascade operation"));
 }
 
+#[test]
+fn continue_without_active_operation_fails_clearly() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no active cascade operation"));
+}
+
+#[test]
+fn continue_refuses_unresolved_conflicts() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .assert()
+        .failure();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("still has unresolved conflicts"));
+    assert!(repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
+fn continue_after_conflict_finishes_apply() {
+    let repo = conflicting_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+
+    repo.cascade()
+        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .assert()
+        .failure();
+
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.show("pr-2:conflict.txt"), "resolved\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
 fn conflicting_stack() -> TestRepo {
     let repo = TestRepo::new();
     repo.commit_file("conflict.txt", "base\n", "initial");
@@ -94,4 +150,9 @@ fn conflicting_stack() -> TestRepo {
     repo.commit_file("conflict.txt", "anchor new\n", "anchor new");
     repo.switch("main");
     repo
+}
+
+fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
+    let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
+    serde_yaml::from_str(&content).unwrap()
 }

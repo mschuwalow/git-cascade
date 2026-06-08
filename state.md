@@ -27,6 +27,7 @@ Implemented so far:
 - Durable replay state updates during mutating apply, including current branch/commit, mappings, completed temp refs, and pending branches.
 - `git cascade status` for reporting active operation state.
 - `git cascade abort` for aborting preserved conflict state and cleaning temp refs/worktrees.
+- `git cascade continue` for completing a resolved cherry-pick conflict and resuming the cascade.
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
 - Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
@@ -83,6 +84,9 @@ Current tests include:
 - Real-Git integration tests for `status` with and without active state.
 - Real-Git integration tests for `abort` cleanup after conflict.
 - Real-Git integration tests for `abort` without active state.
+- Real-Git integration tests for `continue` after manual conflict resolution.
+- Real-Git integration tests for `continue` refusing unresolved conflicts.
+- Real-Git integration tests for `continue` without active state.
 
 Verified commands:
 
@@ -95,34 +99,36 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 
 ## Known Limitations
 
-- `git cascade continue` is not implemented yet.
 - Plan generation supports linear ranges only and rejects merge commits.
 - Dependent branch discovery is first-pass and may need more edge-case coverage.
 - Remote-tracking branches are not updated; v1 should continue to target local branches only.
-- Conflict continuation is not implemented yet; apply stops with state/worktree preserved and `abort` can clean up.
+- Conflict continuation is implemented for named plans and resolved cherry-pick conflicts.
 - `apply --dry-run` prints the Git operations that would run without promising conflict-free replay.
 - Exported/path-based plans are not supported.
 - Release workflow will only become fully usable once the `git-cascade` package is published through normal release flow.
 
 ## Next Steps
 
-1. Implement `git cascade continue` for completing conflict resolutions.
-2. Add crash/restart tests for continuing from preserved state.
-3. Add explicit final anchor-ref verification tests.
-4. Harden cleanup behavior when temp refs or worktrees already exist.
-5. Add richer status output for completed mappings/temp refs if needed.
+1. Add crash/restart tests for continuing from preserved state.
+2. Add explicit final anchor-ref verification tests.
+3. Harden cleanup behavior when temp refs or worktrees already exist.
+4. Add richer status output for completed mappings/temp refs if needed.
+5. Add tests for continuation that hits a second conflict on a later commit.
 
 ## Recommended Immediate Next Step
 
-Implement `continue` around preserved apply conflict state.
+Harden recovery and edge-case coverage around continuation.
 
 Rationale:
 
 - Mutating apply now handles clean stacks and safely stops on conflict with permanent refs unchanged.
 - Users can inspect active state with `status` and clean it with `abort`.
-- The remaining recovery gap is continuing after manual conflict resolution.
+- The primary conflict lifecycle is now implemented: apply conflict, status, abort, and continue.
+- The remaining risk is robustness across crashes, repeated conflicts, stale refs, and pre-existing temp artifacts.
 
-Suggested continue scope:
+Suggested hardening scope:
 
-- `continue` should validate refs/state, ensure the conflict worktree has no unmerged entries, complete the current cherry-pick, and resume replay.
-- Tests should cover conflict, status output, abort cleanup, and continue after manual resolution.
+- Add tests for interruption after temp refs are written.
+- Add tests for anchor ref movement before final transaction.
+- Add tests for continuation that resolves one conflict and later hits another.
+- Add tests for stale temp worktree/ref cleanup behavior.
