@@ -17,7 +17,7 @@ fn apply_dry_run_linear_stack_prints_commands_without_mutating_refs() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     let pr2_tip = repo.rev_parse("pr-2");
@@ -77,7 +77,7 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
 
@@ -123,7 +123,7 @@ fn apply_dry_run_refuses_if_dependent_branch_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     repo.switch("pr-2");
@@ -155,7 +155,7 @@ fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
 

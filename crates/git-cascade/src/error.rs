@@ -60,7 +60,7 @@ pub enum Error {
     Unsupported(String),
 
     #[error(
-        "could not infer an old base for anchor branch `{branch}`; pass --main, configure origin/HEAD, or keep a local main/master branch"
+        "could not infer an old base for anchor branch `{branch}`; pass --base, configure origin/HEAD, or keep a local main/master branch"
     )]
     CannotInferAnchorBase { branch: String },
 

@@ -8,7 +8,7 @@ use common::repo::TestRepo;
 fn apply_linear_stack_updates_dependents_and_cleans_up() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -35,7 +35,7 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
 fn apply_preserves_intermediate_fork_point() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -55,7 +55,7 @@ fn apply_preserves_intermediate_fork_point() {
 fn apply_strategy_replays_child_on_parent_tip() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -80,7 +80,7 @@ fn apply_strategy_replays_child_on_parent_tip() {
 fn apply_refuses_when_state_exists() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -102,7 +102,7 @@ fn apply_refuses_when_state_exists() {
 fn apply_refuses_when_dependent_branch_moved() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -130,7 +130,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");

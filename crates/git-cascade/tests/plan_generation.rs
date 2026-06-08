@@ -19,7 +19,7 @@ fn plan_creates_named_plan_for_linear_stack() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success()
         .stdout("created plan `stack`\n");
@@ -64,7 +64,7 @@ fn plan_preserves_intermediate_fork_point() {
     repo.commit_file("d.txt", "d\n", "d");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "intermediate"])
+        .args(["plan", "--anchor", "pr-1", "--name", "intermediate"])
         .assert()
         .success();
 
@@ -80,7 +80,7 @@ fn plan_preserves_intermediate_fork_point() {
 }
 
 #[test]
-fn plan_uses_explicit_main_ref() {
+fn plan_uses_explicit_base_ref() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("trunk");
@@ -90,17 +90,25 @@ fn plan_uses_explicit_main_ref() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "explicit-main", "--main", "trunk"])
+        .args([
+            "plan",
+            "--anchor",
+            "pr-1",
+            "--name",
+            "explicit-base",
+            "--base",
+            "trunk",
+        ])
         .assert()
         .success();
 
-    let plan = read_plan(&repo, "explicit-main");
+    let plan = read_plan(&repo, "explicit-base");
 
     assert_eq!(plan.source.anchor_old_base, trunk_tip);
 }
 
 #[test]
-fn plan_uses_origin_default_branch_when_main_is_not_passed() {
+fn plan_uses_origin_default_branch_when_base_is_not_passed() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("trunk");
@@ -117,7 +125,7 @@ fn plan_uses_origin_default_branch_when_main_is_not_passed() {
     repo.git_ok(["branch", "-D", "trunk"]);
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "origin-default"])
+        .args(["plan", "--anchor", "pr-1", "--name", "origin-default"])
         .assert()
         .success();
 
@@ -134,18 +142,18 @@ fn plan_refuses_to_overwrite_without_replace() {
     repo.commit_file("a.txt", "a\n", "a");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already exists"));
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack", "--replace"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack", "--replace"])
         .assert()
         .success();
 }
@@ -161,7 +169,7 @@ fn plan_refuses_while_state_exists() {
     std::fs::write(&state_path, "version: 1\n").unwrap();
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -179,7 +187,7 @@ fn plan_rejects_merge_commits() {
     repo.git_ok(["merge", "--no-ff", "side", "-m", "merge side"]);
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("merge replay is not supported"));

@@ -17,7 +17,7 @@ pub struct GenerateOptions {
     pub anchor_branch: String,
     pub name: PlanName,
     pub replace: bool,
-    pub main: Option<String>,
+    pub base: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,15 +29,15 @@ struct Candidate {
 }
 
 pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
-    let plan = generate_plan(git, &options.anchor_branch, options.main.as_deref())?;
+    let plan = generate_plan(git, &options.anchor_branch, options.base.as_deref())?;
     validate_plan(git, &plan)?;
     write_named_plan(storage, &options.name, &plan, options.replace)?;
     Ok(plan)
 }
 
-pub fn generate_plan(git: &Git, anchor_branch: &str, main: Option<&str>) -> Result<Plan> {
+pub fn generate_plan(git: &Git, anchor_branch: &str, base: Option<&str>) -> Result<Plan> {
     let anchor_tip = git.local_branch_tip(anchor_branch)?;
-    let anchor_base = infer_anchor_base(git, anchor_branch, &anchor_tip, main)?;
+    let anchor_base = infer_anchor_base(git, anchor_branch, &anchor_tip, base)?;
     let anchor_commits = owned_commits(git, &anchor_base, &anchor_tip, anchor_branch)?;
 
     let mut nodes = vec![Node {
@@ -127,12 +127,12 @@ fn infer_anchor_base(
     git: &Git,
     anchor_branch: &str,
     anchor_tip: &str,
-    main: Option<&str>,
+    base: Option<&str>,
 ) -> Result<String> {
-    if let Some(main) = main {
-        let main_tip = git.rev_parse(&format!("{main}^{{commit}}"))?;
-        if let Some(base) = git.merge_base(anchor_tip, &main_tip)? {
-            return Ok(base);
+    if let Some(base) = base {
+        let base_tip = git.rev_parse(&format!("{base}^{{commit}}"))?;
+        if let Some(inferred_base) = git.merge_base(anchor_tip, &base_tip)? {
+            return Ok(inferred_base);
         }
     }
 

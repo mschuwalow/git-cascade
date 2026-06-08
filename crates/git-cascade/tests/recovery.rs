@@ -233,7 +233,7 @@ fn conflicting_stack() -> TestRepo {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     repo.switch("pr-1");
@@ -257,7 +257,7 @@ fn repeated_conflict_stack() -> TestRepo {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     repo.switch("pr-1");

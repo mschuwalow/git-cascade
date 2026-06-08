@@ -37,9 +37,9 @@ Implemented so far:
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
 - Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
-- `git cascade plan <anchor-branch> --name <name>` for initial linear-stack planning.
+- `git cascade plan --anchor <anchor-branch> --name <name>` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
-- `git cascade plan --main <ref>` explicit main/base reference selection.
+- `git cascade plan --base <ref>` explicit base reference selection.
 - Implicit base selection from `refs/remotes/origin/HEAD`, then local `main`, then local `master`.
 - Real-Git integration test harness using temporary repositories.
 
@@ -48,7 +48,7 @@ Implemented so far:
 `git cascade plan` currently:
 
 - Resolves the anchor as a local branch under `refs/heads`.
-- Infers the anchor old base from `--main`, `origin/HEAD`, local `main`, or local `master`.
+- Infers the anchor old base from `--base`, `origin/HEAD`, local `main`, or local `master`.
 - Captures owned commits with `git rev-list --reverse <base>..<tip>`.
 - Rejects merge commits in captured ranges.
 - Discovers dependent local branches by finding fork points inside already-captured parent commits.
@@ -71,7 +71,7 @@ Current tests include:
 - Real-Git integration tests for `--replace` behavior.
 - Real-Git integration tests for refusing plan creation while state exists.
 - Real-Git integration tests for rejecting merge commits.
-- Real-Git integration tests for `--main` base selection.
+- Real-Git integration tests for `--base` selection.
 - Real-Git integration tests for origin default branch base selection through `refs/remotes/origin/HEAD`.
 - Unit tests for plan topological ordering.
 - Real-Git integration tests for generated plan validation.
@@ -97,6 +97,8 @@ Current tests include:
 - Real-Git integration assertion that conflict state records the plan-id worktree path.
 - Real-Git integration tests for abort tolerating already-deleted worktree files.
 - Real-Git integration tests for `phase: deleting` state cleanup on status.
+- CLI help tests covering commands and apply strategy options.
+- CLI invalid-input tests for missing `--name` and invalid `--strategy`.
 
 Verified commands:
 

@@ -21,7 +21,7 @@ The plan exists so the tool does not need to infer the old stack structure after
 The intended workflow is:
 
 ```bash
-git cascade plan my-branch --name permissions-stack
+git cascade plan --anchor my-branch --name permissions-stack
 git rebase --onto origin/main 3e1e56f91cad6cc45281f86849ee9e727ccac340
 git cascade apply --name permissions-stack --new-anchor <new-anchor>
 ```
@@ -72,7 +72,7 @@ The plan describes transformations over commits, not branches. Branch names are 
 ### 1. Create The Plan
 
 ```bash
-git cascade plan my-branch --name permissions-stack
+git cascade plan --anchor my-branch --name permissions-stack
 ```
 
 This command is read-only. It inspects the current Git repository and captures the cascade rooted at `my-branch`.
@@ -250,7 +250,7 @@ Repository-local storage layout:
 Named plans are the default interface:
 
 ```bash
-git cascade plan my-branch --name permissions-stack
+git cascade plan --anchor my-branch --name permissions-stack
 git cascade apply --name permissions-stack --new-anchor my-branch
 ```
 
@@ -411,7 +411,7 @@ dependencies:
 ## Plan Generation
 
 ```bash
-git cascade plan <anchor-branch> --name <plan-name>
+git cascade plan --anchor <anchor-branch> --name <plan-name>
 ```
 
 Plan generation is a read-only phase.

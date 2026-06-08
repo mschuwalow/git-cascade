@@ -20,7 +20,7 @@ fn apply_refuses_final_update_if_new_anchor_ref_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");

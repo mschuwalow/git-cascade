@@ -75,7 +75,13 @@ fn plan_names_can_contain_path_separators() {
     repo.commit_file("feature.txt", "feature\n", "feature");
 
     repo.cascade()
-        .args(["plan", "pr-1", "--name", "feature/stack with spaces"])
+        .args([
+            "plan",
+            "--anchor",
+            "pr-1",
+            "--name",
+            "feature/stack with spaces",
+        ])
         .assert()
         .success();
 
