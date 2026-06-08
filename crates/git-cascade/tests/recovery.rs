@@ -24,6 +24,17 @@ fn status_reports_conflict_state() {
         .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
         .assert()
         .failure();
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(&state.worktree);
+    assert_eq!(
+        worktree.parent().unwrap(),
+        repo.common_dir().join("cascade/worktrees")
+    );
+    assert_ne!(
+        worktree.file_name().unwrap().to_str().unwrap(),
+        state.plan_id
+    );
+    assert!(worktree.exists());
 
     repo.cascade().arg("status").assert().success().stdout(
         predicate::str::contains("Active cascade operation:")

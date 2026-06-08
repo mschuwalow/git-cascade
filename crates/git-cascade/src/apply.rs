@@ -11,7 +11,9 @@ use crate::state::{
     remove_state, write_state_atomic,
 };
 use crate::storage::{PlanName, Storage};
+use crate::test_hooks;
 use crate::{Error, Result};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct DryRunOptions {
@@ -79,7 +81,7 @@ pub fn dry_run(
 
     let mut selected_bases = HashMap::<String, ReplayBase>::new();
     let mut output = String::new();
-    let worktree = storage.worktrees_dir().join(&plan.plan_id);
+    let worktree = storage.worktrees_dir().join("<generated-uuid>");
     let strategy = if options.move_to_heads {
         "move-to-heads"
     } else {
@@ -185,6 +187,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
 
     let mut mappings = BTreeMap::new();
     mappings.insert(plan.source.anchor_old_tip.clone(), new_anchor.clone());
+    let worktree = storage.worktrees_dir().join(Uuid::new_v4().to_string());
     let mut state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
@@ -194,10 +197,10 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         move_to_heads: options.move_to_heads,
         pending_branches: ordered.clone(),
         mappings: mappings.clone(),
+        worktree: worktree.display().to_string(),
     })?;
     let state_lock = StateLock::create(storage, &state)?;
 
-    let worktree = storage.worktrees_dir().join(&plan.plan_id);
     storage.ensure_worktrees_dir()?;
     cleanup_stale_worktree(git, &worktree)?;
 
@@ -273,6 +276,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
 
     state.phase = "final_update".to_owned();
     write_state_atomic(storage, &mut state)?;
+    test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
         &nodes,
@@ -374,7 +378,7 @@ fn continue_replay_after_resolved_commit(
         .ok_or_else(|| {
             Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
         })?;
-    let worktree = storage.worktrees_dir().join(&plan.plan_id);
+    let worktree = std::path::PathBuf::from(&state.worktree);
     let worktree_git = Git::new(&worktree);
     let mut mappings = state.mappings.clone();
     let mut temp_refs = state.completed.temp_refs.clone();
@@ -476,6 +480,7 @@ fn continue_replay_after_resolved_commit(
     } else {
         None
     };
+    test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
         &nodes,

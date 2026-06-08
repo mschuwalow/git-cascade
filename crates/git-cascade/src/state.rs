@@ -23,6 +23,7 @@ pub struct ApplyState {
     pub new_anchor: NewAnchorState,
     pub strategy: StrategyState,
     pub current: Option<CurrentState>,
+    pub worktree: String,
     pub completed: CompletedState,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
@@ -145,6 +146,7 @@ pub struct ApplyStateInput<'a> {
     pub move_to_heads: bool,
     pub pending_branches: Vec<String>,
     pub mappings: BTreeMap<String, String>,
+    pub worktree: String,
 }
 
 pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
@@ -168,6 +170,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
             move_to_heads: input.move_to_heads,
         },
         current: None,
+        worktree: input.worktree,
         completed: CompletedState::default(),
         mappings: input.mappings,
         pending: PendingState {

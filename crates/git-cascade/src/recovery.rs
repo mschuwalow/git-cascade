@@ -35,10 +35,10 @@ pub fn status(storage: &Storage) -> Result<String> {
     if let Some(current) = &state.current {
         output.push_str(&format!("current-branch: {}\n", current.branch));
         output.push_str(&format!("current-commit: {}\n", current.commit));
-        output.push_str(&format!("worktree: {}\n", current.worktree));
     } else {
         output.push_str("current: none\n");
     }
+    output.push_str(&format!("worktree: {}\n", state.worktree));
     output.push_str(&format!(
         "completed-temp-refs: {}\n",
         state.completed.temp_refs.len()
@@ -87,9 +87,9 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
 }
 
 fn worktree_path(storage: &Storage, state: &ApplyState) -> PathBuf {
-    state
-        .current
-        .as_ref()
-        .map(|current| PathBuf::from(&current.worktree))
-        .unwrap_or_else(|| storage.worktrees_dir().join(&state.plan_id))
+    if state.worktree.is_empty() {
+        storage.worktrees_dir().join(&state.plan_id)
+    } else {
+        PathBuf::from(&state.worktree)
+    }
 }

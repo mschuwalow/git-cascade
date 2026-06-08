@@ -20,7 +20,7 @@ Implemented so far:
 - `apply --dry-run --move-to-heads` base preview.
 - Mutating `git cascade apply --name <name> --new-anchor <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
-- Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
+- Temporary worktree replay under generated UUID directories in `<git-common-dir>/cascade/worktrees/`.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
 - Final dependent branch promotion through a single `git update-ref --stdin` transaction.
 - Success cleanup for state file, temporary refs, and temporary worktree.
@@ -28,6 +28,7 @@ Implemented so far:
 - `git cascade status` for reporting active operation state.
 - `git cascade abort` for aborting preserved conflict state and cleaning temp refs/worktrees.
 - `git cascade continue` for completing a resolved cherry-pick conflict and resuming the cascade.
+- Feature-gated `before-final-update` test hook for ref-safety testing.
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
 - Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
@@ -87,6 +88,8 @@ Current tests include:
 - Real-Git integration tests for `continue` after manual conflict resolution.
 - Real-Git integration tests for `continue` refusing unresolved conflicts.
 - Real-Git integration tests for `continue` without active state.
+- Feature-gated real-Git integration test proving final update refuses a moved replacement anchor ref.
+- Real-Git integration assertion that conflict state records a generated UUID worktree path.
 
 Verified commands:
 
@@ -110,10 +113,9 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 ## Next Steps
 
 1. Add crash/restart tests for continuing from preserved state.
-2. Add explicit final anchor-ref verification tests.
-3. Harden cleanup behavior when temp refs or worktrees already exist.
-4. Add richer status output for completed mappings/temp refs if needed.
-5. Add tests for continuation that hits a second conflict on a later commit.
+2. Harden cleanup behavior when temp refs or worktrees already exist.
+3. Add richer status output for completed mappings/temp refs if needed.
+4. Add tests for continuation that hits a second conflict on a later commit.
 
 ## Recommended Immediate Next Step
 
@@ -129,6 +131,5 @@ Rationale:
 Suggested hardening scope:
 
 - Add tests for interruption after temp refs are written.
-- Add tests for anchor ref movement before final transaction.
 - Add tests for continuation that resolves one conflict and later hits another.
 - Add tests for stale temp worktree/ref cleanup behavior.
