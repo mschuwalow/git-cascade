@@ -40,6 +40,9 @@ pub enum Error {
     #[error("invalid plan: {0}")]
     InvalidPlan(String),
 
+    #[error("invalid command invocation: {0}")]
+    InvalidInvocation(String),
+
     #[error("cannot start a new cascade operation while state file exists at {path}")]
     ActiveOperation { path: PathBuf },
 

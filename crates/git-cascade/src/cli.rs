@@ -2,7 +2,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use crate::apply::{DryRunOptions, dry_run};
 use crate::git::Git;
+use crate::plan::Plan;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
@@ -35,6 +37,8 @@ enum Command {
         new_anchor: String,
         #[arg(long)]
         move_to_heads: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
     List,
     Show {
@@ -68,16 +72,75 @@ where
             replace,
         } => plan(&anchor_branch, name, main.as_deref(), replace),
         Command::Apply {
-            name: _,
-            plan: _,
-            new_anchor: _,
-            move_to_heads: _,
-        } => Err(Error::Unsupported(
-            "plan application is not implemented yet".to_owned(),
-        )),
+            name,
+            plan,
+            new_anchor,
+            move_to_heads,
+            dry_run,
+        } => apply(name, plan.as_deref(), &new_anchor, move_to_heads, dry_run),
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
     }
+}
+
+fn apply(
+    name: Option<PlanName>,
+    plan_path: Option<&std::path::Path>,
+    new_anchor: &str,
+    move_to_heads: bool,
+    is_dry_run: bool,
+) -> Result<()> {
+    if !is_dry_run {
+        return Err(Error::Unsupported(
+            "plan application is not implemented yet; pass --dry-run to preview it".to_owned(),
+        ));
+    }
+
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    let plan = load_apply_plan(&storage, name.as_ref(), plan_path)?;
+    print!(
+        "{}",
+        dry_run(
+            &git,
+            &storage,
+            &plan,
+            DryRunOptions {
+                new_anchor_input: new_anchor.to_owned(),
+                move_to_heads,
+            },
+        )?
+    );
+
+    Ok(())
+}
+
+fn load_apply_plan(
+    storage: &Storage,
+    name: Option<&PlanName>,
+    plan_path: Option<&std::path::Path>,
+) -> Result<Plan> {
+    let content = match (name, plan_path) {
+        (Some(name), None) => storage.read_named_plan(name)?,
+        (None, Some(path)) => {
+            std::fs::read_to_string(path).map_err(|source| Error::IoWithPath {
+                path: path.to_owned(),
+                source,
+            })?
+        }
+        (None, None) => {
+            return Err(Error::InvalidInvocation(
+                "apply requires either --name <name> or --plan <path>".to_owned(),
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(Error::InvalidInvocation(
+                "apply accepts only one of --name or --plan".to_owned(),
+            ));
+        }
+    };
+
+    Ok(serde_yaml::from_str(&content)?)
 }
 
 fn plan(anchor_branch: &str, name: PlanName, main: Option<&str>, replace: bool) -> Result<()> {

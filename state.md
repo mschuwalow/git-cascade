@@ -16,6 +16,8 @@ Implemented so far:
 - Typed YAML plan schema where anchor/dependent status is inferred from `parent: null` instead of a separate role field.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
+- `git cascade apply --name <name> --new-anchor <ref> --dry-run` command preview.
+- `apply --dry-run --move-to-heads` base preview.
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
 - `git cascade plan <anchor-branch> --name <name>` for initial linear-stack planning.
@@ -58,6 +60,10 @@ Current tests include:
 - Real-Git integration tests for generated plan validation.
 - Real-Git integration tests for tampered plan rejection.
 - Real-Git integration tests for apply-mode validation rejecting moved dependent branches.
+- Real-Git integration tests for `apply --dry-run` command output.
+- Real-Git integration tests for `apply --dry-run --move-to-heads` base descriptions.
+- Real-Git integration tests proving dry-run leaves refs/state/temp refs unchanged.
+- Real-Git integration tests proving dry-run refuses moved dependent branches.
 
 Verified commands:
 
@@ -70,7 +76,7 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 
 ## Known Limitations
 
-- `git cascade apply` is not implemented yet.
+- Mutating `git cascade apply` is not implemented yet.
 - `git cascade continue`, `abort`, and `status` are not implemented yet.
 - Plan generation supports linear ranges only and rejects merge commits.
 - Dependent branch discovery is first-pass and may need more edge-case coverage.
@@ -78,42 +84,38 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 - Temporary ref naming with base64url branch components is not wired into apply yet.
 - No atomic state-file lock creation is implemented yet because mutating apply operations are not implemented.
 - No final `git update-ref --stdin` transaction is implemented yet.
-- `apply --dry-run` is not implemented yet; intended behavior is to print the Git operations that would run without promising conflict-free replay.
+- `apply --dry-run` prints the Git operations that would run without promising conflict-free replay.
 - Release workflow will only become fully usable once the `git-cascade` package is published through normal release flow.
 
 ## Next Steps
 
-1. Add apply plan loading from `--name` and later `--plan <path>`.
-2. Add `apply --dry-run` CLI plumbing.
-3. Implement apply preflight validation without replay.
-4. Compute apply execution order and replay base descriptions for dry-run output.
-5. Print the Git operations that apply would run, including worktree creation, cherry-picks, temporary ref writes, and final `update-ref --stdin` transaction.
-6. Add state-file model and atomic state-file creation helpers for non-dry-run apply.
-7. Implement replay into a temporary worktree using cherry-pick.
-8. Store replay results under safe temporary refs using encoded branch components.
-9. Implement final atomic dependent-branch update with `git update-ref --stdin`.
-10. Add integration tests for successful `apply` on a linear stack.
-11. Add integration tests for preserved intermediate fork points during `apply`.
-12. Add integration tests for `--move-to-heads`.
-13. Add conflict detection that leaves permanent refs unchanged and writes durable state.
-14. Implement `status`, `abort`, and `continue`.
+1. Add state-file model and atomic state-file creation helpers for non-dry-run apply.
+2. Add temporary worktree path management and cleanup helpers.
+3. Implement replay into a temporary worktree using cherry-pick.
+4. Store replay results under safe temporary refs using encoded branch components.
+5. Implement final atomic dependent-branch update with `git update-ref --stdin`.
+6. Add integration tests for successful mutating `apply` on a linear stack.
+7. Add integration tests for preserved intermediate fork points during mutating `apply`.
+8. Add integration tests for `--move-to-heads` mutating apply.
+9. Add conflict detection that leaves permanent refs unchanged and writes durable state.
+10. Implement `status`, `abort`, and `continue`.
 
 ## Recommended Immediate Next Step
 
-Implement `apply --dry-run` preflight before mutating apply.
+Implement state-file locking and temporary worktree replay for mutating apply.
 
 Rationale:
 
-- Dry-run exercises plan loading, validation, anchor resolution, dependency ordering, and replay-base selection without mutating repository state.
-- It defines the command-oriented execution plan that the real apply path will later execute.
-- It keeps conflict expectations honest by showing which Git commands would run without claiming they will apply cleanly.
+- Dry-run now exercises plan loading, validation, anchor resolution, dependency ordering, and replay-base selection without mutating repository state.
+- The next risk is safe mutation: acquiring the repository-wide lock, creating temporary worktrees, and ensuring permanent refs remain unchanged until final transaction commit.
+- Implementing state before replay keeps conflict and crash recovery paths aligned with the design.
 
-Suggested dry-run scope:
+Suggested mutating apply scope:
 
-- Require `--new-anchor` and resolve it once.
-- Load the named plan.
-- Run apply-mode validation, including dependent branch ref checks.
-- Compute parent-before-child execution order.
-- Compute replay base labels for default mode and `--move-to-heads`.
-- Print worktree/cherry-pick/temp-ref/final-update commands that would run.
-- Avoid creating `state.yaml`, worktrees, temporary refs, commits, or branch updates.
+- Create `<git-common-dir>/cascade/state.yaml` with exclusive-create semantics after preflight validation.
+- Create or reset a temporary worktree under `<git-common-dir>/cascade/worktrees/<plan-id>`.
+- Replay commits with `git cherry-pick` in parent-before-child order.
+- Write each completed branch tip to `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
+- Preserve old-to-new commit mappings needed for default fork-point preservation.
+- Stop on conflict with permanent refs unchanged and durable state written.
+- Promote completed temporary refs with one final `git update-ref --stdin` transaction only after every branch replay succeeds.

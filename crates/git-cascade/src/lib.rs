@@ -1,3 +1,4 @@
+pub mod apply;
 pub mod cli;
 pub mod encoding;
 pub mod error;

@@ -89,6 +89,10 @@ impl Git {
             .to_owned())
     }
 
+    pub fn resolve_commit(&self, rev: &str) -> Result<String> {
+        self.rev_parse(&format!("{rev}^{{commit}}"))
+    }
+
     pub fn try_rev_parse(&self, rev: &str) -> Result<Option<String>> {
         Ok(self
             .try_output(["rev-parse", "--verify", "--quiet", rev])?
