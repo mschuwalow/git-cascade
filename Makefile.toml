@@ -1,0 +1,78 @@
+[config]
+default_to_workspace = false
+
+[tasks.check]
+clear = true
+description = "Run the standard workspace verification checks."
+dependencies = ["check-rustfmt", "check-clippy"]
+
+[tasks.check-rustfmt]
+description = "Check Rust formatting when workspace crates exist."
+script_runner = "@shell"
+script = '''
+if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
+  echo "No workspace crates yet; skipping rustfmt."
+  exit 0
+fi
+
+cargo fmt --all -- --check
+'''
+
+[tasks.check-clippy]
+description = "Run clippy when workspace crates exist."
+script_runner = "@shell"
+script = '''
+if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
+  echo "No workspace crates yet; skipping clippy."
+  exit 0
+fi
+
+cargo clippy --workspace --all-targets --no-deps -- -D warnings
+'''
+
+[tasks.ci]
+clear = true
+description = "Run linting and tests."
+dependencies = ["check", "test"]
+
+[tasks.fix]
+clear = true
+description = "Runs rustfmt and clippy checks and applies fixes."
+dependencies = ["fix-clippy", "fix-rustfmt"]
+
+[tasks.fix-rustfmt]
+description = "Runs rustfmt and applies fixes when workspace crates exist."
+script_runner = "@shell"
+script = '''
+if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
+  echo "No workspace crates yet; skipping rustfmt."
+  exit 0
+fi
+
+cargo fmt --all
+'''
+
+[tasks.fix-clippy]
+description = "Runs clippy and applies fixes when workspace crates exist."
+script_runner = "@shell"
+script = '''
+if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
+  echo "No workspace crates yet; skipping clippy."
+  exit 0
+fi
+
+cargo clippy --workspace --all-targets --no-deps --fix --allow-dirty --allow-staged -- -D warnings
+'''
+
+[tasks.test]
+clear = true
+description = "Run tests when workspace crates exist."
+script_runner = "@shell"
+script = '''
+if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
+  echo "No workspace crates yet; skipping tests."
+  exit 0
+fi
+
+cargo test --workspace
+'''
