@@ -16,9 +16,9 @@ Implemented so far:
 - Typed YAML plan schema where anchor/dependent data is represented by a `kind` enum.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
-- `git cascade apply --anchor <anchor-ref> --new-anchor <ref> --dry-run` command preview.
+- `git cascade apply --old-anchor <anchor-ref> --new-anchor <ref> --dry-run` command preview.
 - `apply --dry-run --strategy move-to-heads` base preview.
-- Mutating `git cascade apply --anchor <anchor-ref> --new-anchor <ref>` for clean linear branch stacks.
+- Mutating `git cascade apply --old-anchor <anchor-ref> --new-anchor <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
 - Active apply state uses typed enum values for operation, phase, and strategy, and stores the plan anchor as a required `PlanKey`.

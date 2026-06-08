@@ -16,7 +16,7 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .success()
         .stdout("applied cascade plan\n");
@@ -41,7 +41,7 @@ fn apply_preserves_intermediate_fork_point() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .success();
 
@@ -63,7 +63,7 @@ fn apply_strategy_replays_child_on_parent_tip() {
     repo.cascade()
         .args([
             "apply",
-            "--anchor",
+            "--old-anchor",
             "pr-1",
             "--new-anchor",
             "pr-1",
@@ -90,7 +90,7 @@ fn apply_refuses_when_state_exists() {
     let pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -111,7 +111,7 @@ fn apply_refuses_when_dependent_branch_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -139,7 +139,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -170,7 +170,7 @@ fn apply_uses_arbitrary_ref_anchor_plan_key() {
     repo.cascade()
         .args([
             "apply",
-            "--anchor",
+            "--old-anchor",
             "refs/tags/old-anchor",
             "--new-anchor",
             "pr-1",

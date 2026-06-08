@@ -32,7 +32,7 @@ fn apply_help_mentions_strategy_and_dry_run() {
                 .and(predicate::str::contains("preserve-fork-points"))
                 .and(predicate::str::contains("move-to-heads"))
                 .and(predicate::str::contains("--dry-run"))
-                .and(predicate::str::contains("--anchor"))
+                .and(predicate::str::contains("--old-anchor"))
                 .and(predicate::str::contains("--new-anchor")),
         );
 }
@@ -53,14 +53,14 @@ fn plan_help_mentions_anchor_and_replace() {
 }
 
 #[test]
-fn apply_requires_anchor() {
+fn apply_requires_old_anchor() {
     let repo = TestRepo::new();
 
     repo.cascade()
         .args(["apply", "--new-anchor", "pr-1", "--dry-run"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--anchor"));
+        .stderr(predicate::str::contains("--old-anchor"));
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn apply_rejects_invalid_strategy() {
     repo.cascade()
         .args([
             "apply",
-            "--anchor",
+            "--old-anchor",
             "pr-1",
             "--new-anchor",
             "pr-1",

@@ -22,7 +22,7 @@ fn status_reports_conflict_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure();
     let state = read_state(&repo);
@@ -56,7 +56,7 @@ fn abort_cleans_conflict_state_without_moving_refs() {
     let old_pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure();
     let state = read_state(&repo);
@@ -88,7 +88,7 @@ fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure();
     let state = read_state(&repo);
@@ -108,7 +108,7 @@ fn status_finishes_cleanup_for_deleting_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure();
     let mut state = read_state(&repo);
@@ -155,7 +155,7 @@ fn continue_refuses_unresolved_conflicts() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure();
 
@@ -173,7 +173,7 @@ fn continue_after_conflict_finishes_apply() {
     let old_pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure();
 
@@ -200,7 +200,7 @@ fn continue_can_stop_again_on_later_conflict() {
     let old_pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure();
     let first_state = read_state(&repo);

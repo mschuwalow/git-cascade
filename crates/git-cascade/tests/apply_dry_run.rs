@@ -26,7 +26,7 @@ fn apply_dry_run_linear_stack_prints_commands_without_mutating_refs() {
     repo.cascade()
         .args([
             "apply",
-            "--anchor",
+            "--old-anchor",
             "pr-1",
             "--new-anchor",
             "pr-1",
@@ -84,7 +84,7 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
     repo.cascade()
         .args([
             "apply",
-            "--anchor",
+            "--old-anchor",
             "pr-1",
             "--new-anchor",
             "pr-1",
@@ -99,7 +99,7 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
     repo.cascade()
         .args([
             "apply",
-            "--anchor",
+            "--old-anchor",
             "pr-1",
             "--new-anchor",
             "pr-1",
@@ -133,7 +133,7 @@ fn apply_dry_run_refuses_if_dependent_branch_moved() {
     repo.cascade()
         .args([
             "apply",
-            "--anchor",
+            "--old-anchor",
             "pr-1",
             "--new-anchor",
             "pr-1",
@@ -160,7 +160,7 @@ fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
         .success();
 
     repo.cascade()
-        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .success()
         .stdout("applied cascade plan\n");

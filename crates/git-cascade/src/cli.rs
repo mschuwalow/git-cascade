@@ -28,7 +28,7 @@ enum Command {
     },
     Apply {
         #[arg(long)]
-        anchor: String,
+        old_anchor: String,
         #[arg(long)]
         new_anchor: String,
         #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
@@ -66,11 +66,11 @@ where
     match cli.command {
         Command::Plan { anchor, replace } => plan(&anchor, replace),
         Command::Apply {
-            anchor,
+            old_anchor,
             new_anchor,
             strategy,
             dry_run,
-        } => apply(&anchor, &new_anchor, strategy, dry_run),
+        } => apply(&old_anchor, &new_anchor, strategy, dry_run),
         Command::List => list_plans(),
         Command::Show { anchor } => show_plan(&anchor),
         Command::Status => status(),
@@ -105,10 +105,10 @@ fn abort() -> Result<()> {
     Ok(())
 }
 
-fn apply(anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
+fn apply(old_anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let key = PlanKey::from_anchor(anchor)?;
+    let key = PlanKey::from_anchor(old_anchor)?;
     let plan = serde_yaml::from_str(&storage.read_plan(&key)?)?;
 
     if is_dry_run {

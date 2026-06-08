@@ -23,7 +23,7 @@ The intended workflow is:
 ```bash
 git cascade plan --anchor my-branch
 git rebase --onto origin/main 3e1e56f91cad6cc45281f86849ee9e727ccac340
-git cascade apply --anchor my-branch --new-anchor <new-anchor>
+git cascade apply --old-anchor my-branch --new-anchor <new-anchor>
 ```
 
 The user manually rebases one branch. The tool then uses the saved plan to cascade that rewrite through all dependent branches.
@@ -105,10 +105,10 @@ This step may break the old relationships between the anchor and its dependent b
 ### 3. Apply The Plan
 
 ```bash
-git cascade apply --anchor my-branch --new-anchor <new-anchor>
+git cascade apply --old-anchor my-branch --new-anchor <new-anchor>
 ```
 
-Apply always requires an explicit replacement anchor. The tool resolves `--new-anchor` exactly once and treats the resolved commit as the replacement for the old anchor boundary.
+Apply requires both the old anchor key and an explicit replacement anchor. `--old-anchor` selects the stored plan created from the old anchor ref/key. The tool resolves `--new-anchor` exactly once and treats the resolved commit as the replacement for the old anchor boundary.
 
 Then it replays each dependent branch's saved commit range onto the rewritten equivalent of its original fork point.
 
@@ -135,13 +135,13 @@ The apply step does not rebase or update the anchor. The replacement anchor was 
 The replacement anchor is always explicit:
 
 ```bash
-git cascade apply --anchor my-branch --new-anchor origin/main
+git cascade apply --old-anchor my-branch --new-anchor origin/main
 ```
 
 or:
 
 ```bash
-git cascade apply --anchor my-branch --new-anchor <commit-sha>
+git cascade apply --old-anchor my-branch --new-anchor <commit-sha>
 ```
 
 When `--new-anchor` is provided, the tool resolves that ref or commit exactly once at the start of execution and uses the resolved object ID as the new anchor tip.
@@ -149,7 +149,7 @@ When `--new-anchor` is provided, the tool resolves that ref or commit exactly on
 There is no implicit fallback to the current tip of the original anchor ref. If the desired new anchor is a manually rebased branch, pass it explicitly:
 
 ```bash
-git cascade apply --anchor my-branch --new-anchor my-branch
+git cascade apply --old-anchor my-branch --new-anchor my-branch
 ```
 
 ### Move To Heads
@@ -159,7 +159,7 @@ The default apply mode preserves fork points between non-anchor branches.
 The `--strategy move-to-heads` option selects a simpler strategy:
 
 ```bash
-git cascade apply --anchor my-branch --new-anchor my-branch --strategy move-to-heads
+git cascade apply --old-anchor my-branch --new-anchor my-branch --strategy move-to-heads
 ```
 
 With this flag, every dependent branch is replayed onto the rewritten tip of its parent, even if it originally forked from an intermediate parent commit.
@@ -250,7 +250,7 @@ Anchor-keyed plans are the default interface:
 
 ```bash
 git cascade plan --anchor my-branch
-git cascade apply --anchor my-branch --new-anchor my-branch
+git cascade apply --old-anchor my-branch --new-anchor my-branch
 ```
 
 Plan keys are raw `--anchor` values and are encoded as unpadded base64url for filesystem storage.
@@ -456,7 +456,7 @@ There is no implicit use of `refs/heads/<anchor-ref>`. If a manually rebased bra
 ## Apply Execution
 
 ```bash
-git cascade apply --anchor <anchor-ref> --new-anchor <ref-or-commit>
+git cascade apply --old-anchor <anchor-ref> --new-anchor <ref-or-commit>
 ```
 
 Apply-time behavior is selected by flags, not by defaults stored in the plan. With the default `--strategy preserve-fork-points`, apply preserves fork points between non-anchor branches. With `--strategy move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.

@@ -26,25 +26,25 @@ git rebase main
 Apply the cascade to dependent branches:
 
 ```sh
-git cascade apply --anchor pr-1 --new-anchor pr-1
+git cascade apply --old-anchor pr-1 --new-anchor pr-1
 ```
 
 Preview the Git commands without mutating refs, worktrees, or state:
 
 ```sh
-git cascade apply --anchor pr-1 --new-anchor pr-1 --dry-run
+git cascade apply --old-anchor pr-1 --new-anchor pr-1 --dry-run
 ```
 
 Use the simpler strategy that replays every child onto the rewritten tip of its parent:
 
 ```sh
-git cascade apply --anchor pr-1 --new-anchor pr-1 --strategy move-to-heads
+git cascade apply --old-anchor pr-1 --new-anchor pr-1 --strategy move-to-heads
 ```
 
 The default strategy is:
 
 ```sh
-git cascade apply --anchor pr-1 --new-anchor pr-1 --strategy preserve-fork-points
+git cascade apply --old-anchor pr-1 --new-anchor pr-1 --strategy preserve-fork-points
 ```
 
 ## Conflicts
