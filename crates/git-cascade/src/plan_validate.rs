@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::git::Git;
-use crate::plan::{Dependency, Node, NodeRole, Plan};
+use crate::plan::{Dependency, Node, Plan};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -97,35 +97,20 @@ fn validate_shape(plan: &Plan) -> Result<()> {
             return invalid("node branch names must not be empty");
         }
 
-        match node.role {
-            NodeRole::Anchor => {
-                if node.parent.is_some() {
-                    return invalid(format!(
-                        "anchor node `{}` must not have a parent",
-                        node.branch
-                    ));
-                }
-            }
-            NodeRole::Dependent => {
-                let Some(parent) = node.parent.as_deref() else {
-                    return invalid(format!(
-                        "dependent node `{}` must have a parent",
-                        node.branch
-                    ));
-                };
-                if !node_by_branch.contains_key(parent) {
-                    return invalid(format!(
-                        "dependent node `{}` references unknown parent `{parent}`",
-                        node.branch
-                    ));
-                }
-                if !dependency_set.contains(&(parent, node.branch.as_str())) {
-                    return invalid(format!(
-                        "dependent node `{}` is missing dependency edge from `{parent}`",
-                        node.branch
-                    ));
-                }
-            }
+        let Some(parent) = node.parent.as_deref() else {
+            continue;
+        };
+        if !node_by_branch.contains_key(parent) {
+            return invalid(format!(
+                "dependent node `{}` references unknown parent `{parent}`",
+                node.branch
+            ));
+        }
+        if !dependency_set.contains(&(parent, node.branch.as_str())) {
+            return invalid(format!(
+                "dependent node `{}` is missing dependency edge from `{parent}`",
+                node.branch
+            ));
         }
     }
 
@@ -210,7 +195,7 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
 
 fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
-        if node.role == NodeRole::Anchor {
+        if node.parent.is_none() {
             continue;
         }
 
@@ -235,7 +220,7 @@ fn validate_default_fork_point_mappability(
             continue;
         };
         let parent = node_by_branch[parent_branch];
-        if parent.role == NodeRole::Anchor {
+        if parent.parent.is_none() {
             continue;
         }
         if node.old_base != parent.old_base && !parent.commits.contains(&node.old_base) {
@@ -341,10 +326,7 @@ fn dependency_set(plan: &Plan) -> Result<HashSet<(&str, &str)>> {
 }
 
 fn anchor_node(plan: &Plan) -> Result<&Node> {
-    let mut anchors = plan
-        .nodes
-        .iter()
-        .filter(|node| node.role == NodeRole::Anchor);
+    let mut anchors = plan.nodes.iter().filter(|node| node.parent.is_none());
     let Some(anchor) = anchors.next() else {
         return invalid("plan must contain exactly one anchor node");
     };
@@ -379,14 +361,14 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::topological_order;
-    use crate::plan::{Dependency, Node, NodeRole, Plan, Repository, Source};
+    use crate::plan::{Dependency, Node, Plan, Repository, Source};
 
     #[test]
     fn topological_order_returns_parents_before_children() {
         let plan = test_plan(vec![
-            node("anchor", NodeRole::Anchor, None),
-            node("child", NodeRole::Dependent, Some("anchor")),
-            node("grandchild", NodeRole::Dependent, Some("child")),
+            node("anchor", None),
+            node("child", Some("anchor")),
+            node("grandchild", Some("child")),
         ]);
 
         assert_eq!(topological_order(&plan).unwrap(), ["child", "grandchild"]);
@@ -394,10 +376,7 @@ mod tests {
 
     #[test]
     fn topological_order_rejects_disconnected_nodes() {
-        let plan = test_plan(vec![
-            node("anchor", NodeRole::Anchor, None),
-            node("child", NodeRole::Dependent, Some("missing")),
-        ]);
+        let plan = test_plan(vec![node("anchor", None), node("child", Some("missing"))]);
 
         assert!(topological_order(&plan).is_err());
     }
@@ -432,10 +411,9 @@ mod tests {
         }
     }
 
-    fn node(branch: &str, role: NodeRole, parent: Option<&str>) -> Node {
+    fn node(branch: &str, parent: Option<&str>) -> Node {
         Node {
             branch: branch.to_owned(),
-            role,
             parent: parent.map(str::to_owned),
             old_base: "0".repeat(40),
             old_tip: "0".repeat(40),

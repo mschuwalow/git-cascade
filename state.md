@@ -11,9 +11,9 @@ Implemented so far:
 - Synchronous Git subprocess wrapper using `std::process::Command`.
 - `test-hooks` Cargo feature for internal test hooks, compiled out by default.
 - Repository-local storage path handling via `git rev-parse --path-format=absolute --git-common-dir`.
-- Safe plan-name validation.
-- Base64url component encoding for future branch-derived ref/file components.
-- Typed YAML plan schema.
+- `PlanName` newtype with unpadded base64url filesystem serialization for named plan files.
+- Base64url component encoding for branch-derived ref/file components.
+- Typed YAML plan schema where anchor/dependent status is inferred from `parent: null` instead of a separate role field.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
 - `git cascade list` for named plans.
@@ -34,7 +34,7 @@ Implemented so far:
 - Rejects merge commits in captured ranges.
 - Discovers dependent local branches by finding fork points inside already-captured parent commits.
 - Preserves intermediate fork points in the generated plan.
-- Writes plans to `<git-common-dir>/cascade/plans/<name>.yaml`.
+- Writes plans to `<git-common-dir>/cascade/plans/<base64url-plan-name>.yaml`.
 - Refuses to overwrite existing plans unless `--replace` is passed.
 - Refuses to create a plan while `<git-common-dir>/cascade/state.yaml` exists.
 
@@ -43,9 +43,10 @@ Implemented so far:
 Current tests include:
 
 - Unit tests for base64url encoding.
-- Unit tests for plan-name validation.
+- Unit tests for plan-name filesystem encoding/decoding.
 - Unit tests for storage path construction.
 - Real-Git integration tests for `list` and `show`.
+- Real-Git integration tests for plan names containing path separators and spaces.
 - Real-Git integration tests for linear stack plan generation.
 - Real-Git integration tests for intermediate fork-point preservation.
 - Real-Git integration tests for `--replace` behavior.
@@ -74,7 +75,7 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 - Plan generation supports linear ranges only and rejects merge commits.
 - Dependent branch discovery is first-pass and may need more edge-case coverage.
 - Remote-tracking branches are not updated; v1 should continue to target local branches only.
-- Temporary ref naming with base64url/base62 branch components is not wired into apply yet.
+- Temporary ref naming with base64url branch components is not wired into apply yet.
 - No atomic state-file lock creation is implemented yet because mutating apply operations are not implemented.
 - No final `git update-ref --stdin` transaction is implemented yet.
 - `apply --dry-run` is not implemented yet; intended behavior is to print the Git operations that would run without promising conflict-free replay.

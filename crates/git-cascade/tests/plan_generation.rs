@@ -1,6 +1,6 @@
 mod common;
 
-use git_cascade::plan::{NodeRole, Plan};
+use git_cascade::plan::Plan;
 use predicates::prelude::*;
 
 use common::repo::TestRepo;
@@ -33,12 +33,10 @@ fn plan_creates_named_plan_for_linear_stack() {
     assert_eq!(plan.dependencies.len(), 2);
 
     assert_eq!(plan.nodes[0].branch, "pr-1");
-    assert_eq!(plan.nodes[0].role, NodeRole::Anchor);
     assert_eq!(plan.nodes[0].parent, None);
     assert_eq!(plan.nodes[0].commits, vec![pr1_a, pr1_b.clone()]);
 
     assert_eq!(plan.nodes[1].branch, "pr-2");
-    assert_eq!(plan.nodes[1].role, NodeRole::Dependent);
     assert_eq!(plan.nodes[1].parent.as_deref(), Some("pr-1"));
     assert_eq!(plan.nodes[1].old_base, pr1_b);
     assert_eq!(plan.nodes[1].old_tip, pr2);

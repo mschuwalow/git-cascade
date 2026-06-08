@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use git_cascade::storage::PlanName;
 use tempfile::TempDir;
 
 pub struct TestRepo {
@@ -98,10 +99,11 @@ impl TestRepo {
     }
 
     pub fn named_plan_path(&self, name: &str) -> std::path::PathBuf {
+        let name = PlanName::new(name).unwrap();
         self.common_dir()
             .join("cascade")
             .join("plans")
-            .join(format!("{name}.yaml"))
+            .join(format!("{}.yaml", name.encoded()))
     }
 
     fn configure_command<'a, C>(&self, command: &'a mut C) -> &'a mut C

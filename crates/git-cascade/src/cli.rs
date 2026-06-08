@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 
 use crate::git::Git;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
-use crate::storage::Storage;
+use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 
 #[derive(Debug, Parser)]
@@ -20,7 +20,7 @@ enum Command {
     Plan {
         anchor_branch: String,
         #[arg(long)]
-        name: String,
+        name: PlanName,
         #[arg(long)]
         main: Option<String>,
         #[arg(long)]
@@ -28,7 +28,7 @@ enum Command {
     },
     Apply {
         #[arg(long, conflicts_with = "plan")]
-        name: Option<String>,
+        name: Option<PlanName>,
         #[arg(long, conflicts_with = "name")]
         plan: Option<std::path::PathBuf>,
         #[arg(long)]
@@ -39,7 +39,7 @@ enum Command {
     List,
     Show {
         #[arg(long)]
-        name: String,
+        name: PlanName,
     },
 }
 
@@ -66,7 +66,7 @@ where
             name,
             main,
             replace,
-        } => plan(&anchor_branch, &name, main.as_deref(), replace),
+        } => plan(&anchor_branch, name, main.as_deref(), replace),
         Command::Apply {
             name: _,
             plan: _,
@@ -80,20 +80,21 @@ where
     }
 }
 
-fn plan(anchor_branch: &str, name: &str, main: Option<&str>, replace: bool) -> Result<()> {
+fn plan(anchor_branch: &str, name: PlanName, main: Option<&str>, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
+    let display_name = name.to_string();
     generate_named_plan(
         &git,
         &storage,
         GenerateOptions {
             anchor_branch: anchor_branch.to_owned(),
-            name: name.to_owned(),
+            name,
             replace,
             main: main.map(str::to_owned),
         },
     )?;
-    println!("created plan `{name}`");
+    println!("created plan `{display_name}`");
 
     Ok(())
 }
@@ -109,7 +110,7 @@ fn list_plans() -> Result<()> {
     Ok(())
 }
 
-fn show_plan(name: &str) -> Result<()> {
+fn show_plan(name: &PlanName) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     print!("{}", storage.read_named_plan(name)?);

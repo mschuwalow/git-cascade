@@ -5,17 +5,16 @@ use std::io::Write;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::encoding::encode_component;
 use crate::git::{Git, LocalBranch};
-use crate::plan::{Dependency, Node, NodeRole, Plan, Repository, Source};
+use crate::plan::{Dependency, Node, Plan, Repository, Source};
 use crate::plan_validate::validate_plan;
-use crate::storage::Storage;
+use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
     pub anchor_branch: String,
-    pub name: String,
+    pub name: PlanName,
     pub replace: bool,
     pub main: Option<String>,
 }
@@ -43,7 +42,7 @@ pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOption
 pub fn generate_plan(
     git: &Git,
     anchor_branch: &str,
-    plan_name: &str,
+    plan_name: &PlanName,
     main: Option<&str>,
 ) -> Result<Plan> {
     let anchor_tip = git.local_branch_tip(anchor_branch)?;
@@ -52,7 +51,6 @@ pub fn generate_plan(
 
     let mut nodes = vec![Node {
         branch: anchor_branch.to_owned(),
-        role: NodeRole::Anchor,
         parent: None,
         old_base: anchor_base.clone(),
         old_tip: anchor_tip.clone(),
@@ -70,7 +68,6 @@ pub fn generate_plan(
         });
         nodes.push(Node {
             branch: candidate.branch.name,
-            role: NodeRole::Dependent,
             parent: Some(candidate.parent_branch),
             old_base: candidate.old_base,
             old_tip: candidate.branch.tip,
@@ -82,7 +79,7 @@ pub fn generate_plan(
     let generated_at = now.format(&Rfc3339).map_err(|error| {
         Error::Unsupported(format!("failed to format generation timestamp: {error}"))
     })?;
-    let plan_id = format!("{}-{}", now.unix_timestamp(), encode_component(plan_name));
+    let plan_id = format!("{}-{}", now.unix_timestamp(), plan_name.encoded());
 
     Ok(Plan {
         version: 1,
@@ -103,7 +100,7 @@ pub fn generate_plan(
     })
 }
 
-fn write_named_plan(storage: &Storage, name: &str, plan: &Plan, replace: bool) -> Result<()> {
+fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bool) -> Result<()> {
     if storage.state_path().exists() {
         return Err(Error::ActiveOperation {
             path: storage.state_path(),
@@ -111,10 +108,10 @@ fn write_named_plan(storage: &Storage, name: &str, plan: &Plan, replace: bool) -
     }
 
     storage.ensure_plans_dir()?;
-    let path = storage.named_plan_path(name)?;
+    let path = storage.named_plan_path(name);
     if path.exists() && !replace {
         return Err(Error::PlanExists {
-            name: name.to_owned(),
+            name: name.to_string(),
             path,
         });
     }

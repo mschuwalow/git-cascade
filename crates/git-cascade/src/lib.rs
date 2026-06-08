@@ -4,7 +4,6 @@ pub mod error;
 pub mod git;
 pub mod plan;
 pub mod plan_generate;
-pub mod plan_name;
 pub mod plan_validate;
 pub mod storage;
 pub mod test_hooks;

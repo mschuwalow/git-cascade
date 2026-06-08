@@ -28,18 +28,10 @@ pub struct Source {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Node {
     pub branch: String,
-    pub role: NodeRole,
     pub parent: Option<String>,
     pub old_base: String,
     pub old_tip: String,
     pub commits: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NodeRole {
-    Anchor,
-    Dependent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
