@@ -146,7 +146,7 @@ fn apply_dry_run_refuses_if_dependent_branch_moved() {
 }
 
 #[test]
-fn apply_without_dry_run_is_still_explicitly_unsupported() {
+fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -161,8 +161,6 @@ fn apply_without_dry_run_is_still_explicitly_unsupported() {
     repo.cascade()
         .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "plan application is not implemented yet; pass --dry-run to preview it",
-        ));
+        .success()
+        .stdout("applied cascade plan\n");
 }

@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::apply::{DryRunOptions, dry_run};
+use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::Plan;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
@@ -90,27 +90,36 @@ fn apply(
     move_to_heads: bool,
     is_dry_run: bool,
 ) -> Result<()> {
-    if !is_dry_run {
-        return Err(Error::Unsupported(
-            "plan application is not implemented yet; pass --dry-run to preview it".to_owned(),
-        ));
-    }
-
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let plan = load_apply_plan(&storage, name.as_ref(), plan_path)?;
-    print!(
-        "{}",
-        dry_run(
+
+    if is_dry_run {
+        print!(
+            "{}",
+            dry_run(
+                &git,
+                &storage,
+                &plan,
+                DryRunOptions {
+                    new_anchor_input: new_anchor.to_owned(),
+                    move_to_heads,
+                },
+            )?
+        );
+    } else {
+        execute(
             &git,
             &storage,
             &plan,
-            DryRunOptions {
+            ApplyOptions {
+                plan_name: name,
                 new_anchor_input: new_anchor.to_owned(),
                 move_to_heads,
             },
-        )?
-    );
+        )?;
+        println!("applied cascade plan");
+    }
 
     Ok(())
 }

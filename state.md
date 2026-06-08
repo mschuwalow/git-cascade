@@ -18,6 +18,12 @@ Implemented so far:
 - Parent-before-child topological ordering for future apply execution.
 - `git cascade apply --name <name> --new-anchor <ref> --dry-run` command preview.
 - `apply --dry-run --move-to-heads` base preview.
+- Mutating `git cascade apply --name <name> --new-anchor <ref>` for clean linear branch stacks.
+- Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
+- Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
+- Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
+- Final dependent branch promotion through a single `git update-ref --stdin` transaction.
+- Success cleanup for state file, temporary refs, and temporary worktree.
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
 - `git cascade plan <anchor-branch> --name <name>` for initial linear-stack planning.
@@ -64,6 +70,12 @@ Current tests include:
 - Real-Git integration tests for `apply --dry-run --move-to-heads` base descriptions.
 - Real-Git integration tests proving dry-run leaves refs/state/temp refs unchanged.
 - Real-Git integration tests proving dry-run refuses moved dependent branches.
+- Real-Git integration tests for mutating apply on a clean linear stack.
+- Real-Git integration tests for mutating apply preserving intermediate fork points.
+- Real-Git integration tests for mutating apply with `--move-to-heads`.
+- Real-Git integration tests for mutating apply refusing an existing state file.
+- Real-Git integration tests for mutating apply refusing moved dependent branches.
+- Real-Git integration tests for conflict safety: permanent refs unchanged and state retained.
 
 Verified commands:
 
@@ -76,46 +88,38 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 
 ## Known Limitations
 
-- Mutating `git cascade apply` is not implemented yet.
 - `git cascade continue`, `abort`, and `status` are not implemented yet.
 - Plan generation supports linear ranges only and rejects merge commits.
 - Dependent branch discovery is first-pass and may need more edge-case coverage.
 - Remote-tracking branches are not updated; v1 should continue to target local branches only.
-- Temporary ref naming with base64url branch components is not wired into apply yet.
-- No atomic state-file lock creation is implemented yet because mutating apply operations are not implemented.
-- No final `git update-ref --stdin` transaction is implemented yet.
+- Conflict recovery is not implemented yet; apply stops with state/worktree preserved.
 - `apply --dry-run` prints the Git operations that would run without promising conflict-free replay.
 - Release workflow will only become fully usable once the `git-cascade` package is published through normal release flow.
 
 ## Next Steps
 
-1. Add state-file model and atomic state-file creation helpers for non-dry-run apply.
-2. Add temporary worktree path management and cleanup helpers.
-3. Implement replay into a temporary worktree using cherry-pick.
-4. Store replay results under safe temporary refs using encoded branch components.
-5. Implement final atomic dependent-branch update with `git update-ref --stdin`.
-6. Add integration tests for successful mutating `apply` on a linear stack.
-7. Add integration tests for preserved intermediate fork points during mutating `apply`.
-8. Add integration tests for `--move-to-heads` mutating apply.
-9. Add conflict detection that leaves permanent refs unchanged and writes durable state.
-10. Implement `status`, `abort`, and `continue`.
+1. Implement `git cascade status` for active apply state.
+2. Implement `git cascade abort` for cleaning preserved conflict state/worktrees/temp refs.
+3. Implement `git cascade continue` for completing conflict resolutions.
+4. Persist state updates during replay instead of only writing initial state.
+5. Add crash/restart tests for continuing from preserved state.
+6. Add explicit final anchor-ref verification tests.
+7. Add tests for `--plan <path>` apply flows.
+8. Harden cleanup behavior when temp refs or worktrees already exist.
 
 ## Recommended Immediate Next Step
 
-Implement state-file locking and temporary worktree replay for mutating apply.
+Implement `status`, `abort`, and `continue` around preserved apply state.
 
 Rationale:
 
-- Dry-run now exercises plan loading, validation, anchor resolution, dependency ordering, and replay-base selection without mutating repository state.
-- The next risk is safe mutation: acquiring the repository-wide lock, creating temporary worktrees, and ensuring permanent refs remain unchanged until final transaction commit.
-- Implementing state before replay keeps conflict and crash recovery paths aligned with the design.
+- Mutating apply now handles clean stacks and safely stops on conflict with permanent refs unchanged.
+- The next risk is recoverability: users need supported commands to inspect, abort, and continue preserved conflict state.
+- State updates during replay should become durable enough for crash/restart scenarios.
 
-Suggested mutating apply scope:
+Suggested recovery scope:
 
-- Create `<git-common-dir>/cascade/state.yaml` with exclusive-create semantics after preflight validation.
-- Create or reset a temporary worktree under `<git-common-dir>/cascade/worktrees/<plan-id>`.
-- Replay commits with `git cherry-pick` in parent-before-child order.
-- Write each completed branch tip to `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
-- Preserve old-to-new commit mappings needed for default fork-point preservation.
-- Stop on conflict with permanent refs unchanged and durable state written.
-- Promote completed temporary refs with one final `git update-ref --stdin` transaction only after every branch replay succeeds.
+- `status` should read `state.yaml` and report phase, current branch/commit, worktree, completed refs, and pending branches.
+- `abort` should abort any in-progress sequencer in the temp worktree, remove safe temp refs/worktrees, and remove `state.yaml`.
+- `continue` should validate refs/state, ensure the conflict worktree has no unmerged entries, complete the current cherry-pick, and resume replay.
+- Tests should cover conflict, status output, abort cleanup, and continue after manual resolution.

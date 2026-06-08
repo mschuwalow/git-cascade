@@ -6,6 +6,7 @@ pub mod git;
 pub mod plan;
 pub mod plan_generate;
 pub mod plan_validate;
+pub mod state;
 pub mod storage;
 pub mod test_hooks;
 

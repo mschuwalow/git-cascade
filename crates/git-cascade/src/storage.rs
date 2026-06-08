@@ -96,6 +96,16 @@ impl Storage {
         fs::create_dir_all(&path).map_err(|source| Error::IoWithPath { path, source })
     }
 
+    pub fn ensure_cascade_dir(&self) -> Result<()> {
+        let path = self.cascade_dir();
+        fs::create_dir_all(&path).map_err(|source| Error::IoWithPath { path, source })
+    }
+
+    pub fn ensure_worktrees_dir(&self) -> Result<()> {
+        let path = self.worktrees_dir();
+        fs::create_dir_all(&path).map_err(|source| Error::IoWithPath { path, source })
+    }
+
     pub fn read_named_plan(&self, name: &PlanName) -> Result<String> {
         let path = self.named_plan_path(name);
         fs::read_to_string(&path).map_err(|source| {

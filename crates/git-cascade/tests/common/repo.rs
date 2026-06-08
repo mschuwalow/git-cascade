@@ -92,6 +92,23 @@ impl TestRepo {
         self.git_output(["rev-parse", rev]).trim().to_owned()
     }
 
+    pub fn merge_base(&self, left: &str, right: &str) -> String {
+        self.git_output(["merge-base", left, right])
+            .trim()
+            .to_owned()
+    }
+
+    pub fn rev_list_reverse(&self, range: &str) -> Vec<String> {
+        self.git_output(["rev-list", "--reverse", range])
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    pub fn show(&self, rev_path: &str) -> String {
+        self.git_output(["show", rev_path])
+    }
+
     pub fn common_dir(&self) -> std::path::PathBuf {
         self.git_output(["rev-parse", "--path-format=absolute", "--git-common-dir"])
             .trim()

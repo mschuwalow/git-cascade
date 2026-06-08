@@ -43,6 +43,16 @@ pub enum Error {
     #[error("invalid command invocation: {0}")]
     InvalidInvocation(String),
 
+    #[error(
+        "apply stopped while replaying branch `{branch}` commit `{commit}` in worktree {worktree}: {message}"
+    )]
+    ApplyStopped {
+        branch: String,
+        commit: String,
+        worktree: PathBuf,
+        message: String,
+    },
+
     #[error("cannot start a new cascade operation while state file exists at {path}")]
     ActiveOperation { path: PathBuf },
 

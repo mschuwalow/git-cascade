@@ -1,11 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
+use std::fs;
 
 use crate::encoding::encode_component;
 use crate::git::Git;
 use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
-use crate::storage::Storage;
+use crate::state::{ApplyStateInput, StateLock, initial_apply_state};
+use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
@@ -15,10 +17,27 @@ pub struct DryRunOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct ApplyOptions {
+    pub plan_name: Option<PlanName>,
+    pub new_anchor_input: String,
+    pub move_to_heads: bool,
+}
+
+#[derive(Debug, Clone)]
 enum ReplayBase {
     ResolvedCommit(String),
     RewrittenCommit { branch: String, old_commit: String },
     RewrittenTip { branch: String },
+}
+
+struct ActualReplayContext<'a> {
+    anchor: &'a Node,
+    nodes: &'a HashMap<&'a str, &'a Node>,
+    selected_bases: &'a HashMap<String, String>,
+    temp_tips: &'a HashMap<String, String>,
+    mappings: &'a BTreeMap<String, String>,
+    new_anchor: &'a str,
+    move_to_heads: bool,
 }
 
 impl ReplayBase {
@@ -143,6 +162,112 @@ pub fn dry_run(
     Ok(output)
 }
 
+pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<()> {
+    validate_plan_for_apply(git, plan)?;
+    let new_anchor = git.resolve_commit(&options.new_anchor_input)?;
+    let new_anchor_ref = git.symbolic_full_name(&options.new_anchor_input)?;
+    let ordered = topological_order(plan)?;
+    let nodes = plan
+        .nodes
+        .iter()
+        .map(|node| (node.branch.as_str(), node))
+        .collect::<HashMap<_, _>>();
+    let anchor = plan
+        .nodes
+        .iter()
+        .find(|node| node.parent.is_none())
+        .ok_or_else(|| {
+            Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
+        })?;
+
+    let mut mappings = BTreeMap::new();
+    mappings.insert(plan.source.anchor_old_tip.clone(), new_anchor.clone());
+    let state = initial_apply_state(ApplyStateInput {
+        plan_name: options.plan_name.as_ref(),
+        plan_id: &plan.plan_id,
+        new_anchor_input: &options.new_anchor_input,
+        new_anchor_resolved: &new_anchor,
+        new_anchor_input_was_ref: new_anchor_ref.is_some(),
+        move_to_heads: options.move_to_heads,
+        pending_branches: ordered.clone(),
+        mappings: mappings.clone(),
+    })?;
+    let state_lock = StateLock::create(storage, &state)?;
+
+    let worktree = storage.worktrees_dir().join(&plan.plan_id);
+    storage.ensure_worktrees_dir()?;
+    cleanup_stale_worktree(git, &worktree)?;
+
+    let worktree_git = Git::new(&worktree);
+    let mut selected_bases = HashMap::<String, String>::new();
+    let mut temp_tips = HashMap::<String, String>::new();
+    let mut temp_refs = Vec::<String>::new();
+    let mut worktree_created = false;
+
+    for (index, branch) in ordered.iter().enumerate() {
+        let node = nodes
+            .get(branch.as_str())
+            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+        let base = actual_replay_base(
+            node,
+            ActualReplayContext {
+                anchor,
+                nodes: &nodes,
+                selected_bases: &selected_bases,
+                temp_tips: &temp_tips,
+                mappings: &mappings,
+                new_anchor: &new_anchor,
+                move_to_heads: options.move_to_heads,
+            },
+        )?;
+        selected_bases.insert(node.branch.clone(), base.clone());
+        mappings.insert(node.old_base.clone(), base.clone());
+
+        if index == 0 {
+            git.worktree_add_detached(&worktree, &base)?;
+            worktree_created = true;
+        } else {
+            worktree_git.reset_hard(&base)?;
+        }
+
+        for commit in &node.commits {
+            if let Err(error) = worktree_git.cherry_pick(commit) {
+                return Err(Error::ApplyStopped {
+                    branch: node.branch.clone(),
+                    commit: commit.clone(),
+                    worktree: worktree.clone(),
+                    message: error.to_string(),
+                });
+            }
+            mappings.insert(commit.clone(), worktree_git.head_oid()?);
+        }
+
+        let rewritten_tip = worktree_git.head_oid()?;
+        let temp_ref = temp_ref(plan, &node.branch);
+        git.update_ref(&temp_ref, &rewritten_tip)?;
+        temp_tips.insert(node.branch.clone(), rewritten_tip);
+        temp_refs.push(temp_ref);
+    }
+
+    git.update_ref_transaction(&final_ref_transaction(
+        &ordered,
+        &nodes,
+        &temp_tips,
+        new_anchor_ref.as_deref(),
+        &new_anchor,
+    )?)?;
+
+    for temp_ref in &temp_refs {
+        git.delete_ref(temp_ref)?;
+    }
+    if worktree_created {
+        git.worktree_remove_force(&worktree)?;
+    }
+    state_lock.remove()?;
+
+    Ok(())
+}
+
 fn replay_base(
     node: &Node,
     anchor: &Node,
@@ -181,4 +306,105 @@ fn replay_base(
         branch: parent.branch.clone(),
         old_commit: node.old_base.clone(),
     })
+}
+
+fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<String> {
+    let parent_branch = node.parent.as_deref().ok_or_else(|| {
+        Error::InvalidPlan(format!("anchor node `{}` cannot be replayed", node.branch))
+    })?;
+    let parent = context
+        .nodes
+        .get(parent_branch)
+        .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
+
+    if parent.branch == context.anchor.branch {
+        return Ok(context.new_anchor.to_owned());
+    }
+
+    if context.move_to_heads {
+        return context
+            .temp_tips
+            .get(&parent.branch)
+            .cloned()
+            .ok_or_else(|| {
+                Error::InvalidPlan(format!("parent `{}` has no rewritten tip", parent.branch))
+            });
+    }
+
+    if node.old_base == parent.old_base {
+        return context
+            .selected_bases
+            .get(&parent.branch)
+            .cloned()
+            .ok_or_else(|| {
+                Error::InvalidPlan(format!("parent `{}` has no selected base", parent.branch))
+            });
+    }
+
+    context
+        .mappings
+        .get(&node.old_base)
+        .cloned()
+        .ok_or_else(|| {
+            Error::InvalidPlan(format!(
+                "old_base `{}` for branch `{}` was not mapped",
+                node.old_base, node.branch
+            ))
+        })
+}
+
+fn temp_ref(plan: &Plan, branch: &str) -> String {
+    format!(
+        "refs/cascade/tmp/{}/{}",
+        plan.plan_id,
+        encode_component(branch)
+    )
+}
+
+fn final_ref_transaction(
+    ordered: &[String],
+    nodes: &HashMap<&str, &Node>,
+    temp_tips: &HashMap<String, String>,
+    new_anchor_ref: Option<&str>,
+    new_anchor: &str,
+) -> Result<String> {
+    let mut transaction = String::new();
+    writeln!(transaction, "start").unwrap();
+    if let Some(new_anchor_ref) = new_anchor_ref {
+        writeln!(transaction, "verify {new_anchor_ref} {new_anchor}").unwrap();
+    }
+    for branch in ordered {
+        let node = nodes
+            .get(branch.as_str())
+            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+        let new_tip = temp_tips.get(&node.branch).ok_or_else(|| {
+            Error::InvalidPlan(format!("branch `{}` has no rewritten tip", node.branch))
+        })?;
+        writeln!(
+            transaction,
+            "update refs/heads/{} {} {}",
+            node.branch, new_tip, node.old_tip
+        )
+        .unwrap();
+    }
+    writeln!(transaction, "prepare").unwrap();
+    writeln!(transaction, "commit").unwrap();
+
+    Ok(transaction)
+}
+
+fn cleanup_stale_worktree(git: &Git, worktree: &std::path::Path) -> Result<()> {
+    if !worktree.exists() {
+        return Ok(());
+    }
+
+    let _ = git.worktree_remove_force(worktree);
+    if worktree.exists() {
+        fs::remove_dir_all(worktree).map_err(|source| Error::IoWithPath {
+            path: worktree.to_owned(),
+            source,
+        })?;
+    }
+
+    Ok(())
 }
