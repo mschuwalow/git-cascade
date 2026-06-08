@@ -115,7 +115,7 @@ Then it replays each dependent branch's saved commit range onto the rewritten eq
 
 For dependencies between non-anchor branches, the default behavior preserves the old topology exactly: if a child branch originally forked from the middle of its parent branch, the rewritten child forks from the corresponding rewritten parent commit.
 
-If the user wants the simpler behavior of moving every branch to the tip of its rewritten parent, they can pass `--move-to-heads`.
+If the user wants the simpler behavior of moving every branch to the tip of its rewritten parent, they can pass `--strategy move-to-heads`.
 
 For example:
 
@@ -157,10 +157,10 @@ git cascade apply --name permissions-stack --new-anchor my-branch
 
 The default apply mode preserves fork points between non-anchor branches.
 
-The `--move-to-heads` flag opts into a simpler strategy:
+The `--strategy move-to-heads` option selects a simpler strategy:
 
 ```bash
-git cascade apply --name permissions-stack --new-anchor my-branch --move-to-heads
+git cascade apply --name permissions-stack --new-anchor my-branch --strategy move-to-heads
 ```
 
 With this flag, every dependent branch is replayed onto the rewritten tip of its parent, even if it originally forked from an intermediate parent commit.
@@ -193,7 +193,7 @@ For a dependent branch, `old_base` must be reachable from the old tip of its dec
 
 Version 1 preserves fork points between non-anchor branches by default. If a dependent branch originally forked from an intermediate commit in another dependent branch, the apply phase replays it onto the rewritten equivalent of that intermediate commit.
 
-The `--move-to-heads` flag opts into the simpler strategy of replaying every dependent branch onto the rewritten tip of its parent.
+The `--strategy move-to-heads` option selects the simpler strategy of replaying every dependent branch onto the rewritten tip of its parent.
 
 ### Commits
 
@@ -262,7 +262,7 @@ Creating a plan:
 - Refuses to overwrite an existing plan unless `--replace` is passed.
 - Refuses to run while `state.yaml` exists.
 - Stores a stable `plan_id` inside the plan.
-- Does not store apply-time behavior such as `--move-to-heads`.
+- Does not store apply-time behavior such as `--strategy move-to-heads`.
 
 Useful plan management commands:
 
@@ -325,7 +325,7 @@ new_anchor:
   input_was_ref: true
 
 strategy:
-  move_to_heads: false
+  strategy: preserve-fork-points
 
 current:
   branch: agent-permissions-9
@@ -477,7 +477,7 @@ There is no implicit use of `refs/heads/<anchor-branch>`. If the manually rebase
 git cascade apply --name <plan-name> --new-anchor <ref-or-commit>
 ```
 
-Apply-time behavior is selected by flags, not by defaults stored in the plan. Without `--move-to-heads`, apply preserves fork points between non-anchor branches. With `--move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.
+Apply-time behavior is selected by flags, not by defaults stored in the plan. With the default `--strategy preserve-fork-points`, apply preserves fork points between non-anchor branches. With `--strategy move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.
 
 For path-based plans, use:
 
@@ -511,12 +511,12 @@ Replay base rules for the default apply mode:
 - If the child's `old_base` equals the parent's `old_base`, the child is replayed onto the parent's selected apply-time base.
 - If the child's `old_base` is one of the parent's saved commits, the child is replayed onto the rewritten commit produced from that old commit.
 
-Replay base rules for `--move-to-heads`:
+Replay base rules for `--strategy move-to-heads`:
 
 - A direct child of the anchor is replayed onto the replacement anchor tip.
 - A child of another dependent branch is replayed onto `refs/cascade/tmp/<plan-id>/<parent-branch>`.
 
-The `--move-to-heads` strategy ignores the dependent branch's original offset within the parent during apply. The original `old_base` is still required for planning and validation because it defines which commits belong to the dependent branch.
+The `move-to-heads` strategy ignores the dependent branch's original offset within the parent during apply. The original `old_base` is still required for planning and validation because it defines which commits belong to the dependent branch.
 
 Example:
 
@@ -532,7 +532,7 @@ new dependent:          D'--E'
 
 In this example, the dependent branch originally forked from `B`, so default apply replays it onto `B'`.
 
-With `--move-to-heads`, the same branch is replayed onto `C'` instead:
+With `--strategy move-to-heads`, the same branch is replayed onto `C'` instead:
 
 ```text
 new parent:        A'--B'--C'
@@ -576,7 +576,7 @@ new dependent:          D'--E'
 
 For a non-anchor parent, default apply must fail before replaying the child if the child's `old_base` cannot be mapped to a rewritten commit. That indicates the plan did not capture enough information to preserve topology exactly.
 
-When `--move-to-heads` is used, descendants do not need old fork-point mappings. They always use the rewritten tip of their parent.
+When `--strategy move-to-heads` is used, descendants do not need old fork-point mappings. They always use the rewritten tip of their parent.
 
 Temporary refs use this namespace:
 
@@ -622,7 +622,7 @@ Before replay:
 - The plan version is supported.
 - `plan_id` is present and safe for use in a ref namespace.
 - `--new-anchor` is present and resolves to a commit.
-- The selected apply strategy is either the default fork-point-preserving mode or `--move-to-heads`.
+- The selected apply strategy is either `preserve-fork-points` or `move-to-heads`.
 - All `old_base`, `old_tip`, and `commits` objects exist locally.
 - The dependency graph is acyclic.
 - Every dependency references known nodes.
@@ -757,7 +757,7 @@ Manual resolution policy:
 
 - The user's conflict resolution becomes part of the rewritten commit for that dependent branch.
 - The rewritten commit will have a new object ID.
-- Descendant branches replay according to the selected apply strategy: default mode uses the mapped rewritten fork point, while `--move-to-heads` uses the rewritten parent tip.
+- Descendant branches replay according to the selected apply strategy: `preserve-fork-points` uses the mapped rewritten fork point, while `move-to-heads` uses the rewritten parent tip.
 - The plan file itself is not modified by conflict resolution.
 
 Non-interactive mode:
@@ -782,7 +782,7 @@ The old `resume` wording can exist as an alias, but the primary user-facing comm
 - Saved old commits are treated as immutable inputs.
 - Branch names identify refs to validate and update, not history to infer from.
 - Default apply preserves dependent branch fork points between non-anchor branches.
-- `--move-to-heads` may move dependent branches from intermediate old parent commits to rewritten parent tips.
+- `move-to-heads` may move dependent branches from intermediate old parent commits to rewritten parent tips.
 - Version 1 supports linear branch ranges only.
 
 ## Implementation Language

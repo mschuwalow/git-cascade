@@ -3,16 +3,17 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::git::Git;
-use crate::state::{ApplyState, read_state, remove_state, require_state, write_state_atomic};
+use crate::state::{ApplyState, StateFile};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
 pub fn status(git: &Git, storage: &Storage) -> Result<String> {
-    let Some(state) = read_state(storage)? else {
+    let Some(mut state_file) = StateFile::open(storage)? else {
         return Ok("No active cascade operation.\n".to_owned());
     };
+    let state = state_file.read_state()?;
     if state.phase == "deleting" {
-        cleanup_state_artifacts(git, storage, &state)?;
+        cleanup_state_artifacts(git, storage, state_file, &state)?;
         return Ok("No active cascade operation.\n".to_owned());
     }
 
@@ -28,14 +29,7 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
         "new-anchor: {} -> {}\n",
         state.new_anchor.input, state.new_anchor.resolved
     ));
-    output.push_str(&format!(
-        "strategy: {}\n",
-        if state.strategy.move_to_heads {
-            "move-to-heads"
-        } else {
-            "preserve-fork-points"
-        }
-    ));
+    output.push_str(&format!("strategy: {}\n", state.strategy.as_str()));
     if let Some(current) = &state.current {
         output.push_str(&format!("current-branch: {}\n", current.branch));
         output.push_str(&format!("current-commit: {}\n", current.commit));
@@ -57,7 +51,12 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
 }
 
 pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
-    let mut state = require_state(storage)?;
+    let Some(mut state_file) = StateFile::open(storage)? else {
+        return Err(Error::InvalidInvocation(
+            "no active cascade operation".to_owned(),
+        ));
+    };
+    let mut state = state_file.read_state()?;
     if state.operation != "apply" {
         return Err(Error::InvalidInvocation(format!(
             "cannot abort unsupported operation `{}`",
@@ -67,23 +66,29 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
 
     if state.phase != "deleting" {
         state.phase = "deleting".to_owned();
-        write_state_atomic(storage, &mut state)?;
+        state_file.write_state(&mut state)?;
     }
 
-    cleanup_state_artifacts(git, storage, &state)
+    cleanup_state_artifacts(git, storage, state_file, &state)
 }
 
 pub fn mark_deleting_and_cleanup(
     git: &Git,
     storage: &Storage,
+    mut state_file: StateFile,
     state: &mut ApplyState,
 ) -> Result<()> {
     state.phase = "deleting".to_owned();
-    write_state_atomic(storage, state)?;
-    cleanup_state_artifacts(git, storage, state)
+    state_file.write_state(state)?;
+    cleanup_state_artifacts(git, storage, state_file, state)
 }
 
-pub fn cleanup_state_artifacts(git: &Git, storage: &Storage, state: &ApplyState) -> Result<()> {
+pub fn cleanup_state_artifacts(
+    git: &Git,
+    storage: &Storage,
+    state_file: StateFile,
+    state: &ApplyState,
+) -> Result<()> {
     if state.operation != "apply" {
         return Err(Error::InvalidInvocation(format!(
             "cannot clean up unsupported operation `{}`",
@@ -111,7 +116,7 @@ pub fn cleanup_state_artifacts(git: &Git, storage: &Storage, state: &ApplyState)
         })?;
     }
 
-    match remove_state(storage) {
+    match state_file.remove_if_exists() {
         Ok(()) => Ok(()),
         Err(Error::IoWithPath { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
             Ok(())

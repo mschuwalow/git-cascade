@@ -103,7 +103,8 @@ fn apply_dry_run_move_to_heads_changes_dependent_base_descriptions() {
             "stack",
             "--new-anchor",
             "pr-1",
-            "--move-to-heads",
+            "--strategy",
+            "move-to-heads",
             "--dry-run",
         ])
         .assert()

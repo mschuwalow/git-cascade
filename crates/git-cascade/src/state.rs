@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 
+use clap::ValueEnum;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -21,7 +23,7 @@ pub struct ApplyState {
     pub updated_at: String,
     pub pid: u32,
     pub new_anchor: NewAnchorState,
-    pub strategy: StrategyState,
+    pub strategy: Strategy,
     pub current: Option<CurrentState>,
     pub worktree: String,
     pub completed: CompletedState,
@@ -36,9 +38,27 @@ pub struct NewAnchorState {
     pub input_was_ref: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StrategyState {
-    pub move_to_heads: bool,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum Strategy {
+    PreserveForkPoints,
+    MoveToHeads,
+}
+
+impl Strategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PreserveForkPoints => "preserve-fork-points",
+            Self::MoveToHeads => "move-to-heads",
+        }
+    }
+}
+
+impl std::fmt::Display for Strategy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,16 +78,17 @@ pub struct PendingState {
     pub branches: Vec<String>,
 }
 
-pub struct StateLock {
+pub struct StateFile {
     path: PathBuf,
+    file: File,
 }
 
-impl StateLock {
+impl StateFile {
     pub fn create(storage: &Storage, state: &ApplyState) -> Result<Self> {
         storage.ensure_cascade_dir()?;
         let path = storage.state_path();
-        let yaml = serde_yaml::to_string(state)?;
-        let mut file = fs::OpenOptions::new()
+        let file = fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .open(&path)
@@ -81,16 +102,62 @@ impl StateLock {
                     }
                 }
             })?;
-        file.write_all(yaml.as_bytes())?;
+        file.lock_exclusive()?;
 
-        Ok(Self { path })
+        let mut state_file = Self { path, file };
+        state_file.write_state_without_touching_timestamp(state)?;
+        Ok(state_file)
+    }
+
+    pub fn open(storage: &Storage) -> Result<Option<Self>> {
+        let path = storage.state_path();
+        let file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
+            Ok(file) => file,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(Error::IoWithPath { path, source }),
+        };
+        file.lock_exclusive()?;
+
+        Ok(Some(Self { path, file }))
+    }
+
+    pub fn read_state(&mut self) -> Result<ApplyState> {
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut content = String::new();
+        self.file.read_to_string(&mut content)?;
+        Ok(serde_yaml::from_str(&content)?)
+    }
+
+    pub fn write_state(&mut self, state: &mut ApplyState) -> Result<()> {
+        state.updated_at = timestamp()?;
+        self.write_state_without_touching_timestamp(state)
     }
 
     pub fn remove(self) -> Result<()> {
         fs::remove_file(&self.path).map_err(|source| Error::IoWithPath {
-            path: self.path,
+            path: self.path.clone(),
             source,
         })
+    }
+
+    pub fn remove_if_exists(self) -> Result<()> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(Error::IoWithPath {
+                path: self.path.clone(),
+                source,
+            }),
+        }
+    }
+
+    fn write_state_without_touching_timestamp(&mut self, state: &ApplyState) -> Result<()> {
+        let yaml = serde_yaml::to_string(state)?;
+        self.file.set_len(0)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(yaml.as_bytes())?;
+        self.file.sync_data()?;
+        Ok(())
     }
 }
 
@@ -110,28 +177,6 @@ pub fn require_state(storage: &Storage) -> Result<ApplyState> {
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))
 }
 
-pub fn write_state_atomic(storage: &Storage, state: &mut ApplyState) -> Result<()> {
-    state.updated_at = timestamp()?;
-    storage.ensure_cascade_dir()?;
-    let path = storage.state_path();
-    let temp_path = state_temp_path(&path);
-    let yaml = serde_yaml::to_string(state)?;
-
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map_err(|source| Error::IoWithPath {
-                path: temp_path.clone(),
-                source,
-            })?;
-        file.write_all(yaml.as_bytes())?;
-    }
-
-    fs::rename(&temp_path, &path).map_err(|source| Error::IoWithPath { path, source })
-}
-
 pub fn remove_state(storage: &Storage) -> Result<()> {
     let path = storage.state_path();
     fs::remove_file(&path).map_err(|source| Error::IoWithPath { path, source })
@@ -143,7 +188,7 @@ pub struct ApplyStateInput<'a> {
     pub new_anchor_input: &'a str,
     pub new_anchor_resolved: &'a str,
     pub new_anchor_input_was_ref: bool,
-    pub move_to_heads: bool,
+    pub strategy: Strategy,
     pub pending_branches: Vec<String>,
     pub mappings: BTreeMap<String, String>,
     pub worktree: String,
@@ -166,9 +211,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
             resolved: input.new_anchor_resolved.to_owned(),
             input_was_ref: input.new_anchor_input_was_ref,
         },
-        strategy: StrategyState {
-            move_to_heads: input.move_to_heads,
-        },
+        strategy: input.strategy,
         current: None,
         worktree: input.worktree,
         completed: CompletedState::default(),
@@ -183,8 +226,4 @@ fn timestamp() -> Result<String> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|error| Error::Unsupported(format!("failed to format state timestamp: {error}")))
-}
-
-fn state_temp_path(path: &Path) -> PathBuf {
-    path.with_extension(format!("yaml.tmp-{}", std::process::id()))
 }

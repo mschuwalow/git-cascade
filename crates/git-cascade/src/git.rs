@@ -103,10 +103,31 @@ impl Git {
     }
 
     pub fn symbolic_full_name(&self, rev: &str) -> Result<Option<String>> {
-        Ok(self
-            .try_output(["rev-parse", "--symbolic-full-name", rev])?
+        if let Some(refname) = self
+            .try_output(["rev-parse", "--symbolic-full-name", "--verify", rev])?
             .map(|output| output.trim().to_owned())
-            .filter(|output| output.starts_with("refs/")))
+            .filter(|output| output.starts_with("refs/"))
+        {
+            return Ok(Some(refname));
+        }
+
+        let local_branch = format!("refs/heads/{rev}");
+        if self
+            .try_rev_parse(&format!("{local_branch}^{{commit}}"))?
+            .is_some()
+        {
+            return Ok(Some(local_branch));
+        }
+
+        let remote_branch = format!("refs/remotes/{rev}");
+        if self
+            .try_rev_parse(&format!("{remote_branch}^{{commit}}"))?
+            .is_some()
+        {
+            return Ok(Some(remote_branch));
+        }
+
+        Ok(None)
     }
 
     pub fn try_rev_parse(&self, rev: &str) -> Result<Option<String>> {

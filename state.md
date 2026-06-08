@@ -17,9 +17,11 @@ Implemented so far:
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
 - `git cascade apply --name <name> --new-anchor <ref> --dry-run` command preview.
-- `apply --dry-run --move-to-heads` base preview.
+- `apply --dry-run --strategy move-to-heads` base preview.
 - Mutating `git cascade apply --name <name> --new-anchor <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
+- Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
+- Apply strategy is stored as an enum value (`preserve-fork-points` or `move-to-heads`) in state.
 - Plan IDs are UUIDs.
 - Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
@@ -76,12 +78,12 @@ Current tests include:
 - Real-Git integration tests for tampered plan rejection.
 - Real-Git integration tests for apply-mode validation rejecting moved dependent branches.
 - Real-Git integration tests for `apply --dry-run` command output.
-- Real-Git integration tests for `apply --dry-run --move-to-heads` base descriptions.
+- Real-Git integration tests for `apply --dry-run --strategy move-to-heads` base descriptions.
 - Real-Git integration tests proving dry-run leaves refs/state/temp refs unchanged.
 - Real-Git integration tests proving dry-run refuses moved dependent branches.
 - Real-Git integration tests for mutating apply on a clean linear stack.
 - Real-Git integration tests for mutating apply preserving intermediate fork points.
-- Real-Git integration tests for mutating apply with `--move-to-heads`.
+- Real-Git integration tests for mutating apply with `--strategy move-to-heads`.
 - Real-Git integration tests for mutating apply refusing an existing state file.
 - Real-Git integration tests for mutating apply refusing moved dependent branches.
 - Real-Git integration tests for conflict safety: permanent refs unchanged and state retained.

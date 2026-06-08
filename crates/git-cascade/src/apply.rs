@@ -8,8 +8,7 @@ use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
 use crate::recovery;
 use crate::state::{
-    ApplyState, ApplyStateInput, CurrentState, StateLock, initial_apply_state, read_state,
-    write_state_atomic,
+    ApplyState, ApplyStateInput, CurrentState, StateFile, Strategy, initial_apply_state,
 };
 use crate::storage::{PlanName, Storage};
 use crate::test_hooks;
@@ -18,14 +17,14 @@ use crate::{Error, Result};
 #[derive(Debug, Clone)]
 pub struct DryRunOptions {
     pub new_anchor_input: String,
-    pub move_to_heads: bool,
+    pub strategy: Strategy,
 }
 
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
     pub plan_name: PlanName,
     pub new_anchor_input: String,
-    pub move_to_heads: bool,
+    pub strategy: Strategy,
 }
 
 #[derive(Debug, Clone)]
@@ -42,7 +41,7 @@ struct ActualReplayContext<'a> {
     temp_tips: &'a HashMap<String, String>,
     mappings: &'a BTreeMap<String, String>,
     new_anchor: &'a str,
-    move_to_heads: bool,
+    strategy: Strategy,
 }
 
 impl ReplayBase {
@@ -82,11 +81,7 @@ pub fn dry_run(
     let mut selected_bases = HashMap::<String, ReplayBase>::new();
     let mut output = String::new();
     let worktree = storage.worktrees_dir().join(&plan.plan_id);
-    let strategy = if options.move_to_heads {
-        "move-to-heads"
-    } else {
-        "preserve-fork-points"
-    };
+    let strategy = options.strategy.as_str();
 
     writeln!(output, "# git-cascade apply --dry-run").unwrap();
     writeln!(
@@ -109,7 +104,7 @@ pub fn dry_run(
             &nodes,
             &selected_bases,
             &new_anchor,
-            options.move_to_heads,
+            options.strategy,
         )?;
         selected_bases.insert(node.branch.clone(), base.clone());
 
@@ -194,12 +189,12 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         new_anchor_input: &options.new_anchor_input,
         new_anchor_resolved: &new_anchor,
         new_anchor_input_was_ref: new_anchor_ref.is_some(),
-        move_to_heads: options.move_to_heads,
+        strategy: options.strategy,
         pending_branches: ordered.clone(),
         mappings: mappings.clone(),
         worktree: worktree.display().to_string(),
     })?;
-    let state_lock = StateLock::create(storage, &state)?;
+    let mut state_file = StateFile::create(storage, &state)?;
 
     storage.ensure_worktrees_dir()?;
     cleanup_stale_worktree(git, &worktree)?;
@@ -223,14 +218,14 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
                 temp_tips: &temp_tips,
                 mappings: &mappings,
                 new_anchor: &new_anchor,
-                move_to_heads: options.move_to_heads,
+                strategy: options.strategy,
             },
         )?;
         selected_bases.insert(node.branch.clone(), base.clone());
         mappings.insert(node.old_base.clone(), base.clone());
         state.mappings = mappings.clone();
         state.pending.branches = ordered[index..].to_vec();
-        write_state_atomic(storage, &mut state)?;
+        state_file.write_state(&mut state)?;
 
         if index == 0 {
             git.worktree_add_detached(&worktree, &base)?;
@@ -246,11 +241,11 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
                 commit: commit.clone(),
                 worktree: worktree.display().to_string(),
             });
-            write_state_atomic(storage, &mut state)?;
+            state_file.write_state(&mut state)?;
 
             if let Err(error) = worktree_git.cherry_pick(commit) {
                 state.phase = "conflict".to_owned();
-                write_state_atomic(storage, &mut state)?;
+                state_file.write_state(&mut state)?;
                 return Err(Error::ApplyStopped {
                     branch: node.branch.clone(),
                     commit: commit.clone(),
@@ -260,7 +255,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             }
             mappings.insert(commit.clone(), worktree_git.head_oid()?);
             state.mappings = mappings.clone();
-            write_state_atomic(storage, &mut state)?;
+            state_file.write_state(&mut state)?;
         }
 
         let rewritten_tip = worktree_git.head_oid()?;
@@ -271,11 +266,11 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         state.completed.temp_refs = temp_refs.clone();
         state.current = None;
         state.pending.branches = ordered[index + 1..].to_vec();
-        write_state_atomic(storage, &mut state)?;
+        state_file.write_state(&mut state)?;
     }
 
     state.phase = "final_update".to_owned();
-    write_state_atomic(storage, &mut state)?;
+    state_file.write_state(&mut state)?;
     test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
@@ -286,19 +281,20 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     )?)?;
 
     if worktree_created || !temp_refs.is_empty() || storage.state_path().exists() {
-        recovery::mark_deleting_and_cleanup(git, storage, &mut state)?;
+        recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
     } else {
-        state_lock.remove()?;
+        state_file.remove()?;
     }
 
     Ok(())
 }
 
 pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
-    let mut state = read_state(storage)?
+    let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
+    let mut state = state_file.read_state()?;
     if state.phase == "deleting" {
-        recovery::cleanup_state_artifacts(git, storage, &state)?;
+        recovery::cleanup_state_artifacts(git, storage, state_file, &state)?;
         return Err(Error::InvalidInvocation(
             "no active cascade operation".to_owned(),
         ));
@@ -349,12 +345,13 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
         .mappings
         .insert(current.commit.clone(), worktree_git.head_oid()?);
     state.phase = "replay".to_owned();
-    write_state_atomic(storage, &mut state)?;
+    state_file.write_state(&mut state)?;
 
     continue_replay_after_resolved_commit(
         git,
         storage,
         &plan,
+        state_file,
         state,
         &current.branch,
         &current.commit,
@@ -365,6 +362,7 @@ fn continue_replay_after_resolved_commit(
     git: &Git,
     storage: &Storage,
     plan: &Plan,
+    mut state_file: StateFile,
     mut state: ApplyState,
     current_branch: &str,
     resolved_commit: &str,
@@ -420,14 +418,14 @@ fn continue_replay_after_resolved_commit(
                     temp_tips: &temp_tips,
                     mappings: &mappings,
                     new_anchor: &state.new_anchor.resolved,
-                    move_to_heads: state.strategy.move_to_heads,
+                    strategy: state.strategy,
                 },
             )?;
             selected_bases.insert(node.branch.clone(), base.clone());
             mappings.insert(node.old_base.clone(), base.clone());
             state.mappings = mappings.clone();
             state.pending.branches = ordered[index..].to_vec();
-            write_state_atomic(storage, &mut state)?;
+            state_file.write_state(&mut state)?;
             worktree_git.reset_hard(&base)?;
             0
         };
@@ -439,11 +437,11 @@ fn continue_replay_after_resolved_commit(
                 commit: commit.clone(),
                 worktree: worktree.display().to_string(),
             });
-            write_state_atomic(storage, &mut state)?;
+            state_file.write_state(&mut state)?;
 
             if let Err(error) = worktree_git.cherry_pick(commit) {
                 state.phase = "conflict".to_owned();
-                write_state_atomic(storage, &mut state)?;
+                state_file.write_state(&mut state)?;
                 return Err(Error::ApplyStopped {
                     branch: node.branch.clone(),
                     commit: commit.clone(),
@@ -453,7 +451,7 @@ fn continue_replay_after_resolved_commit(
             }
             mappings.insert(commit.clone(), worktree_git.head_oid()?);
             state.mappings = mappings.clone();
-            write_state_atomic(storage, &mut state)?;
+            state_file.write_state(&mut state)?;
         }
 
         let rewritten_tip = worktree_git.head_oid()?;
@@ -466,11 +464,11 @@ fn continue_replay_after_resolved_commit(
         state.completed.temp_refs = temp_refs.clone();
         state.current = None;
         state.pending.branches = ordered[index + 1..].to_vec();
-        write_state_atomic(storage, &mut state)?;
+        state_file.write_state(&mut state)?;
     }
 
     state.phase = "final_update".to_owned();
-    write_state_atomic(storage, &mut state)?;
+    state_file.write_state(&mut state)?;
     let new_anchor_ref = if state.new_anchor.input_was_ref {
         Some(
             git.symbolic_full_name(&state.new_anchor.input)?
@@ -493,7 +491,7 @@ fn continue_replay_after_resolved_commit(
         &state.new_anchor.resolved,
     )?)?;
 
-    recovery::mark_deleting_and_cleanup(git, storage, &mut state)?;
+    recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
 
     Ok(())
 }
@@ -504,7 +502,7 @@ fn replay_base(
     nodes: &HashMap<&str, &Node>,
     selected_bases: &HashMap<String, ReplayBase>,
     new_anchor: &str,
-    move_to_heads: bool,
+    strategy: Strategy,
 ) -> Result<ReplayBase> {
     let parent_branch = node.parent.as_deref().ok_or_else(|| {
         Error::InvalidPlan(format!("anchor node `{}` cannot be replayed", node.branch))
@@ -517,7 +515,7 @@ fn replay_base(
         return Ok(ReplayBase::ResolvedCommit(new_anchor.to_owned()));
     }
 
-    if move_to_heads {
+    if strategy == Strategy::MoveToHeads {
         return Ok(ReplayBase::RewrittenTip {
             branch: parent.branch.clone(),
         });
@@ -551,7 +549,7 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
         return Ok(context.new_anchor.to_owned());
     }
 
-    if context.move_to_heads {
+    if context.strategy == Strategy::MoveToHeads {
         return context
             .temp_tips
             .get(&parent.branch)

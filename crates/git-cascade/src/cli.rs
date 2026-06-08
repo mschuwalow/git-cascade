@@ -7,6 +7,7 @@ use crate::apply::{ApplyOptions, DryRunOptions, continue_apply, dry_run, execute
 use crate::git::Git;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
 use crate::recovery;
+use crate::state::Strategy;
 use crate::storage::{PlanName, Storage};
 
 #[derive(Debug, Parser)]
@@ -33,8 +34,8 @@ enum Command {
         name: PlanName,
         #[arg(long)]
         new_anchor: String,
-        #[arg(long)]
-        move_to_heads: bool,
+        #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
+        strategy: Strategy,
         #[arg(long)]
         dry_run: bool,
     },
@@ -75,9 +76,9 @@ where
         Command::Apply {
             name,
             new_anchor,
-            move_to_heads,
+            strategy,
             dry_run,
-        } => apply(name, &new_anchor, move_to_heads, dry_run),
+        } => apply(name, &new_anchor, strategy, dry_run),
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
         Command::Status => status(),
@@ -112,7 +113,7 @@ fn abort() -> Result<()> {
     Ok(())
 }
 
-fn apply(name: PlanName, new_anchor: &str, move_to_heads: bool, is_dry_run: bool) -> Result<()> {
+fn apply(name: PlanName, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let plan = serde_yaml::from_str(&storage.read_named_plan(&name)?)?;
@@ -126,7 +127,7 @@ fn apply(name: PlanName, new_anchor: &str, move_to_heads: bool, is_dry_run: bool
                 &plan,
                 DryRunOptions {
                     new_anchor_input: new_anchor.to_owned(),
-                    move_to_heads,
+                    strategy,
                 },
             )?
         );
@@ -138,7 +139,7 @@ fn apply(name: PlanName, new_anchor: &str, move_to_heads: bool, is_dry_run: bool
             ApplyOptions {
                 plan_name: name,
                 new_anchor_input: new_anchor.to_owned(),
-                move_to_heads,
+                strategy,
             },
         )?;
         println!("applied cascade plan");

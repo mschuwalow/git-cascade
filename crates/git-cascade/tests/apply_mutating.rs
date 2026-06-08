@@ -67,7 +67,8 @@ fn apply_move_to_heads_replays_child_on_parent_tip() {
             "stack",
             "--new-anchor",
             "pr-1",
-            "--move-to-heads",
+            "--strategy",
+            "move-to-heads",
         ])
         .assert()
         .success();
