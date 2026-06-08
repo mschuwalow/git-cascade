@@ -1,0 +1,21 @@
+[package]
+name = "git-cascade"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[features]
+default = []
+test-hooks = []
+
+[dependencies]
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
