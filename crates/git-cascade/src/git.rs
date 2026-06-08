@@ -4,6 +4,12 @@ use std::process::Command;
 
 use crate::{Error, Result};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBranch {
+    pub name: String,
+    pub tip: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Git {
     cwd: PathBuf,
@@ -45,9 +51,117 @@ impl Git {
         })
     }
 
+    pub fn try_output<I, S>(&self, args: I) -> Result<Option<String>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
+        let output = Command::new("git")
+            .current_dir(&self.cwd)
+            .args(&args)
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        String::from_utf8(output.stdout)
+            .map(Some)
+            .map_err(|_| Error::GitUtf8 {
+                args: display_args(&args),
+            })
+    }
+
     pub fn git_common_dir(&self) -> Result<PathBuf> {
         let output = self.output(["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
         Ok(PathBuf::from(output.trim()))
+    }
+
+    pub fn head_oid(&self) -> Result<String> {
+        self.rev_parse("HEAD")
+    }
+
+    pub fn rev_parse(&self, rev: &str) -> Result<String> {
+        Ok(self
+            .output(["rev-parse", "--verify", rev])?
+            .trim()
+            .to_owned())
+    }
+
+    pub fn try_rev_parse(&self, rev: &str) -> Result<Option<String>> {
+        Ok(self
+            .try_output(["rev-parse", "--verify", "--quiet", rev])?
+            .map(|output| output.trim().to_owned())
+            .filter(|output| !output.is_empty()))
+    }
+
+    pub fn local_branch_tip(&self, branch: &str) -> Result<String> {
+        self.rev_parse(&format!("refs/heads/{branch}^{{commit}}"))
+    }
+
+    pub fn local_branches(&self) -> Result<Vec<LocalBranch>> {
+        let output = self.output([
+            "for-each-ref",
+            "--format=%(refname:short)%09%(objectname)",
+            "refs/heads",
+        ])?;
+
+        let mut branches = Vec::new();
+        for line in output.lines() {
+            let Some((name, tip)) = line.split_once('\t') else {
+                continue;
+            };
+            branches.push(LocalBranch {
+                name: name.to_owned(),
+                tip: tip.to_owned(),
+            });
+        }
+        branches.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(branches)
+    }
+
+    pub fn merge_base(&self, left: &str, right: &str) -> Result<Option<String>> {
+        Ok(self
+            .try_output(["merge-base", left, right])?
+            .map(|output| output.trim().to_owned())
+            .filter(|output| !output.is_empty()))
+    }
+
+    pub fn rev_list_reverse(&self, base: &str, tip: &str) -> Result<Vec<String>> {
+        let range = format!("{base}..{tip}");
+        Ok(self
+            .output(["rev-list", "--reverse", &range])?
+            .lines()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    pub fn rev_list_merges(&self, base: &str, tip: &str) -> Result<Vec<String>> {
+        let range = format!("{base}..{tip}");
+        Ok(self
+            .output(["rev-list", "--merges", &range])?
+            .lines()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    pub fn upstream_tip(&self, branch: &str) -> Result<Option<String>> {
+        self.try_rev_parse(&format!("{branch}@{{upstream}}^{{commit}}"))
+    }
+
+    pub fn origin_default_branch_tip(&self) -> Result<Option<String>> {
+        let Some(default_ref) =
+            self.try_output(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])?
+        else {
+            return Ok(None);
+        };
+        let default_ref = default_ref.trim();
+        if default_ref.is_empty() {
+            return Ok(None);
+        }
+
+        self.try_rev_parse(&format!("{default_ref}^{{commit}}"))
     }
 
     pub fn cwd(&self) -> &Path {

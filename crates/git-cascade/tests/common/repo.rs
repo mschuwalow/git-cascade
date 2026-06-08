@@ -75,6 +75,18 @@ impl TestRepo {
         self.rev_parse("HEAD")
     }
 
+    pub fn switch(&self, branch: &str) {
+        self.git_ok(["switch", branch]);
+    }
+
+    pub fn switch_new(&self, branch: &str) {
+        self.git_ok(["switch", "-c", branch]);
+    }
+
+    pub fn switch_new_at(&self, branch: &str, start_point: &str) {
+        self.git_ok(["switch", "-c", branch, start_point]);
+    }
+
     pub fn rev_parse(&self, rev: &str) -> String {
         self.git_output(["rev-parse", rev]).trim().to_owned()
     }
@@ -83,6 +95,13 @@ impl TestRepo {
         self.git_output(["rev-parse", "--path-format=absolute", "--git-common-dir"])
             .trim()
             .into()
+    }
+
+    pub fn named_plan_path(&self, name: &str) -> std::path::PathBuf {
+        self.common_dir()
+            .join("cascade")
+            .join("plans")
+            .join(format!("{name}.yaml"))
     }
 
     fn configure_command<'a, C>(&self, command: &'a mut C) -> &'a mut C
