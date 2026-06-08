@@ -6,6 +6,7 @@ use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::Plan;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
+use crate::recovery;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 
@@ -45,6 +46,8 @@ enum Command {
         #[arg(long)]
         name: PlanName,
     },
+    Status,
+    Abort,
 }
 
 pub fn run() -> ExitCode {
@@ -80,7 +83,26 @@ where
         } => apply(name, plan.as_deref(), &new_anchor, move_to_heads, dry_run),
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
+        Command::Status => status(),
+        Command::Abort => abort(),
     }
+}
+
+fn status() -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    print!("{}", recovery::status(&storage)?);
+
+    Ok(())
+}
+
+fn abort() -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    recovery::abort(&git, &storage)?;
+    println!("aborted cascade operation");
+
+    Ok(())
 }
 
 fn apply(

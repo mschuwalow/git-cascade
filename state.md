@@ -24,6 +24,9 @@ Implemented so far:
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
 - Final dependent branch promotion through a single `git update-ref --stdin` transaction.
 - Success cleanup for state file, temporary refs, and temporary worktree.
+- Durable replay state updates during mutating apply, including current branch/commit, mappings, completed temp refs, and pending branches.
+- `git cascade status` for reporting active operation state.
+- `git cascade abort` for aborting preserved conflict state and cleaning temp refs/worktrees.
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
 - `git cascade plan <anchor-branch> --name <name>` for initial linear-stack planning.
@@ -76,6 +79,9 @@ Current tests include:
 - Real-Git integration tests for mutating apply refusing an existing state file.
 - Real-Git integration tests for mutating apply refusing moved dependent branches.
 - Real-Git integration tests for conflict safety: permanent refs unchanged and state retained.
+- Real-Git integration tests for `status` with and without active state.
+- Real-Git integration tests for `abort` cleanup after conflict.
+- Real-Git integration tests for `abort` without active state.
 
 Verified commands:
 
@@ -88,38 +94,34 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 
 ## Known Limitations
 
-- `git cascade continue`, `abort`, and `status` are not implemented yet.
+- `git cascade continue` is not implemented yet.
 - Plan generation supports linear ranges only and rejects merge commits.
 - Dependent branch discovery is first-pass and may need more edge-case coverage.
 - Remote-tracking branches are not updated; v1 should continue to target local branches only.
-- Conflict recovery is not implemented yet; apply stops with state/worktree preserved.
+- Conflict continuation is not implemented yet; apply stops with state/worktree preserved and `abort` can clean up.
 - `apply --dry-run` prints the Git operations that would run without promising conflict-free replay.
 - Release workflow will only become fully usable once the `git-cascade` package is published through normal release flow.
 
 ## Next Steps
 
-1. Implement `git cascade status` for active apply state.
-2. Implement `git cascade abort` for cleaning preserved conflict state/worktrees/temp refs.
-3. Implement `git cascade continue` for completing conflict resolutions.
-4. Persist state updates during replay instead of only writing initial state.
-5. Add crash/restart tests for continuing from preserved state.
-6. Add explicit final anchor-ref verification tests.
-7. Add tests for `--plan <path>` apply flows.
-8. Harden cleanup behavior when temp refs or worktrees already exist.
+1. Implement `git cascade continue` for completing conflict resolutions.
+2. Add crash/restart tests for continuing from preserved state.
+3. Add explicit final anchor-ref verification tests.
+4. Add tests for `--plan <path>` apply flows.
+5. Harden cleanup behavior when temp refs or worktrees already exist.
+6. Add richer status output for completed mappings/temp refs if needed.
 
 ## Recommended Immediate Next Step
 
-Implement `status`, `abort`, and `continue` around preserved apply state.
+Implement `continue` around preserved apply conflict state.
 
 Rationale:
 
 - Mutating apply now handles clean stacks and safely stops on conflict with permanent refs unchanged.
-- The next risk is recoverability: users need supported commands to inspect, abort, and continue preserved conflict state.
-- State updates during replay should become durable enough for crash/restart scenarios.
+- Users can inspect active state with `status` and clean it with `abort`.
+- The remaining recovery gap is continuing after manual conflict resolution.
 
-Suggested recovery scope:
+Suggested continue scope:
 
-- `status` should read `state.yaml` and report phase, current branch/commit, worktree, completed refs, and pending branches.
-- `abort` should abort any in-progress sequencer in the temp worktree, remove safe temp refs/worktrees, and remove `state.yaml`.
 - `continue` should validate refs/state, ensure the conflict worktree has no unmerged entries, complete the current cherry-pick, and resume replay.
 - Tests should cover conflict, status output, abort cleanup, and continue after manual resolution.

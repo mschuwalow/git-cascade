@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -93,6 +93,49 @@ impl StateLock {
     }
 }
 
+pub fn read_state(storage: &Storage) -> Result<Option<ApplyState>> {
+    let path = storage.state_path();
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(Error::IoWithPath { path, source }),
+    };
+
+    Ok(Some(serde_yaml::from_str(&content)?))
+}
+
+pub fn require_state(storage: &Storage) -> Result<ApplyState> {
+    read_state(storage)?
+        .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))
+}
+
+pub fn write_state_atomic(storage: &Storage, state: &mut ApplyState) -> Result<()> {
+    state.updated_at = timestamp()?;
+    storage.ensure_cascade_dir()?;
+    let path = storage.state_path();
+    let temp_path = state_temp_path(&path);
+    let yaml = serde_yaml::to_string(state)?;
+
+    {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|source| Error::IoWithPath {
+                path: temp_path.clone(),
+                source,
+            })?;
+        file.write_all(yaml.as_bytes())?;
+    }
+
+    fs::rename(&temp_path, &path).map_err(|source| Error::IoWithPath { path, source })
+}
+
+pub fn remove_state(storage: &Storage) -> Result<()> {
+    let path = storage.state_path();
+    fs::remove_file(&path).map_err(|source| Error::IoWithPath { path, source })
+}
+
 pub struct ApplyStateInput<'a> {
     pub plan_name: Option<&'a PlanName>,
     pub plan_id: &'a str,
@@ -105,11 +148,7 @@ pub struct ApplyStateInput<'a> {
 }
 
 pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
-    let now = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .map_err(|error| {
-            Error::Unsupported(format!("failed to format state timestamp: {error}"))
-        })?;
+    let now = timestamp()?;
 
     Ok(ApplyState {
         version: 1,
@@ -135,4 +174,14 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
             branches: input.pending_branches,
         },
     })
+}
+
+fn timestamp() -> Result<String> {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| Error::Unsupported(format!("failed to format state timestamp: {error}")))
+}
+
+fn state_temp_path(path: &Path) -> PathBuf {
+    path.with_extension(format!("yaml.tmp-{}", std::process::id()))
 }

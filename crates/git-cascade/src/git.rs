@@ -223,12 +223,24 @@ impl Git {
         self.run(["cherry-pick", commit])
     }
 
+    pub fn try_cherry_pick_abort(&self) -> Result<()> {
+        self.try_output(["cherry-pick", "--abort"]).map(|_| ())
+    }
+
     pub fn update_ref(&self, refname: &str, new_value: &str) -> Result<()> {
         self.run(["update-ref", refname, new_value])
     }
 
     pub fn delete_ref(&self, refname: &str) -> Result<()> {
         self.run(["update-ref", "-d", refname])
+    }
+
+    pub fn refs_under(&self, namespace: &str) -> Result<Vec<String>> {
+        Ok(self
+            .output(["for-each-ref", "--format=%(refname)", namespace])?
+            .lines()
+            .map(str::to_owned)
+            .collect())
     }
 
     pub fn update_ref_transaction(&self, commands: &str) -> Result<()> {

@@ -6,7 +6,9 @@ use crate::encoding::encode_component;
 use crate::git::Git;
 use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
-use crate::state::{ApplyStateInput, StateLock, initial_apply_state};
+use crate::state::{
+    ApplyStateInput, CurrentState, StateLock, initial_apply_state, write_state_atomic,
+};
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 
@@ -182,7 +184,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
 
     let mut mappings = BTreeMap::new();
     mappings.insert(plan.source.anchor_old_tip.clone(), new_anchor.clone());
-    let state = initial_apply_state(ApplyStateInput {
+    let mut state = initial_apply_state(ApplyStateInput {
         plan_name: options.plan_name.as_ref(),
         plan_id: &plan.plan_id,
         new_anchor_input: &options.new_anchor_input,
@@ -222,6 +224,9 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         )?;
         selected_bases.insert(node.branch.clone(), base.clone());
         mappings.insert(node.old_base.clone(), base.clone());
+        state.mappings = mappings.clone();
+        state.pending.branches = ordered[index..].to_vec();
+        write_state_atomic(storage, &mut state)?;
 
         if index == 0 {
             git.worktree_add_detached(&worktree, &base)?;
@@ -231,7 +236,17 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         }
 
         for commit in &node.commits {
+            state.phase = "replay".to_owned();
+            state.current = Some(CurrentState {
+                branch: node.branch.clone(),
+                commit: commit.clone(),
+                worktree: worktree.display().to_string(),
+            });
+            write_state_atomic(storage, &mut state)?;
+
             if let Err(error) = worktree_git.cherry_pick(commit) {
+                state.phase = "conflict".to_owned();
+                write_state_atomic(storage, &mut state)?;
                 return Err(Error::ApplyStopped {
                     branch: node.branch.clone(),
                     commit: commit.clone(),
@@ -240,6 +255,8 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
                 });
             }
             mappings.insert(commit.clone(), worktree_git.head_oid()?);
+            state.mappings = mappings.clone();
+            write_state_atomic(storage, &mut state)?;
         }
 
         let rewritten_tip = worktree_git.head_oid()?;
@@ -247,8 +264,14 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         git.update_ref(&temp_ref, &rewritten_tip)?;
         temp_tips.insert(node.branch.clone(), rewritten_tip);
         temp_refs.push(temp_ref);
+        state.completed.temp_refs = temp_refs.clone();
+        state.current = None;
+        state.pending.branches = ordered[index + 1..].to_vec();
+        write_state_atomic(storage, &mut state)?;
     }
 
+    state.phase = "final_update".to_owned();
+    write_state_atomic(storage, &mut state)?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
         &nodes,
