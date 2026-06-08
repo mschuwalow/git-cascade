@@ -34,6 +34,7 @@ fn apply_help_mentions_strategy_and_dry_run() {
                 .and(predicate::str::contains("move-to-planned-tips"))
                 .and(predicate::str::contains("move-to-current-tips"))
                 .and(predicate::str::contains("--dry-run"))
+                .and(predicate::str::contains("--in-place"))
                 .and(predicate::str::contains("--new-tip"))
                 .and(predicate::str::contains("<NAME>"))
                 .and(predicate::str::contains(

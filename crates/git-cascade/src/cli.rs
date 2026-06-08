@@ -52,6 +52,9 @@ enum Command {
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
+        /// Replay in the current worktree instead of a temporary worktree.
+        #[arg(long)]
+        in_place: bool,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -104,7 +107,8 @@ where
             new_tip,
             strategy,
             dry_run,
-        } => apply(name, &new_tip, strategy, dry_run),
+            in_place,
+        } => apply(name, &new_tip, strategy, dry_run, in_place),
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
         Command::Status => status(),
@@ -147,7 +151,13 @@ fn abort() -> Result<()> {
     Ok(())
 }
 
-fn apply(name: PlanName, new_tip: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
+fn apply(
+    name: PlanName,
+    new_tip: &str,
+    strategy: Strategy,
+    is_dry_run: bool,
+    in_place: bool,
+) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let plan = serde_yaml::from_str(&storage.read_plan(&name)?)?;
@@ -162,6 +172,7 @@ fn apply(name: PlanName, new_tip: &str, strategy: Strategy, is_dry_run: bool) ->
                 DryRunOptions {
                     new_tip_input: new_tip.to_owned(),
                     strategy,
+                    in_place,
                 },
             )?
         );
@@ -174,6 +185,7 @@ fn apply(name: PlanName, new_tip: &str, strategy: Strategy, is_dry_run: bool) ->
                 plan_name: name,
                 new_tip_input: new_tip.to_owned(),
                 strategy,
+                in_place,
             },
         )?;
         println!("applied cascade plan");

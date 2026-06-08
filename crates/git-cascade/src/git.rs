@@ -11,6 +11,12 @@ pub struct LocalBranch {
     pub tip: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Git {
     cwd: PathBuf,
@@ -84,6 +90,11 @@ impl Git {
 
     pub fn git_common_dir(&self) -> Result<PathBuf> {
         let output = self.output(["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+        Ok(PathBuf::from(output.trim()))
+    }
+
+    pub fn worktree_root(&self) -> Result<PathBuf> {
+        let output = self.output(["rev-parse", "--path-format=absolute", "--show-toplevel"])?;
         Ok(PathBuf::from(output.trim()))
     }
 
@@ -163,16 +174,90 @@ impl Git {
     }
 
     pub fn checked_out_branches(&self) -> Result<Vec<String>> {
+        let mut branches = self
+            .worktrees()?
+            .into_iter()
+            .filter_map(|worktree| worktree.branch)
+            .collect::<Vec<_>>();
+        branches.sort();
+        branches.dedup();
+        Ok(branches)
+    }
+
+    pub fn worktrees(&self) -> Result<Vec<WorktreeEntry>> {
         let output = self.output(["worktree", "list", "--porcelain"])?;
-        let mut branches = Vec::new();
+        let mut worktrees = Vec::new();
+        let mut path = None;
+        let mut branch = None;
+
         for line in output.lines() {
+            if line.is_empty() {
+                if let Some(path) = path.take() {
+                    worktrees.push(WorktreeEntry {
+                        path,
+                        branch: branch.take(),
+                    });
+                }
+                continue;
+            }
+
+            if let Some(value) = line.strip_prefix("worktree ") {
+                if let Some(path) = path.replace(PathBuf::from(value)) {
+                    worktrees.push(WorktreeEntry {
+                        path,
+                        branch: branch.take(),
+                    });
+                }
+                continue;
+            }
+
             let Some(refname) = line.strip_prefix("branch ") else {
                 continue;
             };
-            let Some(branch) = refname.strip_prefix("refs/heads/") else {
+            let Some(name) = refname.strip_prefix("refs/heads/") else {
                 continue;
             };
-            branches.push(branch.to_owned());
+            branch = Some(name.to_owned());
+        }
+
+        if let Some(path) = path {
+            worktrees.push(WorktreeEntry { path, branch });
+        }
+
+        Ok(worktrees)
+    }
+
+    pub fn current_branch(&self) -> Result<Option<String>> {
+        Ok(self
+            .try_output(["symbolic-ref", "--quiet", "--short", "HEAD"])?
+            .map(|output| output.trim().to_owned())
+            .filter(|output| !output.is_empty()))
+    }
+
+    pub fn ensure_clean_worktree(&self) -> Result<()> {
+        let status = self.output(["status", "--porcelain"])?;
+        if status.is_empty() {
+            return Ok(());
+        }
+
+        Err(Error::InvalidInvocation(
+            "cannot apply in-place with a dirty worktree; commit, stash, or discard local changes first".to_owned(),
+        ))
+    }
+
+    pub fn checked_out_branches_except(&self, excluded_path: &Path) -> Result<Vec<String>> {
+        let excluded_path = std::fs::canonicalize(excluded_path)?;
+        let mut branches = Vec::new();
+        for worktree in self.worktrees()? {
+            let Ok(path) = std::fs::canonicalize(&worktree.path) else {
+                continue;
+            };
+            if path == excluded_path {
+                continue;
+            };
+            if let Some(branch) = worktree.branch {
+                branches.push(branch);
+            }
         }
         branches.sort();
         branches.dedup();
@@ -261,6 +346,14 @@ impl Git {
 
     pub fn reset_hard(&self, commit: &str) -> Result<()> {
         self.run(["reset", "--hard", commit])
+    }
+
+    pub fn switch_detached(&self, commit: &str) -> Result<()> {
+        self.run(["switch", "--detach", commit])
+    }
+
+    pub fn switch_branch(&self, branch: &str) -> Result<()> {
+        self.run(["switch", branch])
     }
 
     pub fn cherry_pick(&self, commit: &str) -> Result<()> {

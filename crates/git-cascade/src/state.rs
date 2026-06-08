@@ -24,7 +24,7 @@ pub struct ApplyState {
     pub new_tip: NewTipState,
     pub strategy: Strategy,
     pub current: Option<CurrentState>,
-    pub worktree: String,
+    pub worktree: WorktreeState,
     pub completed: CompletedState,
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<String>>,
@@ -98,6 +98,49 @@ pub struct CurrentState {
     pub branch: String,
     pub commit: String,
     pub worktree: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub enum WorktreeState {
+    Temporary { path: String },
+    InPlace { path: String, restore: RestoreState },
+}
+
+impl WorktreeState {
+    pub fn mode(&self) -> &'static str {
+        match self {
+            Self::Temporary { .. } => "temporary",
+            Self::InPlace { .. } => "in-place",
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Temporary { path } | Self::InPlace { path, .. } => path,
+        }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, Self::Temporary { .. })
+    }
+
+    pub fn is_in_place(&self) -> bool {
+        matches!(self, Self::InPlace { .. })
+    }
+}
+
+impl std::fmt::Display for WorktreeState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.mode())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum RestoreState {
+    Branch { name: String, head: String },
+    Detached { head: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -225,7 +268,7 @@ pub struct ApplyStateInput<'a> {
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<String>>,
     pub mappings: BTreeMap<String, String>,
-    pub worktree: String,
+    pub worktree: WorktreeState,
 }
 
 pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {

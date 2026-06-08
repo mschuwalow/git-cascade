@@ -21,16 +21,16 @@ Implemented so far:
 - Mutating `git cascade apply <name> --new-tip <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
-- Active apply state uses typed enum values for phase and strategy, and stores the plan name as a required `PlanName`.
+- Active apply state uses typed enum values for phase, strategy, and replay worktree mode, and stores the plan name as a required `PlanName`.
 - Plan IDs are UUIDs.
-- Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
+- Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>` by default, with opt-in `--in-place` replay in the current worktree.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
 - Final dependent branch promotion through a single `git update-ref --stdin` transaction.
 - Apply-time snapshots of current dependent branch tips and any linear commits appended after planning.
-- Success cleanup for state file, temporary refs, and temporary worktree.
+- Success cleanup for state file, temporary refs, and either temporary worktree removal or in-place checkout restoration.
 - Durable replay state updates during mutating apply, including current branch/commit, mappings, completed temp refs, and pending branches.
 - `git cascade status` for reporting active operation state.
-- `git cascade abort` for aborting preserved conflict state and cleaning temp refs/worktrees.
+- `git cascade abort` for aborting preserved conflict state, cleaning temp refs/worktrees, and restoring in-place checkouts.
 - `git cascade continue` for completing a resolved cherry-pick conflict and resuming the cascade.
 - Cleanup marks state as `phase: deleting` before deleting temp refs/worktrees/state.
 - Loading a `phase: deleting` state continues cleanup and then behaves as if no active state exists.

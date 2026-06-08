@@ -53,6 +53,14 @@ Use the simpler strategy that replays every child onto the parent's rewritten ap
 git cascade apply stack --new-tip pr-1 --strategy move-to-current-tips
 ```
 
+Replay in the current worktree instead of a temporary worktree:
+
+```sh
+git cascade apply stack --new-tip pr-1 --in-place
+```
+
+`--in-place` requires a clean worktree. If replay conflicts, the conflict is left in the current worktree and `git cascade abort` restores the checkout that was active before apply started.
+
 The default strategy is:
 
 ```sh

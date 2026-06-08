@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::git::Git;
-use crate::state::{ApplyState, Phase, StateFile};
+use crate::state::{ApplyState, Phase, RestoreState, StateFile, WorktreeState};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -27,13 +27,14 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
         state.new_tip.input, state.new_tip.resolved
     ));
     output.push_str(&format!("strategy: {}\n", state.strategy.as_str()));
+    output.push_str(&format!("worktree-mode: {}\n", state.worktree));
     if let Some(current) = &state.current {
         output.push_str(&format!("current-branch: {}\n", current.branch));
         output.push_str(&format!("current-commit: {}\n", current.commit));
     } else {
         output.push_str("current: none\n");
     }
-    output.push_str(&format!("worktree: {}\n", state.worktree));
+    output.push_str(&format!("worktree: {}\n", state.worktree.path()));
     output.push_str(&format!(
         "completed-temp-refs: {}\n",
         state.completed.temp_refs.len()
@@ -82,7 +83,11 @@ pub fn cleanup_state_artifacts(
 ) -> Result<()> {
     let worktree = worktree_path(storage, state);
     if worktree.exists() {
-        let _ = Git::new(&worktree).try_cherry_pick_abort();
+        let worktree_git = Git::new(&worktree);
+        let _ = worktree_git.try_cherry_pick_abort();
+        if let WorktreeState::InPlace { restore, .. } = &state.worktree {
+            restore_checkout(&worktree_git, restore)?;
+        }
     }
 
     let mut refs = BTreeSet::new();
@@ -92,12 +97,14 @@ pub fn cleanup_state_artifacts(
         let _ = git.delete_ref(&temp_ref);
     }
 
-    let _ = git.worktree_remove_force(&worktree);
-    if worktree.exists() {
-        fs::remove_dir_all(&worktree).map_err(|source| Error::IoWithPath {
-            path: worktree.clone(),
-            source,
-        })?;
+    if state.worktree.is_temporary() {
+        let _ = git.worktree_remove_force(&worktree);
+        if worktree.exists() {
+            fs::remove_dir_all(&worktree).map_err(|source| Error::IoWithPath {
+                path: worktree.clone(),
+                source,
+            })?;
+        }
     }
 
     match state_file.remove_if_exists() {
@@ -109,10 +116,17 @@ pub fn cleanup_state_artifacts(
     }
 }
 
+fn restore_checkout(git: &Git, restore: &RestoreState) -> Result<()> {
+    match restore {
+        RestoreState::Branch { name, .. } => git.switch_branch(name),
+        RestoreState::Detached { head } => git.switch_detached(head),
+    }
+}
+
 fn worktree_path(storage: &Storage, state: &ApplyState) -> PathBuf {
-    if state.worktree.is_empty() {
+    if state.worktree.path().is_empty() {
         storage.worktrees_dir().join(&state.plan_id)
     } else {
-        PathBuf::from(&state.worktree)
+        PathBuf::from(state.worktree.path())
     }
 }

@@ -8,7 +8,8 @@ use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
 use crate::recovery;
 use crate::state::{
-    ApplyState, ApplyStateInput, CurrentState, Phase, StateFile, Strategy, initial_apply_state,
+    ApplyState, ApplyStateInput, CurrentState, Phase, RestoreState, StateFile, Strategy,
+    WorktreeState, initial_apply_state,
 };
 use crate::storage::{PlanName, Storage};
 use crate::test_hooks;
@@ -18,6 +19,7 @@ use crate::{Error, Result};
 pub struct DryRunOptions {
     pub new_tip_input: String,
     pub strategy: Strategy,
+    pub in_place: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +27,7 @@ pub struct ApplyOptions {
     pub plan_name: PlanName,
     pub new_tip_input: String,
     pub strategy: Strategy,
+    pub in_place: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -91,12 +94,26 @@ pub fn dry_run(
         .collect::<HashMap<_, _>>();
     let mut selected_bases = HashMap::<String, ReplayBase>::new();
     let mut output = String::new();
-    let worktree = storage.worktrees_dir().join(&plan.plan_id);
+    let worktree = if options.in_place {
+        git.worktree_root()?
+    } else {
+        storage.worktrees_dir().join(&plan.plan_id)
+    };
     let strategy = options.strategy.as_str();
 
     writeln!(output, "# git-cascade apply --dry-run").unwrap();
     writeln!(output, "new-tip {} -> {}", options.new_tip_input, new_tip).unwrap();
     writeln!(output, "strategy {strategy}").unwrap();
+    writeln!(
+        output,
+        "worktree-mode {}",
+        if options.in_place {
+            "in-place"
+        } else {
+            "temporary"
+        }
+    )
+    .unwrap();
     writeln!(output, "worktree {}", worktree.display()).unwrap();
     writeln!(output, "temp-refs refs/cascade/tmp/{}", plan.plan_id).unwrap();
 
@@ -166,7 +183,27 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     let new_tip_input_was_ref = git.symbolic_full_name(&options.new_tip_input)?.is_some();
     let ordered = topological_order(plan)?;
-    ensure_target_branches_not_checked_out(git, &ordered)?;
+    let (worktree_state, worktree) = if options.in_place {
+        let worktree = git.worktree_root()?;
+        git.ensure_clean_worktree()?;
+        ensure_target_branches_not_checked_out_except(git, &ordered, &worktree)?;
+        (
+            WorktreeState::InPlace {
+                path: worktree.display().to_string(),
+                restore: restore_state(git)?,
+            },
+            worktree,
+        )
+    } else {
+        let worktree = storage.worktrees_dir().join(&plan.plan_id);
+        ensure_target_branches_not_checked_out(git, &ordered)?;
+        (
+            WorktreeState::Temporary {
+                path: worktree.display().to_string(),
+            },
+            worktree,
+        )
+    };
     let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
     let branch_tips = branch_replays
         .iter()
@@ -178,7 +215,6 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         .collect::<BTreeMap<_, _>>();
     let mut mappings = BTreeMap::new();
     mappings.insert(plan.source.old_tip.clone(), new_tip.clone());
-    let worktree = storage.worktrees_dir().join(&plan.plan_id);
     let state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
@@ -190,12 +226,14 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         branch_tips: branch_tips.clone(),
         extra_commits: extra_commits.clone(),
         mappings: mappings.clone(),
-        worktree: worktree.display().to_string(),
+        worktree: worktree_state.clone(),
     })?;
     let state_file = StateFile::create(storage, &state)?;
 
-    storage.ensure_worktrees_dir()?;
-    cleanup_stale_worktree(git, &worktree)?;
+    if worktree_state.is_temporary() {
+        storage.ensure_worktrees_dir()?;
+        cleanup_stale_worktree(git, &worktree)?;
+    }
     run_apply_state(git, storage, plan, state_file, state)
 }
 
@@ -252,6 +290,15 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     run_apply_state(git, storage, &plan, state_file, state)
 }
 
+fn restore_state(git: &Git) -> Result<RestoreState> {
+    let head = git.head_oid()?;
+    Ok(if let Some(name) = git.current_branch()? {
+        RestoreState::Branch { name, head }
+    } else {
+        RestoreState::Detached { head }
+    })
+}
+
 fn run_apply_state(
     git: &Git,
     storage: &Storage,
@@ -260,8 +307,8 @@ fn run_apply_state(
     mut state: ApplyState,
 ) -> Result<()> {
     eprintln!(
-        "Applying cascade plan `{}` with strategy `{}`",
-        state.plan_name, state.strategy
+        "Applying cascade plan `{}` with strategy `{}` in {} worktree mode",
+        state.plan_name, state.strategy, state.worktree
     );
     loop {
         match state.phase {
@@ -304,7 +351,7 @@ fn replay_pending_branches(
         .iter()
         .map(|node| (node.branch.as_str(), node))
         .collect::<HashMap<_, _>>();
-    let worktree = std::path::PathBuf::from(&state.worktree);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
     let worktree_git = Git::new(&worktree);
     let mut mappings = state.mappings.clone();
     let mut temp_refs = state.completed.temp_refs.clone();
@@ -464,7 +511,9 @@ fn prepare_branch_replay(
     progress.state.phase = Phase::Replay;
     progress.state_file.write_state(progress.state)?;
 
-    if worktree.exists() {
+    if progress.state.worktree.is_in_place() && progress.state.completed.temp_refs.is_empty() {
+        worktree_git.switch_detached(&base)?;
+    } else if worktree.exists() {
         worktree_git.reset_hard(&base)?;
     } else {
         git.worktree_add_detached(worktree, &base)?;
@@ -643,6 +692,19 @@ fn temp_ref(plan: &Plan, branch: &str) -> String {
 
 fn ensure_target_branches_not_checked_out(git: &Git, branches: &[String]) -> Result<()> {
     let checked_out = git.checked_out_branches()?;
+    ensure_branches_not_checked_out(branches, &checked_out)
+}
+
+fn ensure_target_branches_not_checked_out_except(
+    git: &Git,
+    branches: &[String],
+    excluded_path: &std::path::Path,
+) -> Result<()> {
+    let checked_out = git.checked_out_branches_except(excluded_path)?;
+    ensure_branches_not_checked_out(branches, &checked_out)
+}
+
+fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) -> Result<()> {
     let blocked = branches
         .iter()
         .filter(|branch| checked_out.contains(branch))

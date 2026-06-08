@@ -238,6 +238,54 @@ fn apply_refuses_when_target_branch_is_checked_out() {
 }
 
 #[test]
+fn apply_in_place_allows_current_target_branch_and_restores_checkout() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    rewrite_anchor(&repo);
+    let old_pr2 = repo.rev_parse("pr-2");
+    repo.switch("pr-2");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1", "--in-place"])
+        .assert()
+        .success()
+        .stdout("applied cascade plan\n")
+        .stderr(
+            predicate::str::contains("in in-place worktree mode")
+                .and(predicate::str::contains("Updating branch refs")),
+        );
+
+    assert_eq!(repo.git_output(["branch", "--show-current"]).trim(), "pr-2");
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    repo.git_ok(["merge-base", "--is-ancestor", "pr-1", "pr-2"]);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn apply_in_place_refuses_dirty_worktree() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    rewrite_anchor(&repo);
+    repo.write("dirty.txt", "dirty\n");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1", "--in-place"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("dirty worktree"));
+
+    assert_eq!(repo.git_output(["branch", "--show-current"]).trim(), "main");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
 fn apply_refuses_when_dependent_branch_moved() {
     let repo = linear_stack();
     repo.cascade()

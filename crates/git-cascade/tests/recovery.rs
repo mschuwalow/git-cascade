@@ -3,7 +3,7 @@ mod common;
 use predicates::prelude::*;
 
 use common::repo::TestRepo;
-use git_cascade::state::Phase;
+use git_cascade::state::{Phase, RestoreState, WorktreeState};
 
 #[test]
 fn status_reports_no_active_operation() {
@@ -26,7 +26,7 @@ fn status_reports_conflict_state() {
         .assert()
         .failure();
     let state = read_state(&repo);
-    let worktree = std::path::PathBuf::from(&state.worktree);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
     assert_eq!(
         worktree.parent().unwrap(),
         repo.common_dir().join("cascade/worktrees")
@@ -84,6 +84,40 @@ fn abort_cleans_conflict_state_without_moving_refs() {
 }
 
 #[test]
+fn abort_in_place_conflict_restores_original_checkout() {
+    let repo = conflicting_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1", "--in-place"])
+        .assert()
+        .failure();
+    let state = read_state(&repo);
+    assert!(matches!(
+        &state.worktree,
+        WorktreeState::InPlace {
+            restore: RestoreState::Branch { name, .. },
+            ..
+        } if name == "main"
+    ));
+    assert_eq!(std::path::Path::new(state.worktree.path()), repo.path());
+    assert_eq!(repo.git_output(["branch", "--show-current"]).trim(), "");
+    assert!(repo.path().join("conflict.txt").exists());
+
+    repo.cascade()
+        .arg("abort")
+        .assert()
+        .success()
+        .stdout("aborted cascade operation\n");
+
+    assert_eq!(repo.git_output(["branch", "--show-current"]).trim(), "main");
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(repo.git_output(["status", "--porcelain"]).is_empty());
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
 fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
     let repo = conflicting_stack();
 
@@ -92,7 +126,7 @@ fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
         .assert()
         .failure();
     let state = read_state(&repo);
-    std::fs::remove_dir_all(&state.worktree).unwrap();
+    std::fs::remove_dir_all(state.worktree.path()).unwrap();
 
     repo.cascade()
         .arg("abort")
@@ -122,7 +156,7 @@ fn status_finishes_cleanup_for_deleting_state() {
         .stdout("No active cascade operation.\n");
 
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
-    assert!(!std::path::Path::new(&state.worktree).exists());
+    assert!(!std::path::Path::new(state.worktree.path()).exists());
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
@@ -205,7 +239,7 @@ fn continue_can_stop_again_on_later_conflict() {
         .failure();
     let first_state = read_state(&repo);
     let first_conflict = first_state.current.unwrap().commit;
-    let worktree = std::path::PathBuf::from(first_state.worktree);
+    let worktree = std::path::PathBuf::from(first_state.worktree.path());
     std::fs::write(worktree.join("a.txt"), "resolved a\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "a.txt"]);
 

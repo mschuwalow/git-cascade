@@ -337,6 +337,10 @@ current:
   commit: "3333333333333333333333333333333333333333"
   worktree: "<git-common-dir>/cascade/worktrees/permissions-stack"
 
+worktree:
+  mode: temporary
+  path: "<git-common-dir>/cascade/worktrees/permissions-stack"
+
 completed:
   temp_refs:
     - refs/cascade/tmp/2026-06-08T14-00-00Z-agent-permissions/agent-permissions-8
