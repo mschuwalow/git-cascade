@@ -112,7 +112,8 @@ fn apply_dry_run_refuses_if_dependent_branch_moved() {
         .assert()
         .success();
     repo.switch("pr-2");
-    repo.commit_file("late.txt", "late\n", "late");
+    repo.git_ok(["reset", "--hard", "HEAD^"]);
+    repo.commit_file("replacement.txt", "replacement\n", "replacement");
     repo.switch("main");
 
     repo.cascade()
@@ -120,8 +121,35 @@ fn apply_dry_run_refuses_if_dependent_branch_moved() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "branch `pr-2` moved after plan generation",
+            "branch `pr-2` rewrote planned commits after plan generation",
         ));
+}
+
+#[test]
+fn apply_dry_run_includes_added_dependent_commits() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("pr-2");
+    let late_commit = repo.commit_file("late.txt", "late\n", "late");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "cherry-pick {late_commit}"
+        )));
 }
 
 #[test]

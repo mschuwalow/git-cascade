@@ -26,6 +26,7 @@ Implemented so far:
 - Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
 - Final dependent branch promotion through a single `git update-ref --stdin` transaction.
+- Apply-time snapshots of current dependent branch tips and any linear commits appended after planning.
 - Success cleanup for state file, temporary refs, and temporary worktree.
 - Durable replay state updates during mutating apply, including current branch/commit, mappings, completed temp refs, and pending branches.
 - `git cascade status` for reporting active operation state.
@@ -87,6 +88,7 @@ Current tests include:
 - Real-Git integration tests for mutating apply with `--strategy move-to-heads`.
 - Real-Git integration tests for mutating apply refusing an existing state file.
 - Real-Git integration tests for mutating apply refusing moved dependent branches.
+- Real-Git integration tests for allowing appended dependent branch commits in both apply strategies.
 - Real-Git integration tests for conflict safety: permanent refs unchanged and state retained.
 - Real-Git integration tests for `status` with and without active state.
 - Real-Git integration tests for `abort` cleanup after conflict.

@@ -76,6 +76,57 @@ fn apply_strategy_replays_child_on_parent_tip() {
 }
 
 #[test]
+fn apply_preserve_fork_points_keeps_added_dependent_commits() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("pr-2");
+    let old_late = repo.commit_file("late.txt", "late\n", "late dependent work");
+    repo.switch("main");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .success();
+
+    assert_ne!(repo.rev_parse("pr-2"), old_late);
+    assert_eq!(repo.show("pr-2:late.txt"), "late\n");
+    repo.git_ok(["merge-base", "--is-ancestor", "pr-1", "pr-2"]);
+}
+
+#[test]
+fn apply_move_to_heads_keeps_added_dependent_commits() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("pr-2");
+    let old_late = repo.commit_file("late.txt", "late\n", "late dependent work");
+    repo.switch("main");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-heads",
+        ])
+        .assert()
+        .success();
+
+    assert_ne!(repo.rev_parse("pr-2"), old_late);
+    assert_eq!(repo.show("pr-2:late.txt"), "late\n");
+    repo.git_ok(["merge-base", "--is-ancestor", "pr-1", "pr-2"]);
+}
+
+#[test]
 fn apply_refuses_when_state_exists() {
     let repo = linear_stack();
     repo.cascade()
@@ -106,7 +157,8 @@ fn apply_refuses_when_dependent_branch_moved() {
         .success();
     rewrite_anchor(&repo);
     repo.switch("pr-2");
-    repo.commit_file("late.txt", "late\n", "late");
+    repo.git_ok(["reset", "--hard", "HEAD^"]);
+    repo.commit_file("replacement.txt", "replacement\n", "replacement");
     repo.switch("main");
 
     repo.cascade()
@@ -114,7 +166,7 @@ fn apply_refuses_when_dependent_branch_moved() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "branch `pr-2` moved after plan generation",
+            "branch `pr-2` rewrote planned commits after plan generation",
         ));
 }
 

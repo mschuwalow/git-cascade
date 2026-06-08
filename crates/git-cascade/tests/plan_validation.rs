@@ -56,14 +56,32 @@ fn apply_validation_rejects_dependent_branch_that_moved_after_planning() {
     let git = Git::new(repo.path());
 
     repo.switch("pr-2");
-    repo.commit_file("late.txt", "late\n", "late pr-2 work");
+    repo.git_ok(["reset", "--hard", "HEAD^"]);
+    repo.commit_file("replacement.txt", "replacement\n", "replacement pr-2 work");
 
     validate_plan(&git, &plan).unwrap();
     let error = validate_plan_for_apply(&git, &plan)
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("branch `pr-2` moved after plan generation"));
+    assert!(error.contains("branch `pr-2` rewrote planned commits after plan generation"));
+}
+
+#[test]
+fn apply_validation_allows_added_dependent_commits() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    let plan = read_plan(&repo, "stack");
+    let git = Git::new(repo.path());
+
+    repo.switch("pr-2");
+    repo.commit_file("late.txt", "late\n", "late pr-2 work");
+
+    validate_plan(&git, &plan).unwrap();
+    validate_plan_for_apply(&git, &plan).unwrap();
 }
 
 #[test]

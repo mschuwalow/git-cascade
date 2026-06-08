@@ -117,6 +117,8 @@ git cascade completions fish
 - Version 1 updates dependent local branches only.
 - Version 1 supports linear commit ranges only and rejects merge commits.
 - Direct dependents are discovered only inside the explicit old root range `old_base..old_tip`.
+- Dependent branches may gain new linear commits after planning; apply replays those commits too.
+- Apply rejects dependent branches when the planned commit range is no longer reachable from the current branch tip.
 - Plans are keyed by explicit names and stored under the repository Git common directory.
 - Successful apply removes the stored plan for its anchor.
 - Exported or path-based plans are not supported.

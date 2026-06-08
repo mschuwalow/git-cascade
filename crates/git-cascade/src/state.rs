@@ -27,6 +27,8 @@ pub struct ApplyState {
     pub current: Option<CurrentState>,
     pub worktree: String,
     pub completed: CompletedState,
+    pub branch_tips: BTreeMap<String, String>,
+    pub extra_commits: BTreeMap<String, Vec<String>>,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
 }
@@ -238,6 +240,8 @@ pub struct ApplyStateInput<'a> {
     pub new_tip_input_was_ref: bool,
     pub strategy: Strategy,
     pub pending_branches: Vec<String>,
+    pub branch_tips: BTreeMap<String, String>,
+    pub extra_commits: BTreeMap<String, Vec<String>>,
     pub mappings: BTreeMap<String, String>,
     pub worktree: String,
 }
@@ -263,6 +267,8 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         current: None,
         worktree: input.worktree,
         completed: CompletedState::default(),
+        branch_tips: input.branch_tips,
+        extra_commits: input.extra_commits,
         mappings: input.mappings,
         pending: PendingState {
             branches: input.pending_branches,

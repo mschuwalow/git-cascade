@@ -225,10 +225,18 @@ fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<()> {
         }
 
         let actual = git.local_branch_tip(&node.branch)?;
-        if actual != node.old_tip {
+        if !git.is_ancestor(&node.old_tip, &actual)? {
             return invalid(format!(
-                "branch `{}` moved after plan generation: expected `{}`, found `{actual}`",
+                "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{actual}`",
                 node.branch, node.old_tip
+            ));
+        }
+
+        let merges = git.rev_list_merges(&node.old_tip, &actual)?;
+        if let Some(merge) = merges.first() {
+            return invalid(format!(
+                "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
+                node.branch
             ));
         }
     }

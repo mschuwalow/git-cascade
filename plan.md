@@ -113,6 +113,8 @@ Apply requires both the plan name and an explicit replacement tip. The tool reso
 
 Then it replays each dependent branch's saved commit range onto the rewritten equivalent of its original fork point.
 
+If a dependent branch gained new linear commits after planning, apply replays those appended commits after the saved range and compares the final ref update against the apply-time branch tip. If the saved planned range is no longer reachable from the dependent branch tip, apply refuses because a planned commit was rewritten or removed.
+
 For dependencies between non-anchor branches, the default behavior preserves the old topology exactly: if a child branch originally forked from the middle of its parent branch, the rewritten child forks from the corresponding rewritten parent commit.
 
 If the user wants the simpler behavior of moving every branch to the tip of its rewritten parent, they can pass `--strategy move-to-heads`.

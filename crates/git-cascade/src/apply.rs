@@ -45,6 +45,12 @@ struct ActualReplayContext<'a> {
     strategy: Strategy,
 }
 
+#[derive(Debug, Clone)]
+struct BranchReplay {
+    expected_tip: String,
+    extra_commits: Vec<String>,
+}
+
 impl ReplayBase {
     fn display(&self) -> String {
         match self {
@@ -66,6 +72,7 @@ pub fn dry_run(
     validate_plan_for_apply(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     let ordered = topological_order(plan)?;
+    let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
     let nodes = plan
         .nodes
         .iter()
@@ -124,7 +131,7 @@ pub fn dry_run(
             )
             .unwrap();
         }
-        for commit in node.commits() {
+        for commit in replay_commits(node, &branch_replays) {
             writeln!(output, "git -C {} cherry-pick {commit}", worktree.display()).unwrap();
         }
         writeln!(
@@ -147,7 +154,7 @@ pub fn dry_run(
         writeln!(
             output,
             "update refs/heads/{} <rewritten {} tip> {}",
-            node.branch, node.branch, node.old_tip
+            node.branch, node.branch, branch_replays[&node.branch].expected_tip
         )
         .unwrap();
     }
@@ -163,6 +170,15 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     let new_tip_ref = git.symbolic_full_name(&options.new_tip_input)?;
     let ordered = topological_order(plan)?;
+    let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
+    let branch_tips = branch_replays
+        .iter()
+        .map(|(branch, replay)| (branch.clone(), replay.expected_tip.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let extra_commits = branch_replays
+        .iter()
+        .map(|(branch, replay)| (branch.clone(), replay.extra_commits.clone()))
+        .collect::<BTreeMap<_, _>>();
     let nodes = plan
         .nodes
         .iter()
@@ -187,6 +203,8 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         new_tip_input_was_ref: new_tip_ref.is_some(),
         strategy: options.strategy,
         pending_branches: ordered.clone(),
+        branch_tips: branch_tips.clone(),
+        extra_commits: extra_commits.clone(),
         mappings: mappings.clone(),
         worktree: worktree.display().to_string(),
     })?;
@@ -235,7 +253,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             worktree_git.reset_hard(&base)?;
         }
 
-        for commit in node.commits() {
+        for commit in replay_commits(node, &branch_replays) {
             state.phase = Phase::Replay;
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
@@ -244,7 +262,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             });
             state_file.write_state(&mut state)?;
 
-            if let Err(error) = worktree_git.cherry_pick(commit) {
+            if let Err(error) = worktree_git.cherry_pick(&commit) {
                 state.phase = Phase::Conflict;
                 state_file.write_state(&mut state)?;
                 return Err(Error::ApplyStopped {
@@ -277,6 +295,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         &ordered,
         &nodes,
         &temp_tips,
+        &branch_tips,
         new_tip_ref.as_deref(),
         &new_tip,
     )?)?;
@@ -400,7 +419,7 @@ fn continue_replay_after_resolved_commit(
             .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
 
         let start_commit_index = if branch == current_branch {
-            node.commits()
+            replay_commits_from_extra(node, &state.extra_commits)
                 .iter()
                 .position(|commit| commit == resolved_commit)
                 .ok_or_else(|| {
@@ -436,7 +455,10 @@ fn continue_replay_after_resolved_commit(
             0
         };
 
-        for commit in node.commits().iter().skip(start_commit_index) {
+        for commit in replay_commits_from_extra(node, &state.extra_commits)
+            .iter()
+            .skip(start_commit_index)
+        {
             state.phase = Phase::Replay;
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
@@ -493,6 +515,7 @@ fn continue_replay_after_resolved_commit(
         &ordered,
         &nodes,
         &temp_tips,
+        &state.branch_tips,
         new_tip_ref.as_deref(),
         &state.new_tip.resolved,
     )?)?;
@@ -608,6 +631,67 @@ fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<String
     Ok(temp_tips)
 }
 
+fn branch_replays_for_apply(
+    git: &Git,
+    plan: &Plan,
+    ordered: &[String],
+) -> Result<BTreeMap<String, BranchReplay>> {
+    let nodes = plan
+        .nodes
+        .iter()
+        .map(|node| (node.branch.as_str(), node))
+        .collect::<HashMap<_, _>>();
+    let mut replays = BTreeMap::new();
+
+    for branch in ordered {
+        let node = nodes
+            .get(branch.as_str())
+            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+        let expected_tip = git.local_branch_tip(&node.branch)?;
+        if !git.is_ancestor(&node.old_tip, &expected_tip)? {
+            return Err(Error::InvalidPlan(format!(
+                "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{expected_tip}`",
+                node.branch, node.old_tip
+            )));
+        }
+        let extra_commits = git.rev_list_reverse(&node.old_tip, &expected_tip)?;
+        if let Some(merge) = git.rev_list_merges(&node.old_tip, &expected_tip)?.first() {
+            return Err(Error::InvalidPlan(format!(
+                "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
+                node.branch
+            )));
+        }
+        replays.insert(
+            node.branch.clone(),
+            BranchReplay {
+                expected_tip,
+                extra_commits,
+            },
+        );
+    }
+
+    Ok(replays)
+}
+
+fn replay_commits(node: &Node, branch_replays: &BTreeMap<String, BranchReplay>) -> Vec<String> {
+    let mut commits = node.commits().to_vec();
+    if let Some(replay) = branch_replays.get(&node.branch) {
+        commits.extend(replay.extra_commits.iter().cloned());
+    }
+    commits
+}
+
+fn replay_commits_from_extra(
+    node: &Node,
+    extra_commits: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut commits = node.commits().to_vec();
+    if let Some(extra) = extra_commits.get(&node.branch) {
+        commits.extend(extra.iter().cloned());
+    }
+    commits
+}
+
 fn selected_bases_from_mappings(
     plan: &Plan,
     mappings: &BTreeMap<String, String>,
@@ -626,6 +710,7 @@ fn final_ref_transaction(
     ordered: &[String],
     nodes: &HashMap<&str, &Node>,
     temp_tips: &HashMap<String, String>,
+    branch_tips: &BTreeMap<String, String>,
     new_tip_ref: Option<&str>,
     new_tip: &str,
 ) -> Result<String> {
@@ -641,10 +726,13 @@ fn final_ref_transaction(
         let new_tip = temp_tips.get(&node.branch).ok_or_else(|| {
             Error::InvalidPlan(format!("branch `{}` has no rewritten tip", node.branch))
         })?;
+        let expected_tip = branch_tips.get(&node.branch).ok_or_else(|| {
+            Error::InvalidPlan(format!("branch `{}` has no expected tip", node.branch))
+        })?;
         writeln!(
             transaction,
             "update refs/heads/{} {} {}",
-            node.branch, new_tip, node.old_tip
+            node.branch, new_tip, expected_tip
         )
         .unwrap();
     }
