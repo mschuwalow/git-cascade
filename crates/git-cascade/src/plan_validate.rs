@@ -87,9 +87,6 @@ fn validate_shape(plan: &Plan) -> Result<()> {
     if anchor.old_tip != plan.source.anchor_old_tip {
         return invalid("source anchor_old_tip does not match the anchor node");
     }
-    if anchor.old_base != plan.source.anchor_old_base {
-        return invalid("source anchor_old_base does not match the anchor node");
-    }
 
     let dependency_set = dependency_set(plan)?;
     for node in &plan.nodes {
@@ -97,7 +94,7 @@ fn validate_shape(plan: &Plan) -> Result<()> {
             return invalid("node branch names must not be empty");
         }
 
-        let Some(parent) = node.parent.as_deref() else {
+        let Some(parent) = node.parent() else {
             continue;
         };
         if !node_by_branch.contains_key(parent) {
@@ -117,7 +114,7 @@ fn validate_shape(plan: &Plan) -> Result<()> {
     for dependency in &plan.dependencies {
         validate_dependency(dependency, &node_by_branch)?;
         let child = node_by_branch[dependency.child.as_str()];
-        if child.parent.as_deref() != Some(dependency.parent.as_str()) {
+        if child.parent() != Some(dependency.parent.as_str()) {
             return invalid(format!(
                 "dependency edge `{} -> {}` does not match child parent field",
                 dependency.parent, dependency.child
@@ -133,13 +130,14 @@ fn validate_shape(plan: &Plan) -> Result<()> {
 
 fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
     let mut commits = HashSet::<&str>::new();
-    commits.insert(plan.source.anchor_old_base.as_str());
     commits.insert(plan.source.anchor_old_tip.as_str());
 
     for node in &plan.nodes {
-        commits.insert(node.old_base.as_str());
         commits.insert(node.old_tip.as_str());
-        for commit in &node.commits {
+        if let Some(old_base) = node.old_base() {
+            commits.insert(old_base);
+        }
+        for commit in node.commits() {
             commits.insert(commit.as_str());
         }
     }
@@ -155,15 +153,18 @@ fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
 
 fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
-        let commits = git.rev_list_reverse(&node.old_base, &node.old_tip)?;
-        if commits != node.commits {
+        let Some(old_base) = node.old_base() else {
+            continue;
+        };
+        let commits = git.rev_list_reverse(old_base, &node.old_tip)?;
+        if commits != node.commits() {
             return invalid(format!(
                 "commit list for branch `{}` does not match {}..{}",
-                node.branch, node.old_base, node.old_tip
+                node.branch, old_base, node.old_tip
             ));
         }
 
-        let merges = git.rev_list_merges(&node.old_base, &node.old_tip)?;
+        let merges = git.rev_list_merges(old_base, &node.old_tip)?;
         if let Some(merge) = merges.first() {
             return invalid(format!(
                 "branch `{}` contains merge commit `{merge}`; merge replay is not supported yet",
@@ -178,14 +179,15 @@ fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
 fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
     let node_by_branch = node_by_branch(plan)?;
     for node in &plan.nodes {
-        let Some(parent) = node.parent.as_deref() else {
+        let Some(parent) = node.parent() else {
             continue;
         };
+        let old_base = node.old_base().expect("dependent node has an old base");
         let parent = node_by_branch[parent];
-        if !git.is_ancestor(&node.old_base, &parent.old_tip)? {
+        if !git.is_ancestor(old_base, &parent.old_tip)? {
             return invalid(format!(
                 "old_base `{}` for branch `{}` is not reachable from parent `{}` old_tip `{}`",
-                node.old_base, node.branch, parent.branch, parent.old_tip
+                old_base, node.branch, parent.branch, parent.old_tip
             ));
         }
     }
@@ -195,7 +197,7 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
 
 fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
-        if node.parent.is_none() {
+        if node.is_anchor() {
             continue;
         }
 
@@ -216,17 +218,20 @@ fn validate_default_fork_point_mappability(
     node_by_branch: &HashMap<&str, &Node>,
 ) -> Result<()> {
     for node in &plan.nodes {
-        let Some(parent_branch) = node.parent.as_deref() else {
+        let Some(parent_branch) = node.parent() else {
             continue;
         };
         let parent = node_by_branch[parent_branch];
-        if parent.parent.is_none() {
+        if parent.is_anchor() {
             continue;
         }
-        if node.old_base != parent.old_base && !parent.commits.contains(&node.old_base) {
+        let old_base = node.old_base().expect("dependent node has an old base");
+        let parent_old_base = parent.old_base().expect("dependent parent has an old base");
+        if old_base != parent_old_base && !parent.commits().iter().any(|commit| commit == old_base)
+        {
             return invalid(format!(
                 "old_base `{}` for branch `{}` cannot be mapped through parent `{}`",
-                node.old_base, node.branch, parent.branch
+                old_base, node.branch, parent.branch
             ));
         }
     }
@@ -326,7 +331,7 @@ fn dependency_set(plan: &Plan) -> Result<HashSet<(&str, &str)>> {
 }
 
 fn anchor_node(plan: &Plan) -> Result<&Node> {
-    let mut anchors = plan.nodes.iter().filter(|node| node.parent.is_none());
+    let mut anchors = plan.nodes.iter().filter(|node| node.is_anchor());
     let Some(anchor) = anchors.next() else {
         return invalid("plan must contain exactly one anchor node");
     };
@@ -361,7 +366,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::topological_order;
-    use crate::plan::{Dependency, Node, Plan, Repository, Source};
+    use crate::plan::{Dependency, Node, NodeKind, Plan, Repository, Source};
 
     #[test]
     fn topological_order_returns_parents_before_children() {
@@ -385,8 +390,8 @@ mod tests {
         let dependencies = nodes
             .iter()
             .filter_map(|node| {
-                node.parent.as_ref().map(|parent| Dependency {
-                    parent: parent.clone(),
+                node.parent().map(|parent| Dependency {
+                    parent: parent.to_owned(),
                     child: node.branch.clone(),
                 })
             })
@@ -403,8 +408,6 @@ mod tests {
             source: Source {
                 anchor_branch: "anchor".to_owned(),
                 anchor_old_tip: "0".repeat(40),
-                anchor_old_base: "0".repeat(40),
-                suggested_manual_rebase_boundary: "0".repeat(40),
             },
             nodes,
             dependencies,
@@ -414,10 +417,12 @@ mod tests {
     fn node(branch: &str, parent: Option<&str>) -> Node {
         Node {
             branch: branch.to_owned(),
-            parent: parent.map(str::to_owned),
-            old_base: "0".repeat(40),
             old_tip: "0".repeat(40),
-            commits: Vec::new(),
+            kind: parent.map_or(NodeKind::Anchor, |parent| NodeKind::Dependent {
+                parent: parent.to_owned(),
+                old_base: "0".repeat(40),
+                commits: Vec::new(),
+            }),
         }
     }
 }

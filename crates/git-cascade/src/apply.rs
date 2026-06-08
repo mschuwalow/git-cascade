@@ -73,7 +73,7 @@ pub fn dry_run(
     let anchor = plan
         .nodes
         .iter()
-        .find(|node| node.parent.is_none())
+        .find(|node| node.is_anchor())
         .ok_or_else(|| {
             Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
         })?;
@@ -128,7 +128,7 @@ pub fn dry_run(
             )
             .unwrap();
         }
-        for commit in &node.commits {
+        for commit in node.commits() {
             writeln!(output, "git -C {} cherry-pick {commit}", worktree.display()).unwrap();
         }
         writeln!(
@@ -175,7 +175,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     let anchor = plan
         .nodes
         .iter()
-        .find(|node| node.parent.is_none())
+        .find(|node| node.is_anchor())
         .ok_or_else(|| {
             Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
         })?;
@@ -222,7 +222,12 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             },
         )?;
         selected_bases.insert(node.branch.clone(), base.clone());
-        mappings.insert(node.old_base.clone(), base.clone());
+        mappings.insert(
+            node.old_base()
+                .expect("dependent node has old base")
+                .to_owned(),
+            base.clone(),
+        );
         state.mappings = mappings.clone();
         state.pending.branches = ordered[index..].to_vec();
         state_file.write_state(&mut state)?;
@@ -234,7 +239,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             worktree_git.reset_hard(&base)?;
         }
 
-        for commit in &node.commits {
+        for commit in node.commits() {
             state.phase = "replay".to_owned();
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
@@ -376,7 +381,7 @@ fn continue_replay_after_resolved_commit(
     let anchor = plan
         .nodes
         .iter()
-        .find(|node| node.parent.is_none())
+        .find(|node| node.is_anchor())
         .ok_or_else(|| {
             Error::InvalidPlan("plan must contain exactly one anchor node".to_owned())
         })?;
@@ -399,7 +404,7 @@ fn continue_replay_after_resolved_commit(
             .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
 
         let start_commit_index = if branch == current_branch {
-            node.commits
+            node.commits()
                 .iter()
                 .position(|commit| commit == resolved_commit)
                 .ok_or_else(|| {
@@ -422,7 +427,12 @@ fn continue_replay_after_resolved_commit(
                 },
             )?;
             selected_bases.insert(node.branch.clone(), base.clone());
-            mappings.insert(node.old_base.clone(), base.clone());
+            mappings.insert(
+                node.old_base()
+                    .expect("dependent node has old base")
+                    .to_owned(),
+                base.clone(),
+            );
             state.mappings = mappings.clone();
             state.pending.branches = ordered[index..].to_vec();
             state_file.write_state(&mut state)?;
@@ -430,7 +440,7 @@ fn continue_replay_after_resolved_commit(
             0
         };
 
-        for commit in node.commits.iter().skip(start_commit_index) {
+        for commit in node.commits().iter().skip(start_commit_index) {
             state.phase = "replay".to_owned();
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
@@ -504,7 +514,7 @@ fn replay_base(
     new_anchor: &str,
     strategy: Strategy,
 ) -> Result<ReplayBase> {
-    let parent_branch = node.parent.as_deref().ok_or_else(|| {
+    let parent_branch = node.parent().ok_or_else(|| {
         Error::InvalidPlan(format!("anchor node `{}` cannot be replayed", node.branch))
     })?;
     let parent = nodes
@@ -521,7 +531,8 @@ fn replay_base(
         });
     }
 
-    if node.old_base == parent.old_base {
+    let old_base = node.old_base().expect("dependent node has old base");
+    if Some(old_base) == parent.old_base() {
         return selected_bases.get(&parent.branch).cloned().ok_or_else(|| {
             Error::InvalidPlan(format!(
                 "parent `{}` has no selected replay base",
@@ -532,12 +543,12 @@ fn replay_base(
 
     Ok(ReplayBase::RewrittenCommit {
         branch: parent.branch.clone(),
-        old_commit: node.old_base.clone(),
+        old_commit: old_base.to_owned(),
     })
 }
 
 fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<String> {
-    let parent_branch = node.parent.as_deref().ok_or_else(|| {
+    let parent_branch = node.parent().ok_or_else(|| {
         Error::InvalidPlan(format!("anchor node `{}` cannot be replayed", node.branch))
     })?;
     let parent = context
@@ -559,7 +570,8 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
             });
     }
 
-    if node.old_base == parent.old_base {
+    let old_base = node.old_base().expect("dependent node has old base");
+    if Some(old_base) == parent.old_base() {
         return context
             .selected_bases
             .get(&parent.branch)
@@ -569,16 +581,12 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
             });
     }
 
-    context
-        .mappings
-        .get(&node.old_base)
-        .cloned()
-        .ok_or_else(|| {
-            Error::InvalidPlan(format!(
-                "old_base `{}` for branch `{}` was not mapped",
-                node.old_base, node.branch
-            ))
-        })
+    context.mappings.get(old_base).cloned().ok_or_else(|| {
+        Error::InvalidPlan(format!(
+            "old_base `{}` for branch `{}` was not mapped",
+            old_base, node.branch
+        ))
+    })
 }
 
 fn temp_ref(plan: &Plan, branch: &str) -> String {
@@ -610,7 +618,7 @@ fn selected_bases_from_mappings(
         .iter()
         .filter_map(|node| {
             mappings
-                .get(&node.old_base)
+                .get(node.old_base()?)
                 .map(|base| (node.branch.clone(), base.clone()))
         })
         .collect()

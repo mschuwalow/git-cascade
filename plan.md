@@ -83,7 +83,6 @@ The generated plan records:
 
 - The anchor branch name.
 - The anchor branch tip before mutation.
-- The old base of the anchor branch.
 - Every dependent branch in the cascade.
 - Each dependent branch's old tip.
 - Each dependent branch's old base.
@@ -233,17 +232,17 @@ Repository-local storage layout:
 ```text
 <git-common-dir>/cascade/
   plans/
-    permissions-stack.yaml
+    <base64url-plan-name>.yaml
   state.yaml
   worktrees/
-    permissions-stack/
+    <plan-id>/
 ```
 
-`plans/<name>.yaml` stores immutable named plans.
+`plans/<base64url-plan-name>.yaml` stores immutable named plans. The user-facing plan name is encoded for filesystem safety.
 
 `state.yaml` stores the single active cascade operation and acts as the repository-wide cascade lock.
 
-`worktrees/<name>/` stores temporary Git worktrees used for isolated replay and conflict resolution.
+`worktrees/<plan-id>/` stores the temporary Git worktree used for isolated replay and conflict resolution for the active operation.
 
 ### Named Plans
 
@@ -254,11 +253,11 @@ git cascade plan --anchor my-branch --name permissions-stack
 git cascade apply --name permissions-stack --new-anchor my-branch
 ```
 
-Plan names must be safe path components and safe ref namespace components. Version 1 should accept names made from ASCII letters, digits, `.`, `_`, and `-`, and should reject names containing path separators, whitespace, control characters, `..`, or Git ref-invalid sequences.
+Plan names are user-facing strings and are encoded as unpadded base64url for filesystem storage.
 
 Creating a plan:
 
-- Writes `<git-common-dir>/cascade/plans/<name>.yaml`.
+- Writes `<git-common-dir>/cascade/plans/<base64url-plan-name>.yaml`.
 - Refuses to overwrite an existing plan unless `--replace` is passed.
 - Refuses to run while `state.yaml` exists.
 - Stores a stable `plan_id` inside the plan.
@@ -354,33 +353,26 @@ repository:
 source:
   anchor_branch: "agent-permissions-8"
   anchor_old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
-  anchor_old_base: "abf07b5ab6e08128a90473701de36f410f621499"
-  suggested_manual_rebase_boundary: "abf07b5ab6e08128a90473701de36f410f621499"
 
 nodes:
   - branch: "agent-permissions-8"
-    role: anchor
-    parent: null
-    old_base: "abf07b5ab6e08128a90473701de36f410f621499"
     old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
-    commits:
-      - "1111111111111111111111111111111111111111"
-      - "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
+    kind: anchor
 
   - branch: "agent-permissions-9"
-    role: dependent
+    old_tip: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
+    kind: dependent
     parent: "agent-permissions-8"
     old_base: "1111111111111111111111111111111111111111"
-    old_tip: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
     commits:
       - "3333333333333333333333333333333333333333"
       - "5b58f121371d5e79ab4c769bbe8c7867958f939a"
 
   - branch: "agent-permissions-10"
-    role: dependent
+    old_tip: "7777777777777777777777777777777777777777"
+    kind: dependent
     parent: "agent-permissions-9"
     old_base: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
-    old_tip: "7777777777777777777777777777777777777777"
     commits:
       - "5555555555555555555555555555555555555555"
       - "7777777777777777777777777777777777777777"

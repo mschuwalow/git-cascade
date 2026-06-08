@@ -38,7 +38,7 @@ fn apply_help_mentions_strategy_and_dry_run() {
 }
 
 #[test]
-fn plan_help_mentions_anchor_base_and_replace() {
+fn plan_help_mentions_anchor_and_replace() {
     let repo = TestRepo::new();
 
     repo.cascade()
@@ -47,7 +47,6 @@ fn plan_help_mentions_anchor_base_and_replace() {
         .success()
         .stdout(
             predicate::str::contains("--anchor")
-                .and(predicate::str::contains("--base"))
                 .and(predicate::str::contains("--replace"))
                 .and(predicate::str::contains("--name")),
         );

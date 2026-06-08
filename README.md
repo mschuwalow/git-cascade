@@ -96,12 +96,6 @@ Replace an existing plan:
 git cascade plan --anchor pr-1 --name stack --replace
 ```
 
-Select a base reference explicitly while planning:
-
-```sh
-git cascade plan --anchor pr-1 --name stack --base origin/main
-```
-
 ## Current Limits
 
 - Version 1 targets local branches only.

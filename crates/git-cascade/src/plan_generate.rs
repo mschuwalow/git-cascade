@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::git::{Git, LocalBranch};
-use crate::plan::{Dependency, Node, Plan, Repository, Source};
+use crate::plan::{Dependency, Node, NodeKind, Plan, Repository, Source};
 use crate::plan_validate::validate_plan;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
@@ -17,7 +17,6 @@ pub struct GenerateOptions {
     pub anchor_branch: String,
     pub name: PlanName,
     pub replace: bool,
-    pub base: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,23 +28,19 @@ struct Candidate {
 }
 
 pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
-    let plan = generate_plan(git, &options.anchor_branch, options.base.as_deref())?;
+    let plan = generate_plan(git, &options.anchor_branch)?;
     validate_plan(git, &plan)?;
     write_named_plan(storage, &options.name, &plan, options.replace)?;
     Ok(plan)
 }
 
-pub fn generate_plan(git: &Git, anchor_branch: &str, base: Option<&str>) -> Result<Plan> {
+pub fn generate_plan(git: &Git, anchor_branch: &str) -> Result<Plan> {
     let anchor_tip = git.local_branch_tip(anchor_branch)?;
-    let anchor_base = infer_anchor_base(git, anchor_branch, &anchor_tip, base)?;
-    let anchor_commits = owned_commits(git, &anchor_base, &anchor_tip, anchor_branch)?;
 
     let mut nodes = vec![Node {
         branch: anchor_branch.to_owned(),
-        parent: None,
-        old_base: anchor_base.clone(),
         old_tip: anchor_tip.clone(),
-        commits: anchor_commits,
+        kind: NodeKind::Anchor,
     }];
     let mut dependencies = Vec::new();
     let mut assigned = HashSet::from([anchor_branch.to_owned()]);
@@ -59,10 +54,12 @@ pub fn generate_plan(git: &Git, anchor_branch: &str, base: Option<&str>) -> Resu
         });
         nodes.push(Node {
             branch: candidate.branch.name,
-            parent: Some(candidate.parent_branch),
-            old_base: candidate.old_base,
             old_tip: candidate.branch.tip,
-            commits: candidate.commits,
+            kind: NodeKind::Dependent {
+                parent: candidate.parent_branch,
+                old_base: candidate.old_base,
+                commits: candidate.commits,
+            },
         });
     }
 
@@ -83,8 +80,6 @@ pub fn generate_plan(git: &Git, anchor_branch: &str, base: Option<&str>) -> Resu
         source: Source {
             anchor_branch: anchor_branch.to_owned(),
             anchor_old_tip: anchor_tip,
-            anchor_old_base: anchor_base.clone(),
-            suggested_manual_rebase_boundary: anchor_base,
         },
         nodes,
         dependencies,
@@ -123,43 +118,6 @@ fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bo
     Ok(())
 }
 
-fn infer_anchor_base(
-    git: &Git,
-    anchor_branch: &str,
-    anchor_tip: &str,
-    base: Option<&str>,
-) -> Result<String> {
-    if let Some(base) = base {
-        let base_tip = git.rev_parse(&format!("{base}^{{commit}}"))?;
-        if let Some(inferred_base) = git.merge_base(anchor_tip, &base_tip)? {
-            return Ok(inferred_base);
-        }
-    }
-
-    if let Some(origin_default_tip) = git.origin_default_branch_tip()?
-        && let Some(base) = git.merge_base(anchor_tip, &origin_default_tip)?
-    {
-        return Ok(base);
-    }
-
-    for base_branch in ["main", "master"] {
-        if base_branch == anchor_branch {
-            continue;
-        }
-        let Some(base_tip) = git.try_rev_parse(&format!("refs/heads/{base_branch}^{{commit}}"))?
-        else {
-            continue;
-        };
-        if let Some(base) = git.merge_base(anchor_tip, &base_tip)? {
-            return Ok(base);
-        }
-    }
-
-    Err(Error::CannotInferAnchorBase {
-        branch: anchor_branch.to_owned(),
-    })
-}
-
 fn next_candidate(
     git: &Git,
     branches: &[LocalBranch],
@@ -181,8 +139,16 @@ fn next_candidate(
             let Some(base) = git.merge_base(&parent.old_tip, &branch.tip)? else {
                 continue;
             };
-            if !parent.commits.contains(&base) {
-                continue;
+
+            if parent.is_anchor() {
+                if git.is_ancestor(&branch.tip, &parent.old_tip)? {
+                    continue;
+                }
+            } else {
+                let parent_old_base = parent.old_base().expect("dependent parent has an old base");
+                if base != parent_old_base && !parent.commits().contains(&base) {
+                    continue;
+                }
             }
 
             let commits = owned_commits(git, &base, &branch.tip, &branch.name)?;
@@ -228,7 +194,7 @@ fn parent_depth(branch: &str, node_by_branch: &HashMap<&str, &Node>) -> usize {
     let mut depth = 0;
     let mut current = node_by_branch.get(branch).copied();
     while let Some(node) = current {
-        let Some(parent) = node.parent.as_deref() else {
+        let Some(parent) = node.parent() else {
             break;
         };
         depth += 1;

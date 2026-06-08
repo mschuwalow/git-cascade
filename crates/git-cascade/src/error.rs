@@ -59,11 +59,6 @@ pub enum Error {
     #[error("{0}")]
     Unsupported(String),
 
-    #[error(
-        "could not infer an old base for anchor branch `{branch}`; pass --base, configure origin/HEAD, or keep a local main/master branch"
-    )]
-    CannotInferAnchorBase { branch: String },
-
     #[cfg(feature = "test-hooks")]
     #[error("test hook `{name}` failed with status {status}")]
     TestHookFailed { name: String, status: String },

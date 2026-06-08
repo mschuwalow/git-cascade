@@ -30,12 +30,15 @@ fn validation_rejects_tampered_commit_list() {
     let mut plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
-    plan.nodes
+    let node = plan
+        .nodes
         .iter_mut()
         .find(|node| node.branch == "pr-3")
-        .unwrap()
-        .commits
-        .clear();
+        .unwrap();
+    let NodeKind::Dependent { commits, .. } = &mut node.kind else {
+        panic!("pr-3 should be dependent");
+    };
+    commits.clear();
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
@@ -97,3 +100,4 @@ fn read_plan(repo: &TestRepo, name: &str) -> Plan {
     let content = std::fs::read_to_string(repo.named_plan_path(name)).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }
+use git_cascade::plan::NodeKind;

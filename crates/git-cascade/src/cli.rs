@@ -26,8 +26,6 @@ enum Command {
         #[arg(long)]
         name: PlanName,
         #[arg(long)]
-        base: Option<String>,
-        #[arg(long)]
         replace: bool,
     },
     Apply {
@@ -71,9 +69,8 @@ where
         Command::Plan {
             anchor,
             name,
-            base,
             replace,
-        } => plan(&anchor, name, base.as_deref(), replace),
+        } => plan(&anchor, name, replace),
         Command::Apply {
             name,
             new_anchor,
@@ -149,7 +146,7 @@ fn apply(name: PlanName, new_anchor: &str, strategy: Strategy, is_dry_run: bool)
     Ok(())
 }
 
-fn plan(anchor_branch: &str, name: PlanName, base: Option<&str>, replace: bool) -> Result<()> {
+fn plan(anchor_branch: &str, name: PlanName, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let display_name = name.to_string();
@@ -160,7 +157,6 @@ fn plan(anchor_branch: &str, name: PlanName, base: Option<&str>, replace: bool) 
             anchor_branch: anchor_branch.to_owned(),
             name,
             replace,
-            base: base.map(str::to_owned),
         },
     )?;
     println!("created plan `{display_name}`");

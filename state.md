@@ -13,7 +13,7 @@ Implemented so far:
 - Repository-local storage path handling via `git rev-parse --path-format=absolute --git-common-dir`.
 - `PlanName` newtype with unpadded base64url filesystem serialization for named plan files.
 - Base64url component encoding for branch-derived ref/file components.
-- Typed YAML plan schema where anchor/dependent status is inferred from `parent: null` instead of a separate role field.
+- Typed YAML plan schema where anchor/dependent data is represented by a `kind` enum.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
 - `git cascade apply --name <name> --new-anchor <ref> --dry-run` command preview.
@@ -39,8 +39,6 @@ Implemented so far:
 - Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
 - `git cascade plan --anchor <anchor-branch> --name <name>` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
-- `git cascade plan --base <ref>` explicit base reference selection.
-- Implicit base selection from `refs/remotes/origin/HEAD`, then local `main`, then local `master`.
 - Real-Git integration test harness using temporary repositories.
 
 ## Current Plan Generation Behavior
@@ -48,7 +46,7 @@ Implemented so far:
 `git cascade plan` currently:
 
 - Resolves the anchor as a local branch under `refs/heads`.
-- Infers the anchor old base from `--base`, `origin/HEAD`, local `main`, or local `master`.
+- Discovers dependent branches by their attachment points to the anchor or already discovered dependents.
 - Captures owned commits with `git rev-list --reverse <base>..<tip>`.
 - Rejects merge commits in captured ranges.
 - Discovers dependent local branches by finding fork points inside already-captured parent commits.
@@ -71,8 +69,6 @@ Current tests include:
 - Real-Git integration tests for `--replace` behavior.
 - Real-Git integration tests for refusing plan creation while state exists.
 - Real-Git integration tests for rejecting merge commits.
-- Real-Git integration tests for `--base` selection.
-- Real-Git integration tests for origin default branch base selection through `refs/remotes/origin/HEAD`.
 - Unit tests for plan topological ordering.
 - Real-Git integration tests for generated plan validation.
 - Real-Git integration tests for tampered plan rejection.
