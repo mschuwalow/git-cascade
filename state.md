@@ -21,7 +21,7 @@ Implemented so far:
 - Mutating `git cascade apply --anchor <anchor-branch> --new-anchor <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
-- Apply strategy is stored as an enum value (`preserve-fork-points` or `move-to-heads`) in state.
+- Active apply state uses typed enum values for operation, phase, and strategy, and stores the plan anchor as a required `PlanKey`.
 - Plan IDs are UUIDs.
 - Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
@@ -60,7 +60,7 @@ Implemented so far:
 Current tests include:
 
 - Unit tests for base64url encoding.
-- Unit tests for plan-name filesystem encoding/decoding.
+- Unit tests for plan-key filesystem encoding/decoding.
 - Unit tests for storage path construction.
 - Real-Git integration tests for `list` and `show`.
 - Real-Git integration tests for anchor branches containing path separators.

@@ -2,19 +2,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct PlanKey(String);
 
 impl PlanKey {
     pub fn from_anchor(anchor: impl Into<String>) -> Result<Self> {
         let anchor = anchor.into();
         if anchor.is_empty() {
-            return Err(Error::InvalidPlanName {
-                name: anchor,
+            return Err(Error::InvalidPlanKey {
+                key: anchor,
                 reason: "must not be empty".to_owned(),
             });
         }
@@ -40,6 +43,20 @@ impl FromStr for PlanKey {
 
     fn from_str(name: &str) -> Result<Self> {
         Self::from_anchor(name)
+    }
+}
+
+impl TryFrom<String> for PlanKey {
+    type Error = Error;
+
+    fn try_from(anchor: String) -> Result<Self> {
+        Self::from_anchor(anchor)
+    }
+}
+
+impl From<PlanKey> for String {
+    fn from(key: PlanKey) -> Self {
+        key.0
     }
 }
 
@@ -111,7 +128,7 @@ impl Storage {
         fs::read_to_string(&path).map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
                 Error::PlanNotFound {
-                    name: key.to_string(),
+                    key: key.to_string(),
                     path,
                 }
             } else {
@@ -186,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn encodes_named_plan_paths() {
+    fn encodes_anchor_keyed_plan_paths() {
         let storage = Storage::new("/repo/.git");
         let name = PlanKey::from_anchor("feature/stack with spaces").unwrap();
 
@@ -199,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn decodes_plan_names_from_storage_components() {
+    fn decodes_plan_keys_from_storage_components() {
         let encoded = PlanKey::from_anchor("feature/stack with spaces")
             .unwrap()
             .encoded();

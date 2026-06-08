@@ -25,17 +25,17 @@ pub enum Error {
     #[error("git command output was not valid UTF-8: git {args}")]
     GitUtf8 { args: String },
 
-    #[error("invalid plan name `{name}`: {reason}")]
-    InvalidPlanName { name: String, reason: String },
+    #[error("invalid plan key `{key}`: {reason}")]
+    InvalidPlanKey { key: String, reason: String },
 
     #[error("invalid encoded component `{component}`")]
     InvalidEncodedComponent { component: String },
 
-    #[error("plan `{name}` does not exist at {path}")]
-    PlanNotFound { name: String, path: PathBuf },
+    #[error("plan `{key}` does not exist at {path}")]
+    PlanNotFound { key: String, path: PathBuf },
 
-    #[error("plan `{name}` already exists at {path}; pass --replace to overwrite it")]
-    PlanExists { name: String, path: PathBuf },
+    #[error("plan `{key}` already exists at {path}; pass --replace to overwrite it")]
+    PlanExists { key: String, path: PathBuf },
 
     #[error("invalid plan: {0}")]
     InvalidPlan(String),

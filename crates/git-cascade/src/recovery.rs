@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::git::Git;
-use crate::state::{ApplyState, StateFile};
+use crate::state::{ApplyState, Operation, Phase, StateFile};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -12,7 +12,7 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
         return Ok("No active cascade operation.\n".to_owned());
     };
     let state = state_file.read_state()?;
-    if state.phase == "deleting" {
+    if state.phase == Phase::Deleting {
         cleanup_state_artifacts(git, storage, state_file, &state)?;
         return Ok("No active cascade operation.\n".to_owned());
     }
@@ -21,9 +21,7 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
     output.push_str("Active cascade operation:\n");
     output.push_str(&format!("operation: {}\n", state.operation));
     output.push_str(&format!("phase: {}\n", state.phase));
-    if let Some(plan_anchor) = &state.plan_anchor {
-        output.push_str(&format!("anchor: {plan_anchor}\n"));
-    }
+    output.push_str(&format!("anchor: {}\n", state.plan_anchor));
     output.push_str(&format!("plan-id: {}\n", state.plan_id));
     output.push_str(&format!(
         "new-anchor: {} -> {}\n",
@@ -57,15 +55,15 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
         ));
     };
     let mut state = state_file.read_state()?;
-    if state.operation != "apply" {
+    if state.operation != Operation::Apply {
         return Err(Error::InvalidInvocation(format!(
             "cannot abort unsupported operation `{}`",
             state.operation
         )));
     }
 
-    if state.phase != "deleting" {
-        state.phase = "deleting".to_owned();
+    if state.phase != Phase::Deleting {
+        state.phase = Phase::Deleting;
         state_file.write_state(&mut state)?;
     }
 
@@ -78,7 +76,7 @@ pub fn mark_deleting_and_cleanup(
     mut state_file: StateFile,
     state: &mut ApplyState,
 ) -> Result<()> {
-    state.phase = "deleting".to_owned();
+    state.phase = Phase::Deleting;
     state_file.write_state(state)?;
     cleanup_state_artifacts(git, storage, state_file, state)
 }
@@ -89,7 +87,7 @@ pub fn cleanup_state_artifacts(
     state_file: StateFile,
     state: &ApplyState,
 ) -> Result<()> {
-    if state.operation != "apply" {
+    if state.operation != Operation::Apply {
         return Err(Error::InvalidInvocation(format!(
             "cannot clean up unsupported operation `{}`",
             state.operation

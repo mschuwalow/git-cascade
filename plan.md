@@ -232,7 +232,7 @@ Repository-local storage layout:
 ```text
 <git-common-dir>/cascade/
   plans/
-    <base64url-plan-name>.yaml
+    <base64url-anchor-branch>.yaml
   state.yaml
   worktrees/
     <plan-id>/
@@ -244,16 +244,16 @@ Repository-local storage layout:
 
 `worktrees/<plan-id>/` stores the temporary Git worktree used for isolated replay and conflict resolution for the active operation.
 
-### Named Plans
+### Anchor-Keyed Plans
 
-Named plans are the default interface:
+Anchor-keyed plans are the default interface:
 
 ```bash
 git cascade plan --anchor my-branch
 git cascade apply --anchor my-branch --new-anchor my-branch
 ```
 
-Plan names are user-facing strings and are encoded as unpadded base64url for filesystem storage.
+Plan keys are anchor branch names and are encoded as unpadded base64url for filesystem storage.
 
 Creating a plan:
 
@@ -314,8 +314,7 @@ new_anchor:
   resolved: "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
   input_was_ref: true
 
-strategy:
-  strategy: preserve-fork-points
+strategy: preserve-fork-points
 
 current:
   branch: agent-permissions-9

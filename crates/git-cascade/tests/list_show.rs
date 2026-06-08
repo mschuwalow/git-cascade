@@ -6,7 +6,7 @@ use predicates::prelude::*;
 use common::repo::TestRepo;
 
 #[test]
-fn list_reads_named_plans_from_git_common_dir() {
+fn list_reads_anchor_keyed_plans_from_git_common_dir() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "hello\n", "initial");
     let plans_dir = repo.common_dir().join("cascade/plans");
@@ -37,7 +37,7 @@ fn list_reads_named_plans_from_git_common_dir() {
 }
 
 #[test]
-fn show_prints_a_named_plan() {
+fn show_prints_an_anchor_keyed_plan() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "hello\n", "initial");
     let plans_dir = repo.common_dir().join("cascade/plans");
@@ -67,7 +67,7 @@ fn show_rejects_empty_anchor() {
         .args(["show", "--anchor", ""])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("invalid plan name"));
+        .stderr(predicate::str::contains("invalid plan key"));
 }
 
 #[test]

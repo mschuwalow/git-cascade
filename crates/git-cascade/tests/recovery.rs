@@ -3,6 +3,7 @@ mod common;
 use predicates::prelude::*;
 
 use common::repo::TestRepo;
+use git_cascade::state::Phase;
 
 #[test]
 fn status_reports_no_active_operation() {
@@ -111,7 +112,7 @@ fn status_finishes_cleanup_for_deleting_state() {
         .assert()
         .failure();
     let mut state = read_state(&repo);
-    state.phase = "deleting".to_owned();
+    state.phase = Phase::Deleting;
     write_state(&repo, &state);
 
     repo.cascade()
@@ -217,7 +218,7 @@ fn continue_can_stop_again_on_later_conflict() {
         ));
 
     let second_state = read_state(&repo);
-    assert_eq!(second_state.phase, "conflict");
+    assert_eq!(second_state.phase, Phase::Conflict);
     let second_conflict = second_state.current.unwrap().commit;
     assert_ne!(second_conflict, first_conflict);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);

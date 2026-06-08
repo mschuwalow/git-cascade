@@ -8,7 +8,8 @@ use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
 use crate::recovery;
 use crate::state::{
-    ApplyState, ApplyStateInput, CurrentState, StateFile, Strategy, initial_apply_state,
+    ApplyState, ApplyStateInput, CurrentState, Operation, Phase, StateFile, Strategy,
+    initial_apply_state,
 };
 use crate::storage::{PlanKey, Storage};
 use crate::test_hooks;
@@ -240,7 +241,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         }
 
         for commit in node.commits() {
-            state.phase = "replay".to_owned();
+            state.phase = Phase::Replay;
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
                 commit: commit.clone(),
@@ -249,7 +250,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             state_file.write_state(&mut state)?;
 
             if let Err(error) = worktree_git.cherry_pick(commit) {
-                state.phase = "conflict".to_owned();
+                state.phase = Phase::Conflict;
                 state_file.write_state(&mut state)?;
                 return Err(Error::ApplyStopped {
                     branch: node.branch.clone(),
@@ -274,7 +275,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         state_file.write_state(&mut state)?;
     }
 
-    state.phase = "final_update".to_owned();
+    state.phase = Phase::FinalUpdate;
     state_file.write_state(&mut state)?;
     test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
@@ -300,19 +301,19 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
     let mut state = state_file.read_state()?;
-    if state.phase == "deleting" {
+    if state.phase == Phase::Deleting {
         recovery::cleanup_state_artifacts(git, storage, state_file, &state)?;
         return Err(Error::InvalidInvocation(
             "no active cascade operation".to_owned(),
         ));
     }
-    if state.operation != "apply" {
+    if state.operation != Operation::Apply {
         return Err(Error::InvalidInvocation(format!(
             "cannot continue unsupported operation `{}`",
             state.operation
         )));
     }
-    if state.phase != "conflict" {
+    if state.phase != Phase::Conflict {
         return Err(Error::InvalidInvocation(format!(
             "cannot continue cascade operation in phase `{}`",
             state.phase
@@ -322,9 +323,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let current = state.current.clone().ok_or_else(|| {
         Error::InvalidInvocation("active apply state has no current commit".to_owned())
     })?;
-    let plan_key = PlanKey::from_anchor(state.plan_anchor.clone().ok_or_else(|| {
-        Error::InvalidInvocation("active apply state does not record an anchor plan".to_owned())
-    })?)?;
+    let plan_key = state.plan_anchor.clone();
     let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_key)?)?;
     validate_plan_for_apply(git, &plan)?;
 
@@ -351,7 +350,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     state
         .mappings
         .insert(current.commit.clone(), worktree_git.head_oid()?);
-    state.phase = "replay".to_owned();
+    state.phase = Phase::Replay;
     state_file.write_state(&mut state)?;
 
     continue_replay_after_resolved_commit(
@@ -443,7 +442,7 @@ fn continue_replay_after_resolved_commit(
         };
 
         for commit in node.commits().iter().skip(start_commit_index) {
-            state.phase = "replay".to_owned();
+            state.phase = Phase::Replay;
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
                 commit: commit.clone(),
@@ -452,7 +451,7 @@ fn continue_replay_after_resolved_commit(
             state_file.write_state(&mut state)?;
 
             if let Err(error) = worktree_git.cherry_pick(commit) {
-                state.phase = "conflict".to_owned();
+                state.phase = Phase::Conflict;
                 state_file.write_state(&mut state)?;
                 return Err(Error::ApplyStopped {
                     branch: node.branch.clone(),
@@ -479,7 +478,7 @@ fn continue_replay_after_resolved_commit(
         state_file.write_state(&mut state)?;
     }
 
-    state.phase = "final_update".to_owned();
+    state.phase = Phase::FinalUpdate;
     state_file.write_state(&mut state)?;
     let new_anchor_ref = if state.new_anchor.input_was_ref {
         Some(
@@ -504,9 +503,7 @@ fn continue_replay_after_resolved_commit(
     )?)?;
 
     recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
-    let plan_key = PlanKey::from_anchor(state.plan_anchor.clone().ok_or_else(|| {
-        Error::InvalidInvocation("active apply state does not record an anchor plan".to_owned())
-    })?)?;
+    let plan_key = state.plan_anchor.clone();
     storage.delete_plan(plan_key)?;
 
     Ok(())

@@ -6,7 +6,7 @@ use predicates::prelude::*;
 use common::repo::TestRepo;
 
 #[test]
-fn plan_creates_named_plan_for_linear_stack() {
+fn plan_creates_anchor_keyed_plan_for_linear_stack() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");

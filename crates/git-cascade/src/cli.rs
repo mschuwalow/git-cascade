@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use crate::Result;
 use crate::apply::{ApplyOptions, DryRunOptions, continue_apply, dry_run, execute};
 use crate::git::Git;
-use crate::plan_generate::{GenerateOptions, generate_named_plan};
+use crate::plan_generate::{GenerateOptions, generate_anchor_keyed_plan};
 use crate::recovery;
 use crate::state::Strategy;
 use crate::storage::{PlanKey, Storage};
@@ -144,7 +144,7 @@ fn apply(anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -
 fn plan(anchor_branch: &str, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    generate_named_plan(
+    generate_anchor_keyed_plan(
         &git,
         &storage,
         GenerateOptions {

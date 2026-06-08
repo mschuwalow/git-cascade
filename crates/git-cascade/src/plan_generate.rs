@@ -26,11 +26,15 @@ struct Candidate {
     commits: Vec<String>,
 }
 
-pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
+pub fn generate_anchor_keyed_plan(
+    git: &Git,
+    storage: &Storage,
+    options: GenerateOptions,
+) -> Result<Plan> {
     let plan = generate_plan(git, &options.anchor_branch)?;
     validate_plan(git, &plan)?;
     let key = PlanKey::from_anchor(&options.anchor_branch)?;
-    write_named_plan(storage, &key, &plan, options.replace)?;
+    write_anchor_keyed_plan(storage, &key, &plan, options.replace)?;
     Ok(plan)
 }
 
@@ -86,7 +90,12 @@ pub fn generate_plan(git: &Git, anchor_branch: &str) -> Result<Plan> {
     })
 }
 
-fn write_named_plan(storage: &Storage, key: &PlanKey, plan: &Plan, replace: bool) -> Result<()> {
+fn write_anchor_keyed_plan(
+    storage: &Storage,
+    key: &PlanKey,
+    plan: &Plan,
+    replace: bool,
+) -> Result<()> {
     if storage.state_path().exists() {
         return Err(Error::ActiveOperation {
             path: storage.state_path(),
@@ -97,7 +106,7 @@ fn write_named_plan(storage: &Storage, key: &PlanKey, plan: &Plan, replace: bool
     let path = storage.plan_path(key);
     if path.exists() && !replace {
         return Err(Error::PlanExists {
-            name: key.to_string(),
+            key: key.to_string(),
             path,
         });
     }

@@ -15,9 +15,9 @@ use crate::{Error, Result};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyState {
     pub version: u32,
-    pub operation: String,
-    pub phase: String,
-    pub plan_anchor: Option<String>,
+    pub operation: Operation,
+    pub phase: Phase,
+    pub plan_anchor: PlanKey,
     pub plan_id: String,
     pub started_at: String,
     pub updated_at: String,
@@ -29,6 +29,52 @@ pub struct ApplyState {
     pub completed: CompletedState,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Operation {
+    Apply,
+}
+
+impl Operation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Apply => "apply",
+        }
+    }
+}
+
+impl std::fmt::Display for Operation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    Replay,
+    Conflict,
+    FinalUpdate,
+    Deleting,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Replay => "replay",
+            Self::Conflict => "conflict",
+            Self::FinalUpdate => "final_update",
+            Self::Deleting => "deleting",
+        }
+    }
+}
+
+impl std::fmt::Display for Phase {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,9 +245,9 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
 
     Ok(ApplyState {
         version: 1,
-        operation: "apply".to_owned(),
-        phase: "replay".to_owned(),
-        plan_anchor: Some(input.plan_key.to_string()),
+        operation: Operation::Apply,
+        phase: Phase::Replay,
+        plan_anchor: input.plan_key.clone(),
         plan_id: input.plan_id.to_owned(),
         started_at: now.clone(),
         updated_at: now,
