@@ -173,39 +173,29 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
     let mut state = state_file.read_state()?;
-    if !matches!(state.phase, Phase::Conflict | Phase::Deleting) {
+    if state.phase != Phase::Conflict {
         return Err(Error::InvalidInvocation(format!(
             "cannot continue cascade operation in phase `{}`",
             state.phase
         )));
     }
 
-    let plan = if state.phase == Phase::Conflict {
-        let plan_name = state.plan_name.clone();
-        let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_name)?)?;
-        validate_plan_for_apply(git, &plan)?;
-        if state.new_tip.input_was_ref {
-            let resolved = git.resolve_commit(&state.new_tip.input)?;
-            if resolved != state.new_tip.resolved {
-                return Err(Error::InvalidInvocation(format!(
-                    "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`",
-                    state.new_tip.input, state.new_tip.resolved
-                )));
-            }
+    let plan_name = state.plan_name.clone();
+    let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_name)?)?;
+    validate_plan_for_apply(git, &plan)?;
+    if state.new_tip.input_was_ref {
+        let resolved = git.resolve_commit(&state.new_tip.input)?;
+        if resolved != state.new_tip.resolved {
+            eprintln!(
+                "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`",
+                state.new_tip.input, state.new_tip.resolved
+            );
         }
-        Some(plan)
-    } else {
-        None
-    };
+    }
 
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    if state.phase == Phase::Deleting {
-        run_deleting_state(&mut state_writer, &mut backend, &mut state)
-    } else {
-        let plan = plan.expect("conflict continuation loaded plan");
-        run_apply_state(&plan, &mut state_writer, &mut backend, &mut state)
-    }
+    run_apply_state(&plan, &mut state_writer, &mut backend, &mut state)
 }
 
 pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
@@ -247,22 +237,20 @@ fn run_apply_state(
             Phase::Replay => {
                 replay_pending_branches(plan, state_writer, backend, state)?;
                 state.phase = Phase::FinalUpdate;
-                state.current = None;
                 state_writer.write_state(state)?;
             }
             Phase::FinalUpdate => {
                 backend.final_update(plan, state)?;
                 state.phase = Phase::Deleting;
                 state_writer.write_state(state)?;
-                return run_deleting_state(state_writer, backend, state);
             }
             Phase::Conflict => {
-                resolve_conflict(state_writer, backend, state)?;
+                resolve_conflict(backend, state)?;
+                state.phase = Phase::Replay;
+                state_writer.write_state(state)?;
             }
             Phase::Deleting => {
-                return Err(Error::InvalidInvocation(
-                    "deleting state must be resumed through cleanup".to_owned(),
-                ));
+                return run_deleting_state(state_writer, backend, state);
             }
         }
     }
@@ -273,22 +261,17 @@ fn run_deleting_state(
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
 ) -> Result<()> {
-    backend.cleanup_success(state)?;
+    backend.cleanup_deleting_state(state)?;
     state_writer.remove_state()
 }
 
-fn resolve_conflict(
-    state_writer: &mut dyn StateWriter,
-    backend: &mut dyn ReplayBackend,
-    state: &mut ApplyState,
-) -> Result<()> {
+fn resolve_conflict(backend: &mut dyn ReplayBackend, state: &mut ApplyState) -> Result<()> {
     let current = state.current.clone().ok_or_else(|| {
         Error::InvalidInvocation("active apply state has no current commit".to_owned())
     })?;
     let rewritten_commit = backend.continue_cherry_pick(state, &current)?;
     state.mappings.insert(current.commit, rewritten_commit);
-    state.phase = Phase::Replay;
-    state_writer.write_state(state)
+    Ok(())
 }
 
 fn replay_pending_branches(
@@ -344,7 +327,6 @@ fn replay_pending_branches(
             was_resuming,
         )?;
         for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
-            state.phase = Phase::Replay;
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
                 commit: commit.clone(),

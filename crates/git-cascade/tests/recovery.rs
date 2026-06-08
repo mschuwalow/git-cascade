@@ -160,7 +160,7 @@ fn status_reports_deleting_state_without_cleanup() {
 }
 
 #[test]
-fn continue_finishes_cleanup_for_deleting_state() {
+fn continue_refuses_deleting_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
@@ -174,8 +174,32 @@ fn continue_finishes_cleanup_for_deleting_state() {
     repo.cascade()
         .arg("continue")
         .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "cannot continue cascade operation in phase `deleting`",
+        ));
+
+    assert!(repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(std::path::Path::new(state.worktree.path()).exists());
+}
+
+#[test]
+fn abort_finishes_cleanup_for_deleting_state() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure();
+    let mut state = read_state(&repo);
+    state.phase = Phase::Deleting;
+    write_state(&repo, &state);
+
+    repo.cascade()
+        .arg("abort")
+        .assert()
         .success()
-        .stdout("continued cascade operation\n");
+        .stdout("aborted cascade operation\n");
 
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!std::path::Path::new(state.worktree.path()).exists());

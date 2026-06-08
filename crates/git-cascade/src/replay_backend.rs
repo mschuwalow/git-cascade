@@ -55,7 +55,7 @@ pub(crate) trait ReplayBackend {
         rewritten_tip: &str,
     ) -> Result<(String, String)>;
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()>;
-    fn cleanup_success(&mut self, state: &mut ApplyState) -> Result<()>;
+    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()>;
 }
 
 pub(crate) struct GitReplayBackend<'a> {
@@ -247,7 +247,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         finish_final_update(self.git, plan, state)
     }
 
-    fn cleanup_success(&mut self, state: &mut ApplyState) -> Result<()> {
+    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
         eprintln!("Cleaning temporary cascade state");
         let worktree = worktree_path(self.storage, state);
         if worktree.exists() {
@@ -415,7 +415,7 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn cleanup_success(&mut self, state: &mut ApplyState) -> Result<()> {
+    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
         let WorktreeState::InPlace { path, restore } = &state.worktree else {
             return Ok(());
         };
