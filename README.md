@@ -96,6 +96,16 @@ Replace an existing plan:
 git cascade plan --anchor pr-1 --replace
 ```
 
+## Shell Completions
+
+Generate completion scripts with Clap's built-in shell generators:
+
+```sh
+git cascade completions bash
+git cascade completions zsh
+git cascade completions fish
+```
+
 ## Current Limits
 
 - Version 1 updates dependent local branches only.

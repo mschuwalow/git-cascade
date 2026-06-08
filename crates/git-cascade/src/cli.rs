@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 
 use crate::Result;
 use crate::apply::{ApplyOptions, DryRunOptions, continue_apply, dry_run, execute};
@@ -14,36 +15,57 @@ use crate::storage::{PlanKey, Storage};
 #[command(name = "git-cascade")]
 #[command(about = "Plan and apply cascade rebases across dependent Git branches")]
 pub struct Cli {
+    /// Command to run.
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Create a repository-local cascade plan rooted at an old anchor ref.
     Plan {
-        #[arg(long)]
+        /// Old anchor ref or commit-ish to snapshot before rewriting dependents.
+        #[arg(long, value_name = "REF")]
         anchor: String,
+        /// Overwrite an existing plan for the same anchor key.
         #[arg(long)]
         replace: bool,
     },
+    /// Replay planned dependent branches onto a replacement anchor.
     Apply {
-        #[arg(long)]
+        /// Old anchor key used when the plan was created.
+        #[arg(long, value_name = "REF")]
         old_anchor: String,
-        #[arg(long)]
+        /// Replacement ref or commit-ish for the old anchor boundary.
+        #[arg(long, value_name = "REF")]
         new_anchor: String,
+        /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
         strategy: Strategy,
+        /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
     },
+    /// List stored repository-local cascade plans by anchor key.
     List,
+    /// Print the stored plan for an anchor key.
     Show {
-        #[arg(long)]
+        /// Anchor key used when the plan was created.
+        #[arg(long, value_name = "REF")]
         anchor: String,
     },
+    /// Show the active cascade operation, if any.
     Status,
+    /// Abort the active cascade operation and clean temporary state.
     Abort,
+    /// Continue an active cascade operation after resolving conflicts.
     Continue,
+    /// Generate shell completion scripts.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 pub fn run() -> ExitCode {
@@ -76,7 +98,15 @@ where
         Command::Status => status(),
         Command::Abort => abort(),
         Command::Continue => continue_operation(),
+        Command::Completions { shell } => completions(shell),
     }
+}
+
+fn completions(shell: Shell) -> Result<()> {
+    let mut command = Cli::command();
+    generate(shell, &mut command, "git-cascade", &mut std::io::stdout());
+
+    Ok(())
 }
 
 fn continue_operation() -> Result<()> {

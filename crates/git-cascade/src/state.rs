@@ -88,7 +88,9 @@ pub struct NewAnchorState {
 #[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
 pub enum Strategy {
+    /// Preserve old fork points between dependent branches.
     PreserveForkPoints,
+    /// Replay each dependent branch onto its parent's rewritten tip.
     MoveToHeads,
 }
 

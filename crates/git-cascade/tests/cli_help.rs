@@ -15,7 +15,8 @@ fn cli_help_mentions_commands() {
             .and(predicate::str::contains("show"))
             .and(predicate::str::contains("status"))
             .and(predicate::str::contains("abort"))
-            .and(predicate::str::contains("continue")),
+            .and(predicate::str::contains("continue"))
+            .and(predicate::str::contains("completions")),
     );
 }
 
@@ -33,7 +34,11 @@ fn apply_help_mentions_strategy_and_dry_run() {
                 .and(predicate::str::contains("move-to-heads"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--old-anchor"))
-                .and(predicate::str::contains("--new-anchor")),
+                .and(predicate::str::contains("--new-anchor"))
+                .and(predicate::str::contains(
+                    "Replay planned dependent branches",
+                ))
+                .and(predicate::str::contains("Replacement ref or commit-ish")),
         );
 }
 
@@ -48,7 +53,38 @@ fn plan_help_mentions_anchor_and_replace() {
         .stdout(
             predicate::str::contains("--anchor")
                 .and(predicate::str::contains("--replace"))
-                .and(predicate::str::contains("--anchor")),
+                .and(predicate::str::contains("Old anchor ref or commit-ish")),
+        );
+}
+
+#[test]
+fn completions_help_mentions_shells() {
+    let repo = TestRepo::new();
+
+    repo.cascade()
+        .args(["completions", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Generate shell completion scripts")
+                .and(predicate::str::contains("bash"))
+                .and(predicate::str::contains("zsh"))
+                .and(predicate::str::contains("fish")),
+        );
+}
+
+#[test]
+fn completions_generate_bash_script() {
+    let repo = TestRepo::new();
+
+    repo.cascade()
+        .args(["completions", "bash"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("_git-cascade")
+                .and(predicate::str::contains("--old-anchor"))
+                .and(predicate::str::contains("completions")),
         );
 }
 

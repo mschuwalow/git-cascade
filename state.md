@@ -39,6 +39,8 @@ Implemented so far:
 - Apply only supports anchor-keyed plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
 - `git cascade plan --anchor <anchor-ref>` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
+- Command and flag help text exposed through Clap help output.
+- `git cascade completions <shell>` for shell completion script generation.
 - Real-Git integration test harness using temporary repositories.
 
 ## Current Plan Generation Behavior
@@ -95,6 +97,7 @@ Current tests include:
 - Real-Git integration tests for abort tolerating already-deleted worktree files.
 - Real-Git integration tests for `phase: deleting` state cleanup on status.
 - CLI help tests covering commands and apply strategy options.
+- CLI tests for shell completion help and Bash completion generation.
 - CLI invalid-input tests for missing `--anchor` and invalid `--strategy`.
 
 Verified commands:

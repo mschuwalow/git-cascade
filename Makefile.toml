@@ -10,11 +10,6 @@ dependencies = ["check-rustfmt", "check-clippy"]
 description = "Check Rust formatting when workspace crates exist."
 script_runner = "@shell"
 script = '''
-if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
-  echo "No workspace crates yet; skipping rustfmt."
-  exit 0
-fi
-
 cargo fmt --all -- --check
 '''
 
@@ -22,12 +17,7 @@ cargo fmt --all -- --check
 description = "Run clippy when workspace crates exist."
 script_runner = "@shell"
 script = '''
-if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
-  echo "No workspace crates yet; skipping clippy."
-  exit 0
-fi
-
-cargo clippy --workspace --all-targets --no-deps -- -D warnings
+cargo clippy --workspace --all-features --all-targets --no-deps -- -D warnings
 '''
 
 [tasks.ci]
@@ -44,11 +34,6 @@ dependencies = ["fix-clippy", "fix-rustfmt"]
 description = "Runs rustfmt and applies fixes when workspace crates exist."
 script_runner = "@shell"
 script = '''
-if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
-  echo "No workspace crates yet; skipping rustfmt."
-  exit 0
-fi
-
 cargo fmt --all
 '''
 
@@ -56,12 +41,7 @@ cargo fmt --all
 description = "Runs clippy and applies fixes when workspace crates exist."
 script_runner = "@shell"
 script = '''
-if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
-  echo "No workspace crates yet; skipping clippy."
-  exit 0
-fi
-
-cargo clippy --workspace --all-targets --no-deps --fix --allow-dirty --allow-staged -- -D warnings
+cargo clippy --workspace --all-features --all-targets --no-deps --fix --allow-dirty --allow-staged -- -D warnings
 '''
 
 [tasks.test]
@@ -69,10 +49,5 @@ clear = true
 description = "Run tests when workspace crates exist."
 script_runner = "@shell"
 script = '''
-if [ -z "$(find crates -name Cargo.toml -print -quit 2>/dev/null)" ]; then
-  echo "No workspace crates yet; skipping tests."
-  exit 0
-fi
-
-cargo test --workspace
+cargo test --workspace --features test-hooks
 '''
