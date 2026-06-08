@@ -318,7 +318,6 @@ The state file should contain enough information to resume, abort, diagnose stal
 
 ```yaml
 version: 1
-operation: apply
 phase: conflict
 plan_name: permissions-stack
 plan_id: "2026-06-08T14-00-00Z-agent-permissions"

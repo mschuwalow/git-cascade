@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::git::Git;
-use crate::state::{ApplyState, Operation, Phase, StateFile};
+use crate::state::{ApplyState, Phase, StateFile};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -19,7 +19,6 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
 
     let mut output = String::new();
     output.push_str("Active cascade operation:\n");
-    output.push_str(&format!("operation: {}\n", state.operation));
     output.push_str(&format!("phase: {}\n", state.phase));
     output.push_str(&format!("plan: {}\n", state.plan_name));
     output.push_str(&format!("plan-id: {}\n", state.plan_id));
@@ -55,12 +54,6 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
         ));
     };
     let mut state = state_file.read_state()?;
-    if state.operation != Operation::Apply {
-        return Err(Error::InvalidInvocation(format!(
-            "cannot abort unsupported operation `{}`",
-            state.operation
-        )));
-    }
 
     if state.phase != Phase::Deleting {
         state.phase = Phase::Deleting;
@@ -87,13 +80,6 @@ pub fn cleanup_state_artifacts(
     state_file: StateFile,
     state: &ApplyState,
 ) -> Result<()> {
-    if state.operation != Operation::Apply {
-        return Err(Error::InvalidInvocation(format!(
-            "cannot clean up unsupported operation `{}`",
-            state.operation
-        )));
-    }
-
     let worktree = worktree_path(storage, state);
     if worktree.exists() {
         let _ = Git::new(&worktree).try_cherry_pick_abort();

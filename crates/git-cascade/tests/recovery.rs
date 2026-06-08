@@ -39,7 +39,6 @@ fn status_reports_conflict_state() {
 
     repo.cascade().arg("status").assert().success().stdout(
         predicate::str::contains("Active cascade operation:")
-            .and(predicate::str::contains("operation: apply"))
             .and(predicate::str::contains("phase: conflict"))
             .and(predicate::str::contains("plan: stack"))
             .and(predicate::str::contains("new-tip: pr-1 ->"))

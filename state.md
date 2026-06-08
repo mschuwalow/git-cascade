@@ -21,7 +21,7 @@ Implemented so far:
 - Mutating `git cascade apply <name> --new-tip <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
-- Active apply state uses typed enum values for operation, phase, and strategy, and stores the plan name as a required `PlanName`.
+- Active apply state uses typed enum values for phase and strategy, and stores the plan name as a required `PlanName`.
 - Plan IDs are UUIDs.
 - Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.

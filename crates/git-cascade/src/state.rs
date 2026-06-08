@@ -15,7 +15,6 @@ use crate::{Error, Result};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyState {
     pub version: u32,
-    pub operation: Operation,
     pub phase: Phase,
     pub plan_name: PlanName,
     pub plan_id: String,
@@ -31,26 +30,6 @@ pub struct ApplyState {
     pub extra_commits: BTreeMap<String, Vec<String>>,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Operation {
-    Apply,
-}
-
-impl Operation {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Apply => "apply",
-        }
-    }
-}
-
-impl std::fmt::Display for Operation {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,7 +233,6 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
 
     Ok(ApplyState {
         version: 1,
-        operation: Operation::Apply,
         phase: Phase::Replay,
         plan_name: input.plan_name.clone(),
         plan_id: input.plan_id.to_owned(),

@@ -8,8 +8,7 @@ use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
 use crate::recovery;
 use crate::state::{
-    ApplyState, ApplyStateInput, CurrentState, Operation, Phase, StateFile, Strategy,
-    initial_apply_state,
+    ApplyState, ApplyStateInput, CurrentState, Phase, StateFile, Strategy, initial_apply_state,
 };
 use crate::storage::{PlanName, Storage};
 use crate::test_hooks;
@@ -43,6 +42,13 @@ struct ActualReplayContext<'a> {
     mappings: &'a BTreeMap<String, String>,
     new_tip: &'a str,
     strategy: Strategy,
+}
+
+struct ReplayProgress<'a> {
+    state_file: &'a mut StateFile,
+    state: &'a mut ApplyState,
+    mappings: &'a mut BTreeMap<String, String>,
+    selected_bases: &'a mut HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -158,7 +164,7 @@ pub fn dry_run(
 pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<()> {
     validate_plan_for_apply(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    let new_tip_ref = git.symbolic_full_name(&options.new_tip_input)?;
+    let new_tip_input_was_ref = git.symbolic_full_name(&options.new_tip_input)?.is_some();
     let ordered = topological_order(plan)?;
     ensure_target_branches_not_checked_out(git, &ordered)?;
     let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
@@ -170,20 +176,15 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         .iter()
         .map(|(branch, replay)| (branch.clone(), replay.extra_commits.clone()))
         .collect::<BTreeMap<_, _>>();
-    let nodes = plan
-        .nodes
-        .iter()
-        .map(|node| (node.branch.as_str(), node))
-        .collect::<HashMap<_, _>>();
     let mut mappings = BTreeMap::new();
     mappings.insert(plan.source.old_tip.clone(), new_tip.clone());
     let worktree = storage.worktrees_dir().join(&plan.plan_id);
-    let mut state = initial_apply_state(ApplyStateInput {
+    let state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip_input: &options.new_tip_input,
         new_tip_resolved: &new_tip,
-        new_tip_input_was_ref: new_tip_ref.is_some(),
+        new_tip_input_was_ref,
         strategy: options.strategy,
         pending_branches: ordered.clone(),
         branch_tips: branch_tips.clone(),
@@ -191,107 +192,11 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         mappings: mappings.clone(),
         worktree: worktree.display().to_string(),
     })?;
-    let mut state_file = StateFile::create(storage, &state)?;
+    let state_file = StateFile::create(storage, &state)?;
 
     storage.ensure_worktrees_dir()?;
     cleanup_stale_worktree(git, &worktree)?;
-
-    let worktree_git = Git::new(&worktree);
-    let mut selected_bases = HashMap::<String, String>::new();
-    let mut temp_tips = HashMap::<String, String>::new();
-    let mut temp_refs = Vec::<String>::new();
-    let mut worktree_created = false;
-
-    for (index, branch) in ordered.iter().enumerate() {
-        let node = nodes
-            .get(branch.as_str())
-            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
-        let base = actual_replay_base(
-            node,
-            ActualReplayContext {
-                nodes: &nodes,
-                selected_bases: &selected_bases,
-                temp_tips: &temp_tips,
-                mappings: &mappings,
-                new_tip: &new_tip,
-                strategy: options.strategy,
-            },
-        )?;
-        selected_bases.insert(node.branch.clone(), base.clone());
-        mappings.insert(
-            node.old_base()
-                .expect("dependent node has old base")
-                .to_owned(),
-            base.clone(),
-        );
-        state.mappings = mappings.clone();
-        state.pending.branches = ordered[index..].to_vec();
-        state_file.write_state(&mut state)?;
-
-        if index == 0 {
-            git.worktree_add_detached(&worktree, &base)?;
-            worktree_created = true;
-        } else {
-            worktree_git.reset_hard(&base)?;
-        }
-
-        for commit in replay_commits(node, &branch_replays) {
-            state.phase = Phase::Replay;
-            state.current = Some(CurrentState {
-                branch: node.branch.clone(),
-                commit: commit.clone(),
-                worktree: worktree.display().to_string(),
-            });
-            state_file.write_state(&mut state)?;
-
-            if let Err(error) = worktree_git.cherry_pick(&commit) {
-                state.phase = Phase::Conflict;
-                state_file.write_state(&mut state)?;
-                return Err(Error::ApplyStopped {
-                    branch: node.branch.clone(),
-                    commit: commit.clone(),
-                    worktree: worktree.clone(),
-                    message: error.to_string(),
-                });
-            }
-            mappings.insert(commit.clone(), worktree_git.head_oid()?);
-            state.mappings = mappings.clone();
-            state_file.write_state(&mut state)?;
-        }
-
-        let rewritten_tip = worktree_git.head_oid()?;
-        let temp_ref = temp_ref(plan, &node.branch);
-        git.update_ref(&temp_ref, &rewritten_tip)?;
-        temp_tips.insert(node.branch.clone(), rewritten_tip);
-        temp_refs.push(temp_ref);
-        state.completed.temp_refs = temp_refs.clone();
-        state.current = None;
-        state.pending.branches = ordered[index + 1..].to_vec();
-        state_file.write_state(&mut state)?;
-    }
-
-    state.phase = Phase::FinalUpdate;
-    state_file.write_state(&mut state)?;
-    ensure_target_branches_not_checked_out(git, &ordered)?;
-    test_hooks::run("before-final-update")?;
-    git.update_ref_transaction(&final_ref_transaction(
-        &ordered,
-        &nodes,
-        &temp_tips,
-        &branch_tips,
-        new_tip_ref.as_deref(),
-        &new_tip,
-    )?)?;
-
-    if worktree_created || !temp_refs.is_empty() || storage.state_path().exists() {
-        recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
-        storage.delete_plan(options.plan_name)?;
-    } else {
-        state_file.remove()?;
-        storage.delete_plan(options.plan_name)?;
-    }
-
-    Ok(())
+    run_apply_state(git, storage, plan, state_file, state)
 }
 
 pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
@@ -303,12 +208,6 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
         return Err(Error::InvalidInvocation(
             "no active cascade operation".to_owned(),
         ));
-    }
-    if state.operation != Operation::Apply {
-        return Err(Error::InvalidInvocation(format!(
-            "cannot continue unsupported operation `{}`",
-            state.operation
-        )));
     }
     if state.phase != Phase::Conflict {
         return Err(Error::InvalidInvocation(format!(
@@ -350,27 +249,50 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     state.phase = Phase::Replay;
     state_file.write_state(&mut state)?;
 
-    continue_replay_after_resolved_commit(
-        git,
-        storage,
-        &plan,
-        state_file,
-        state,
-        &current.branch,
-        &current.commit,
-    )
+    run_apply_state(git, storage, &plan, state_file, state)
 }
 
-fn continue_replay_after_resolved_commit(
+fn run_apply_state(
     git: &Git,
     storage: &Storage,
     plan: &Plan,
     mut state_file: StateFile,
     mut state: ApplyState,
-    current_branch: &str,
-    resolved_commit: &str,
 ) -> Result<()> {
-    let ordered = topological_order(plan)?;
+    loop {
+        match state.phase {
+            Phase::Replay => {
+                replay_pending_branches(git, plan, &mut state_file, &mut state)?;
+                state.phase = Phase::FinalUpdate;
+                state.current = None;
+                state_file.write_state(&mut state)?;
+            }
+            Phase::FinalUpdate => {
+                finish_final_update(git, plan, &state)?;
+                let plan_name = state.plan_name.clone();
+                recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
+                storage.delete_plan(plan_name)?;
+                return Ok(());
+            }
+            Phase::Conflict => {
+                return Err(Error::InvalidInvocation(
+                    "cannot advance cascade operation with unresolved conflicts; resolve them and run git cascade continue".to_owned(),
+                ));
+            }
+            Phase::Deleting => {
+                recovery::cleanup_state_artifacts(git, storage, state_file, &state)?;
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn replay_pending_branches(
+    git: &Git,
+    plan: &Plan,
+    state_file: &mut StateFile,
+    state: &mut ApplyState,
+) -> Result<()> {
     let nodes = plan
         .nodes
         .iter()
@@ -382,69 +304,40 @@ fn continue_replay_after_resolved_commit(
     let mut temp_refs = state.completed.temp_refs.clone();
     let mut temp_tips = temp_tips_from_refs(git, &temp_refs)?;
     let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
-    let current_index = ordered
-        .iter()
-        .position(|branch| branch == current_branch)
-        .ok_or_else(|| {
-            Error::InvalidPlan(format!("current branch `{current_branch}` is not in plan"))
-        })?;
 
-    for (index, branch) in ordered.iter().enumerate().skip(current_index) {
+    while let Some(branch) = state.pending.branches.first().cloned() {
         let node = nodes
             .get(branch.as_str())
-            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
-
-        let start_commit_index = if branch == current_branch {
-            replay_commits_from_extra(node, &state.extra_commits)
-                .iter()
-                .position(|commit| commit == resolved_commit)
-                .ok_or_else(|| {
-                    Error::InvalidPlan(format!(
-                        "current commit `{resolved_commit}` is not part of branch `{current_branch}`"
-                    ))
-                })?
-                + 1
-        } else {
-            let base = actual_replay_base(
-                node,
-                ActualReplayContext {
-                    nodes: &nodes,
-                    selected_bases: &selected_bases,
-                    temp_tips: &temp_tips,
-                    mappings: &mappings,
-                    new_tip: &state.new_tip.resolved,
-                    strategy: state.strategy,
-                },
-            )?;
-            selected_bases.insert(node.branch.clone(), base.clone());
-            mappings.insert(
-                node.old_base()
-                    .expect("dependent node has old base")
-                    .to_owned(),
-                base.clone(),
-            );
-            state.mappings = mappings.clone();
-            state.pending.branches = ordered[index..].to_vec();
-            state_file.write_state(&mut state)?;
-            worktree_git.reset_hard(&base)?;
-            0
+            .ok_or_else(|| Error::InvalidPlan(format!("unknown pending branch `{branch}`")))?;
+        let mut progress = ReplayProgress {
+            state_file,
+            state,
+            mappings: &mut mappings,
+            selected_bases: &mut selected_bases,
         };
+        let start_commit_index = prepare_branch_replay(
+            git,
+            &worktree_git,
+            &worktree,
+            node,
+            &nodes,
+            &temp_tips,
+            &mut progress,
+        )?;
 
-        for commit in replay_commits_from_extra(node, &state.extra_commits)
-            .iter()
-            .skip(start_commit_index)
-        {
+        let commits = replay_commits_from_extra(node, &state.extra_commits);
+        for commit in commits.iter().skip(start_commit_index) {
             state.phase = Phase::Replay;
             state.current = Some(CurrentState {
                 branch: node.branch.clone(),
                 commit: commit.clone(),
                 worktree: worktree.display().to_string(),
             });
-            state_file.write_state(&mut state)?;
+            state_file.write_state(state)?;
 
             if let Err(error) = worktree_git.cherry_pick(commit) {
                 state.phase = Phase::Conflict;
-                state_file.write_state(&mut state)?;
+                state_file.write_state(state)?;
                 return Err(Error::ApplyStopped {
                     branch: node.branch.clone(),
                     commit: commit.clone(),
@@ -454,7 +347,7 @@ fn continue_replay_after_resolved_commit(
             }
             mappings.insert(commit.clone(), worktree_git.head_oid()?);
             state.mappings = mappings.clone();
-            state_file.write_state(&mut state)?;
+            state_file.write_state(state)?;
         }
 
         let rewritten_tip = worktree_git.head_oid()?;
@@ -466,26 +359,89 @@ fn continue_replay_after_resolved_commit(
         }
         state.completed.temp_refs = temp_refs.clone();
         state.current = None;
-        state.pending.branches = ordered[index + 1..].to_vec();
-        state_file.write_state(&mut state)?;
+        remove_pending_branch(state, &branch)?;
+        state_file.write_state(state)?;
     }
 
-    state.phase = Phase::FinalUpdate;
-    state_file.write_state(&mut state)?;
-    ensure_target_branches_not_checked_out(git, &ordered)?;
-    let new_tip_ref = if state.new_tip.input_was_ref {
-        Some(
-            git.symbolic_full_name(&state.new_tip.input)?
-                .ok_or_else(|| {
-                    Error::InvalidInvocation(format!(
-                        "new tip `{}` no longer resolves to a ref",
-                        state.new_tip.input
-                    ))
-                })?,
-        )
+    Ok(())
+}
+
+fn prepare_branch_replay(
+    git: &Git,
+    worktree_git: &Git,
+    worktree: &std::path::Path,
+    node: &Node,
+    nodes: &HashMap<&str, &Node>,
+    temp_tips: &HashMap<String, String>,
+    progress: &mut ReplayProgress<'_>,
+) -> Result<usize> {
+    if let Some(current) = &progress.state.current {
+        if current.branch != node.branch {
+            return Err(Error::InvalidPlan(format!(
+                "current branch `{}` is not the next pending branch `{}`",
+                current.branch, node.branch
+            )));
+        }
+        if !progress.mappings.contains_key(&current.commit) {
+            return Err(Error::InvalidPlan(format!(
+                "current commit `{}` for branch `{}` has no rewritten mapping",
+                current.commit, current.branch
+            )));
+        }
+
+        return replay_commits_from_extra(node, &progress.state.extra_commits)
+            .iter()
+            .position(|commit| commit == &current.commit)
+            .map(|index| index + 1)
+            .ok_or_else(|| {
+                Error::InvalidPlan(format!(
+                    "current commit `{}` is not part of branch `{}`",
+                    current.commit, current.branch
+                ))
+            });
+    }
+
+    let base = actual_replay_base(
+        node,
+        ActualReplayContext {
+            nodes,
+            selected_bases: progress.selected_bases,
+            temp_tips,
+            mappings: progress.mappings,
+            new_tip: &progress.state.new_tip.resolved,
+            strategy: progress.state.strategy,
+        },
+    )?;
+    progress
+        .selected_bases
+        .insert(node.branch.clone(), base.clone());
+    progress.mappings.insert(
+        node.old_base().expect("node has old base").to_owned(),
+        base.clone(),
+    );
+    progress.state.mappings = progress.mappings.clone();
+    progress.state.phase = Phase::Replay;
+    progress.state_file.write_state(progress.state)?;
+
+    if worktree.exists() {
+        worktree_git.reset_hard(&base)?;
     } else {
-        None
-    };
+        git.worktree_add_detached(worktree, &base)?;
+    }
+
+    Ok(0)
+}
+
+fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()> {
+    let ordered = topological_order(plan)?;
+    let nodes = plan
+        .nodes
+        .iter()
+        .map(|node| (node.branch.as_str(), node))
+        .collect::<HashMap<_, _>>();
+    let temp_tips = temp_tips_from_refs(git, &state.completed.temp_refs)?;
+    ensure_target_branches_not_checked_out(git, &ordered)?;
+    let new_tip_ref = new_tip_ref_for_state(git, state)?;
     test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
@@ -494,12 +450,40 @@ fn continue_replay_after_resolved_commit(
         &state.branch_tips,
         new_tip_ref.as_deref(),
         &state.new_tip.resolved,
-    )?)?;
+    )?)
+}
 
-    recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
-    let plan_name = state.plan_name.clone();
-    storage.delete_plan(plan_name)?;
+fn new_tip_ref_for_state(git: &Git, state: &ApplyState) -> Result<Option<String>> {
+    if !state.new_tip.input_was_ref {
+        return Ok(None);
+    }
 
+    let resolved = git.resolve_commit(&state.new_tip.input)?;
+    if resolved != state.new_tip.resolved {
+        return Err(Error::InvalidInvocation(format!(
+            "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`",
+            state.new_tip.input, state.new_tip.resolved
+        )));
+    }
+
+    git.symbolic_full_name(&state.new_tip.input)?.map_or_else(
+        || {
+            Err(Error::InvalidInvocation(format!(
+                "new tip `{}` no longer resolves to a ref",
+                state.new_tip.input
+            )))
+        },
+        |name| Ok(Some(name)),
+    )
+}
+
+fn remove_pending_branch(state: &mut ApplyState, branch: &str) -> Result<()> {
+    if state.pending.branches.first().map(String::as_str) != Some(branch) {
+        return Err(Error::InvalidPlan(format!(
+            "completed branch `{branch}` is not first in pending state"
+        )));
+    }
+    state.pending.branches.remove(0);
     Ok(())
 }
 
