@@ -1,0 +1,849 @@
+# Cascade Rebase Plan
+
+## Tool Name
+
+The proposed CLI name is `git-cascade`.
+
+When installed on `PATH`, Git exposes executables named `git-<command>` as Git subcommands, so users invoke it as:
+
+```bash
+git cascade <subcommand>
+```
+
+This keeps the UX Git-native while leaving the actual binary name unambiguous for packaging.
+
+## Purpose
+
+A cascade rebase plan is an immutable snapshot of a dependent branch stack captured before the stack is disrupted by a manual rebase, merge, squash, or other history mutation.
+
+The plan exists so the tool does not need to infer the old stack structure after refs have already been moved. It records the old branch tips, old parent-child relationships, and exact per-branch commit ranges while that information is still reliable.
+
+The intended workflow is:
+
+```bash
+git cascade plan my-branch --name permissions-stack
+git rebase --onto origin/main 3e1e56f91cad6cc45281f86849ee9e727ccac340
+git cascade apply --name permissions-stack --new-anchor <new-anchor>
+```
+
+The user manually rebases one branch. The tool then uses the saved plan to cascade that rewrite through all dependent branches.
+
+## Problem
+
+Stacked pull requests often look like this:
+
+```text
+main
+  \
+   pr-1
+     \
+      pr-2
+        \
+         pr-3
+```
+
+After `pr-1` is merged, rebased, squash-merged, or otherwise rewritten, the remaining dependent branches still point at the old history:
+
+```text
+main
+  \
+   new-pr-1-tip
+
+old-pr-1-tip
+  \
+   pr-2
+     \
+      pr-3
+```
+
+At that point, normal Git ancestry may no longer contain enough information to safely infer the original stack. The purpose of the plan is to capture the old structure before this happens.
+
+## Core Idea
+
+The process is intentionally split into two phases:
+
+1. Plan generation: read-only Git inspection before mutation.
+2. Plan application: destructive branch updates after the user manually rewrites the anchor branch.
+
+The plan describes transformations over commits, not branches. Branch names are used as entry points, output targets, and safety checks. They are not used during apply to rediscover history.
+
+## Primary Workflow
+
+### 1. Create The Plan
+
+```bash
+git cascade plan my-branch --name permissions-stack
+```
+
+This command is read-only. It inspects the current Git repository and captures the cascade rooted at `my-branch`.
+
+The plan is stored in the repository's Git common directory under the supplied name. Users do not normally pass plan files around manually.
+
+The generated plan records:
+
+- The anchor branch name.
+- The anchor branch tip before mutation.
+- The old base of the anchor branch.
+- Every dependent branch in the cascade.
+- Each dependent branch's old tip.
+- Each dependent branch's old base.
+- Each dependent branch's exact owned commits, oldest to newest.
+- Explicit parent-child dependency edges.
+
+No refs are updated. No rebase is executed. No temporary branches are created.
+
+### 2. Rebase The Anchor Manually
+
+```bash
+git switch my-branch
+git rebase --onto origin/main 3e1e56f91cad6cc45281f86849ee9e727ccac340
+```
+
+The user performs the anchor rewrite manually. This is intentionally outside the plan generation phase.
+
+This step may break the old relationships between the anchor and its dependent branches. That is acceptable because the old relationships have already been captured in the plan.
+
+### 3. Apply The Plan
+
+```bash
+git cascade apply --name permissions-stack --new-anchor <new-anchor>
+```
+
+Apply always requires an explicit replacement anchor. The tool resolves `--new-anchor` exactly once and treats the resolved commit as the replacement for the old anchor boundary.
+
+Then it replays each dependent branch's saved commit range onto the rewritten equivalent of its original fork point.
+
+For dependencies between non-anchor branches, the default behavior preserves the old topology exactly: if a child branch originally forked from the middle of its parent branch, the rewritten child forks from the corresponding rewritten parent commit.
+
+If the user wants the simpler behavior of moving every branch to the tip of its rewritten parent, they can pass `--move-to-heads`.
+
+For example:
+
+```text
+new-my-branch-tip
+  \
+   rewritten-pr-2
+     \
+      rewritten-pr-3
+```
+
+The apply step does not rebase the anchor branch. The anchor branch was already rewritten manually.
+
+## Apply Modes
+
+### Required Replacement Anchor
+
+The replacement anchor is always explicit:
+
+```bash
+git cascade apply --name permissions-stack --new-anchor origin/main
+```
+
+or:
+
+```bash
+git cascade apply --name permissions-stack --new-anchor <commit-sha>
+```
+
+When `--new-anchor` is provided, the tool resolves that ref or commit exactly once at the start of execution and uses the resolved object ID as the new anchor tip.
+
+There is no implicit fallback to the current tip of the original anchor branch. If the desired new anchor is the manually rebased anchor branch, pass it explicitly:
+
+```bash
+git cascade apply --name permissions-stack --new-anchor my-branch
+```
+
+### Move To Heads
+
+The default apply mode preserves fork points between non-anchor branches.
+
+The `--move-to-heads` flag opts into a simpler strategy:
+
+```bash
+git cascade apply --name permissions-stack --new-anchor my-branch --move-to-heads
+```
+
+With this flag, every dependent branch is replayed onto the rewritten tip of its parent, even if it originally forked from an intermediate parent commit.
+
+## Concepts
+
+### Anchor Branch
+
+The anchor branch is the branch selected when creating the plan. The user is expected to manually rebase, replace, or otherwise move this branch before applying the plan.
+
+The apply step does not rewrite the anchor branch.
+
+### Dependent Branch
+
+A dependent branch is a branch whose old base was some commit reachable from another branch in the captured cascade.
+
+During apply, its saved commits are replayed onto the selected rewritten base for its parent relationship.
+
+### Old Tip
+
+The old tip is the exact branch tip at plan creation time.
+
+For dependent branches, this is used as the expected old value during the final ref update. This prevents the tool from overwriting work added after the plan was created.
+
+### Old Base
+
+The old base is the exact commit before a branch's owned commits begin.
+
+For a dependent branch, `old_base` must be reachable from the old tip of its declared parent, but it does not need to equal the parent's old tip. This supports branches that were created from an intermediate parent commit.
+
+Version 1 preserves fork points between non-anchor branches by default. If a dependent branch originally forked from an intermediate commit in another dependent branch, the apply phase replays it onto the rewritten equivalent of that intermediate commit.
+
+The `--move-to-heads` flag opts into the simpler strategy of replaying every dependent branch onto the rewritten tip of its parent.
+
+### Commits
+
+`commits` is the exact list of commits owned by a branch, ordered oldest to newest.
+
+Version 1 supports linear commit ranges only. Merge commits are rejected unless a later schema version defines merge replay semantics.
+
+## Plan File Contract
+
+The plan is machine-readable and immutable after creation.
+
+In normal use, plans are named and stored inside the repository's Git common directory. A path-based `--plan <path>` mode may exist for import, export, tests, and debugging, but it is not the primary UX.
+
+Important rules:
+
+- All commit identifiers are full object IDs, not symbolic refs.
+- Dependent branch ranges are stored as explicit commit lists.
+- Dependency edges are explicit.
+- Execution order is derived from the dependency graph.
+- Apply does not use merge-base inference to rediscover the old stack.
+- The plan does not store the new base by default.
+
+The new base is intentionally not stored because the plan is created before the manual rewrite happens. The replacement anchor is supplied explicitly with `--new-anchor` during apply.
+
+## Repository Storage
+
+`git-cascade` stores repository-local data under the Git common directory:
+
+```bash
+git rev-parse --git-common-dir
+```
+
+Use the Git common directory rather than assuming `.git` directly because linked worktrees have per-worktree `.git` files while refs and shared repository data live in the common directory.
+
+Repository-local storage layout:
+
+```text
+<git-common-dir>/cascade/
+  plans/
+    permissions-stack.yaml
+  state.yaml
+  worktrees/
+    permissions-stack/
+```
+
+`plans/<name>.yaml` stores immutable named plans.
+
+`state.yaml` stores the single active cascade operation and acts as the repository-wide cascade lock.
+
+`worktrees/<name>/` stores temporary Git worktrees used for isolated replay and conflict resolution.
+
+### Named Plans
+
+Named plans are the default interface:
+
+```bash
+git cascade plan my-branch --name permissions-stack
+git cascade apply --name permissions-stack --new-anchor my-branch
+```
+
+Plan names must be safe path components and safe ref namespace components. Version 1 should accept names made from ASCII letters, digits, `.`, `_`, and `-`, and should reject names containing path separators, whitespace, control characters, `..`, or Git ref-invalid sequences.
+
+Creating a plan:
+
+- Writes `<git-common-dir>/cascade/plans/<name>.yaml`.
+- Refuses to overwrite an existing plan unless `--replace` is passed.
+- Refuses to run while `state.yaml` exists.
+- Stores a stable `plan_id` inside the plan.
+- Does not store apply-time behavior such as `--move-to-heads`.
+
+Useful plan management commands:
+
+```bash
+git cascade list
+git cascade show --name permissions-stack
+git cascade export --name permissions-stack > permissions-stack.yaml
+git cascade delete --name permissions-stack
+```
+
+The path-based mode remains available for advanced cases:
+
+```bash
+git cascade apply --plan ./permissions-stack.yaml --new-anchor my-branch
+```
+
+When `--plan` is used, the command reads that file directly instead of loading a named plan from `<git-common-dir>/cascade/plans/`.
+
+### State As Lock
+
+Only one cascade flow may be active in a repository at a time. The active operation state file is also the lock file:
+
+```text
+<git-common-dir>/cascade/state.yaml
+```
+
+If `state.yaml` exists, `git-cascade` must refuse to start any new mutating cascade operation.
+
+Allowed while `state.yaml` exists:
+
+- `git cascade status`
+- `git cascade continue`
+- `git cascade abort`
+- Read-only plan inspection commands such as `list` and `show`
+
+Refused while `state.yaml` exists:
+
+- `git cascade plan ...`
+- `git cascade apply ...`
+- `git cascade delete ...`
+- Any command that creates, updates, or deletes plans, refs, temporary refs, or worktrees outside the active operation
+
+`state.yaml` must be created atomically when an apply operation starts. The implementation should use exclusive create semantics so two processes cannot both acquire the lock.
+
+The state file should contain enough information to resume, abort, diagnose stale state, and avoid recomputing apply-time choices:
+
+```yaml
+version: 1
+operation: apply
+phase: conflict
+plan_name: permissions-stack
+plan_id: "2026-06-08T14-00-00Z-agent-permissions"
+started_at: "2026-06-08T14:00:00Z"
+updated_at: "2026-06-08T14:05:12Z"
+pid: 12345
+
+new_anchor:
+  input: my-branch
+  resolved: "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+  input_was_ref: true
+
+strategy:
+  move_to_heads: false
+
+current:
+  branch: agent-permissions-9
+  commit: "3333333333333333333333333333333333333333"
+  worktree: "<git-common-dir>/cascade/worktrees/permissions-stack"
+
+completed:
+  temp_refs:
+    - refs/cascade/tmp/2026-06-08T14-00-00Z-agent-permissions/agent-permissions-8
+
+mappings:
+  "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42": "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+  "3333333333333333333333333333333333333333": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+pending:
+  branches:
+    - agent-permissions-10
+```
+
+Stale state should be handled conservatively. A recovery command may exist, but it should verify that no recorded process or Git sequencer operation is still active before removing `state.yaml`.
+
+## Plan Schema
+
+The examples below use YAML, but the same schema could be serialized as JSON if desired.
+
+```yaml
+version: 1
+plan_id: "2026-06-08T14-00-00Z-agent-permissions"
+generated_at: "2026-06-08T14:00:00Z"
+
+repository:
+  git_dir: ".git"
+  head_at_generation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+source:
+  anchor_branch: "agent-permissions-8"
+  anchor_old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
+  anchor_old_base: "abf07b5ab6e08128a90473701de36f410f621499"
+  suggested_manual_rebase_boundary: "abf07b5ab6e08128a90473701de36f410f621499"
+
+nodes:
+  - branch: "agent-permissions-8"
+    role: anchor
+    parent: null
+    old_base: "abf07b5ab6e08128a90473701de36f410f621499"
+    old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
+    commits:
+      - "1111111111111111111111111111111111111111"
+      - "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
+
+  - branch: "agent-permissions-9"
+    role: dependent
+    parent: "agent-permissions-8"
+    old_base: "1111111111111111111111111111111111111111"
+    old_tip: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
+    commits:
+      - "3333333333333333333333333333333333333333"
+      - "5b58f121371d5e79ab4c769bbe8c7867958f939a"
+
+  - branch: "agent-permissions-10"
+    role: dependent
+    parent: "agent-permissions-9"
+    old_base: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
+    old_tip: "7777777777777777777777777777777777777777"
+    commits:
+      - "5555555555555555555555555555555555555555"
+      - "7777777777777777777777777777777777777777"
+
+dependencies:
+  - parent: "agent-permissions-8"
+    child: "agent-permissions-9"
+  - parent: "agent-permissions-9"
+    child: "agent-permissions-10"
+```
+
+### Required Top-Level Fields
+
+`version` is the plan schema version. This document defines version 1.
+
+`plan_id` is a stable unique identifier used for temporary ref namespaces.
+
+`generated_at` is the RFC 3339 timestamp when the plan was created.
+
+`repository` contains optional diagnostic metadata. It must not be required for correctness because plans should not depend on absolute paths.
+
+`source` describes the anchor branch and its old state.
+
+`nodes` contains the captured branch graph. It must include exactly one anchor node.
+
+`dependencies` contains explicit parent-child DAG edges.
+
+## Plan Generation
+
+```bash
+git cascade plan <anchor-branch> --name <plan-name>
+```
+
+Plan generation is a read-only phase.
+
+It stores the generated plan at `<git-common-dir>/cascade/plans/<plan-name>.yaml`.
+
+Allowed Git operations include:
+
+- `git rev-parse`
+- `git rev-list`
+- `git merge-base`
+- `git for-each-ref`
+- `git show-ref`
+- `git log`
+
+Forbidden Git operations include:
+
+- `git rebase`
+- `git cherry-pick`
+- `git merge`
+- `git reset`
+- `git update-ref`
+- Branch creation.
+- Branch deletion.
+
+Generation rules:
+
+- Resolve all symbolic refs to full object IDs.
+- Reject merge commits unless merge replay is explicitly supported by a later schema version.
+- Reject a dependent branch if its `old_base` is not reachable from the `old_tip` of its declared parent.
+- For a non-anchor parent, prefer the parent that owns the dependent branch's `old_base`, not merely a descendant branch that contains it.
+- For default fork-point preservation, a dependent branch whose parent is non-anchor must have an `old_base` that is either the parent's `old_base` or one of the parent's saved commits.
+- Store commits in replay order, oldest to newest.
+- Produce the same plan for the same input Git state.
+
+## Manual Rebase Handoff
+
+After the plan is created, the user can freely rebase or otherwise replace the anchor branch.
+
+Expected manual commands:
+
+```bash
+git switch <anchor-branch>
+git rebase --onto <new-base> <anchor-old-base>
+```
+
+Apply requires `--new-anchor`. The tool resolves that ref or commit exactly once at the start of execution and uses the resolved commit as the replacement anchor.
+
+There is no implicit use of `refs/heads/<anchor-branch>`. If the manually rebased anchor branch is the desired replacement anchor, the user must pass that branch name explicitly.
+
+## Apply Execution
+
+```bash
+git cascade apply --name <plan-name> --new-anchor <ref-or-commit>
+```
+
+Apply-time behavior is selected by flags, not by defaults stored in the plan. Without `--move-to-heads`, apply preserves fork points between non-anchor branches. With `--move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.
+
+For path-based plans, use:
+
+```bash
+git cascade apply --plan <plan-file> --new-anchor <ref-or-commit>
+```
+
+High-level algorithm:
+
+1. Load and validate the plan schema.
+2. Refuse to start if `<git-common-dir>/cascade/state.yaml` already exists.
+3. Verify every saved old commit still exists in the object database.
+4. Require `--new-anchor` and resolve the replacement anchor tip once.
+5. Create `<git-common-dir>/cascade/state.yaml` atomically.
+6. Verify dependent branch refs still point at their saved `old_tip` values.
+7. Topologically order dependent nodes from parent to child.
+8. Initialize the old-to-new mapping for the anchor boundary.
+9. Select an apply-time base for each dependent node.
+10. Replay each dependent node's commits onto the selected apply-time base.
+11. Record an old-to-new mapping for every replayed commit.
+12. Store each replay result under `refs/cascade/tmp/<plan-id>/<branch>`.
+13. Atomically update all dependent branch refs from old tip to rewritten tip.
+14. Delete temporary refs after the final update succeeds.
+15. Delete `state.yaml` after successful completion.
+
+Replay base rules for the default apply mode:
+
+- A direct child of the anchor is replayed onto the replacement anchor tip.
+- A child of another dependent branch is replayed onto the rewritten equivalent of its original `old_base`.
+- The rewritten equivalent is found from the old-to-new commit map produced while replaying the parent branch.
+- If the child's `old_base` equals the parent's `old_base`, the child is replayed onto the parent's selected apply-time base.
+- If the child's `old_base` is one of the parent's saved commits, the child is replayed onto the rewritten commit produced from that old commit.
+
+Replay base rules for `--move-to-heads`:
+
+- A direct child of the anchor is replayed onto the replacement anchor tip.
+- A child of another dependent branch is replayed onto `refs/cascade/tmp/<plan-id>/<parent-branch>`.
+
+The `--move-to-heads` strategy ignores the dependent branch's original offset within the parent during apply. The original `old_base` is still required for planning and validation because it defines which commits belong to the dependent branch.
+
+Example:
+
+```text
+old parent:        A---B---C
+                       \
+old dependent:          D---E
+
+new parent:        A'--B'--C'
+                       \
+new dependent:          D'--E'
+```
+
+In this example, the dependent branch originally forked from `B`, so default apply replays it onto `B'`.
+
+With `--move-to-heads`, the same branch is replayed onto `C'` instead:
+
+```text
+new parent:        A'--B'--C'
+                           \
+new dependent:              D'--E'
+```
+
+## Replay Mechanism
+
+Apply should not run `git rebase` on the real target branch refs.
+
+Instead, it should use a detached HEAD or temporary worktree at the computed new base, cherry-pick the saved commits in order, and write the result to a temporary ref.
+
+## Old-To-New Commit Mapping
+
+The default apply mode requires an apply-time map from old commits to rewritten commits.
+
+The map is built as replay progresses:
+
+- The replacement anchor maps from `source.anchor_old_tip` to the resolved `--new-anchor` commit.
+- For each dependent node, the selected apply-time base maps from `node.old_base` to the commit used as the replay base.
+- After each saved commit is replayed, the old commit ID maps to the newly created commit ID.
+- Descendant branches use this map to find the rewritten equivalent of their `old_base`.
+
+Example mapping for a preserved fork point:
+
+```text
+old parent:        A---B---C
+                       \
+old dependent:          D---E
+
+mapping:
+  A -> A'
+  B -> B'
+  C -> C'
+
+new parent:        A'--B'--C'
+                       \
+new dependent:          D'--E'
+```
+
+For a non-anchor parent, default apply must fail before replaying the child if the child's `old_base` cannot be mapped to a rewritten commit. That indicates the plan did not capture enough information to preserve topology exactly.
+
+When `--move-to-heads` is used, descendants do not need old fork-point mappings. They always use the rewritten tip of their parent.
+
+Temporary refs use this namespace:
+
+```text
+refs/cascade/tmp/<plan-id>/
+```
+
+Example temporary refs:
+
+```text
+refs/cascade/tmp/2026-06-08T14-00-00Z-agent-permissions/agent-permissions-9
+refs/cascade/tmp/2026-06-08T14-00-00Z-agent-permissions/agent-permissions-10
+```
+
+Temporary refs are deleted after success. On conflict or failure, they are kept by default so the user can inspect or resume the operation.
+
+## Final Ref Update
+
+Permanent dependent branch refs must not be updated one at a time.
+
+Use a single `git update-ref --stdin` transaction with expected old values:
+
+```text
+start
+verify <new-anchor-ref> <resolved-anchor-tip>
+update refs/heads/agent-permissions-9 <new-tip-9> 5b58f121371d5e79ab4c769bbe8c7867958f939a
+update refs/heads/agent-permissions-10 <new-tip-10> 7777777777777777777777777777777777777777
+prepare
+commit
+```
+
+Requirements:
+
+- All dependent refs are updated in one prepared transaction.
+- Each update includes the expected `old_tip` from the plan.
+- If `--new-anchor` was a ref, verify it still points at the resolved replacement tip.
+- No dependent branch ref is updated if any expected old value does not match.
+
+## Validation
+
+Before replay:
+
+- The plan version is supported.
+- `plan_id` is present and safe for use in a ref namespace.
+- `--new-anchor` is present and resolves to a commit.
+- The selected apply strategy is either the default fork-point-preserving mode or `--move-to-heads`.
+- All `old_base`, `old_tip`, and `commits` objects exist locally.
+- The dependency graph is acyclic.
+- Every dependency references known nodes.
+- Exactly one anchor node exists.
+- Every dependent node has a parent.
+- Every dependent `old_base` is reachable from its parent `old_tip`.
+- Every dependent commit list matches `old_base..old_tip`.
+- In the default fork-point-preserving mode, every non-anchor child `old_base` is mappable through its parent's replay.
+- Every dependent branch ref still equals `old_tip`, unless an explicit branch mapping override is supplied.
+
+Before final ref update:
+
+- Every dependent node has a temporary rewritten tip.
+- Every temporary rewritten tip exists.
+- Every dependent branch ref still equals `old_tip`.
+- The `--new-anchor` ref still equals the resolved replacement tip when the replacement anchor was a ref.
+
+## Atomicity And Safety
+
+### Branch Ref Atomicity
+
+Permanent dependent branch refs are not modified until all replay operations have succeeded and the final `update-ref` transaction commits.
+
+### Compare-And-Swap Updates
+
+Every final branch update must include the `old_tip` captured in the plan. This prevents overwriting user work added to a dependent branch after plan generation.
+
+### Limits Of Atomicity
+
+Git objects, temporary refs, worktrees, index state, and conflict files may be created before success.
+
+The guarantee is not that the repository is completely unchanged after failure. The guarantee is that permanent dependent branch refs are not partially updated.
+
+### Working Tree Isolation
+
+The safest implementation uses a temporary worktree for replay.
+
+If the current worktree is used, the tool must require it to be clean before replay and must clearly report any conflict state it leaves behind.
+
+## Conflict Handling
+
+Conflicts are expected during the apply phase. They should be treated as normal control flow, not as corruption of the plan.
+
+A conflict can happen while replaying any saved commit onto a node's selected apply-time base. In version 1 this replay is implemented as cherry-picking into a detached HEAD or temporary worktree, even though the user-facing operation is conceptually a cascade rebase.
+
+Default behavior when a replay conflict occurs:
+
+- Stop at the first conflicting replay.
+- Leave permanent dependent branch refs unchanged.
+- Keep completed temporary refs.
+- Keep the conflicted temporary worktree for manual resolution.
+- Record apply state so the operation can continue later.
+- Print the conflicted branch, commit, worktree path, and continue command.
+
+Conflict state should include:
+
+- The `plan_id`.
+- The resolved replacement anchor tip.
+- The selected apply strategy.
+- The old-to-new commit mappings produced so far.
+- The current dependent branch being replayed.
+- The current commit being replayed.
+- The temporary worktree path.
+- Completed temporary refs.
+- Pending dependent nodes.
+
+The state is stored at:
+
+```text
+<git-common-dir>/cascade/state.yaml
+```
+
+The conflict worktree should contain the in-progress replay exactly where Git stopped. The user resolves conflicts using normal Git commands inside that worktree:
+
+```bash
+git -C <conflict-worktree> status
+git -C <conflict-worktree> add <resolved-files>
+```
+
+Continue command:
+
+```bash
+git cascade continue
+```
+
+Abort command:
+
+```bash
+git cascade abort
+```
+
+Status command:
+
+```bash
+git cascade status
+```
+
+Continue behavior:
+
+- Load the active operation from `<git-common-dir>/cascade/state.yaml`.
+- Validate that the saved conflict state matches the named plan recorded in state.
+- Validate that the saved apply strategy is internally consistent with the recorded operation state.
+- Validate that the replacement anchor ref still points at the resolved replacement anchor tip when `--new-anchor` was a ref.
+- Validate that permanent dependent branch refs still point at their saved `old_tip` values.
+- Validate that the conflict worktree has no unmerged index entries.
+- Complete the current replayed commit using the user's resolution.
+- Record the old-to-new mapping for the resolved commit.
+- Continue replaying the remaining saved commits for the current node.
+- Write the completed node tip to `refs/cascade/tmp/<plan-id>/<branch>`.
+- Continue with pending dependent nodes in topological order.
+- Run the final atomic ref update only after every dependent node has a rewritten tip.
+
+Abort behavior:
+
+- Load the active operation from `<git-common-dir>/cascade/state.yaml`.
+- Abort any in-progress Git sequencer operation in the temporary worktree.
+- Leave permanent dependent branch refs unchanged.
+- Delete temporary refs that are safe to delete, unless the user requests `--keep-temp`.
+- Remove temporary worktrees that are safe to remove.
+- Remove `<git-common-dir>/cascade/state.yaml` after cleanup succeeds or after reporting preserved leftovers.
+
+If abort cannot safely remove a worktree because it contains unresolved user edits, the tool should leave it in place and print its path.
+
+Conflict safety guarantees:
+
+- A conflict never updates permanent dependent branch refs by itself.
+- Completed temporary refs are not promoted until all dependent branches have completed replay.
+- Re-running `git cascade continue` is safe after a crash if validation still passes.
+- If validation fails during `git cascade continue`, the tool stops before updating permanent refs.
+
+Manual resolution policy:
+
+- The user's conflict resolution becomes part of the rewritten commit for that dependent branch.
+- The rewritten commit will have a new object ID.
+- Descendant branches replay according to the selected apply strategy: default mode uses the mapped rewritten fork point, while `--move-to-heads` uses the rewritten parent tip.
+- The plan file itself is not modified by conflict resolution.
+
+Non-interactive mode:
+
+- A `--no-conflicts` or `--abort-on-conflict` mode may stop immediately and clean up temporary state instead of preserving a worktree.
+- The default interactive mode should preserve enough state for manual resolution and continuation.
+
+Resume after interruption:
+
+- `git cascade continue` resumes from recorded state after either a conflict or an interrupted apply.
+- Previously completed temporary refs may be reused after validation.
+- Unresolved nodes continue in topological order.
+- Final branch refs are still updated only after all nodes have rewritten tips.
+
+The old `resume` wording can exist as an alias, but the primary user-facing command should be `git cascade continue` because conflicts mirror normal `git rebase` and `git cherry-pick` workflows.
+
+## Invariants
+
+- Same plan plus same replacement anchor tip produces the same replay attempts.
+- Apply does not use merge-base inference to rediscover the old stack.
+- A dependent branch is never replayed before its parent has a rewritten tip.
+- Saved old commits are treated as immutable inputs.
+- Branch names identify refs to validate and update, not history to infer from.
+- Default apply preserves dependent branch fork points between non-anchor branches.
+- `--move-to-heads` may move dependent branches from intermediate old parent commits to rewritten parent tips.
+- Version 1 supports linear branch ranges only.
+
+## Implementation Language
+
+`git-cascade` should be implemented in Rust.
+
+This tool is stateful enough that Bash would be fragile. The implementation needs structured parsing, durable state management, atomic file creation, topological sorting, careful subprocess execution, conflict recovery, and transactional ref updates.
+
+Rust is a good fit because it provides:
+
+- A single native CLI binary.
+- Strong typed models for plans, operation state, commits, refs, and branch nodes.
+- Reliable path and filesystem handling.
+- Explicit error propagation for Git command failures.
+- Good support for atomic file creation and durable state updates.
+- Good testability for repository fixtures and crash/recovery scenarios.
+
+Recommended Rust crates:
+
+- `clap` for CLI parsing.
+- `serde`, `serde_yaml`, and optionally `serde_json` for plan and state serialization.
+- `camino` or `std::path` with strict UTF-8 boundaries only where needed.
+- `tempfile` for temporary files used in atomic writes.
+- `thiserror` or `anyhow` for error handling.
+- `assert_cmd` and `insta` for CLI and snapshot tests.
+
+The first implementation should shell out to `git` rather than embedding a Git library. Git is already the source of truth for rebase/cherry-pick behavior, ref transactions, worktrees, and repository discovery.
+
+Critical implementation requirements:
+
+- Use `git rev-parse --git-common-dir` to locate repository-local storage.
+- Create `state.yaml` with exclusive-create semantics.
+- Write updates to state through temporary files followed by atomic rename.
+- Treat branch refs as compare-and-swap targets using expected old object IDs.
+- Use `git update-ref --stdin` for the final ref transaction.
+- Prefer temporary worktrees for replay and conflict resolution.
+- Preserve enough state for `git cascade continue`, `git cascade abort`, and `git cascade status` after process interruption.
+
+## Out Of Scope For Version 1
+
+- Replaying merge commits.
+- Preserving merge topology inside a branch range.
+- GitHub or GitLab PR retargeting.
+- Guessing stack structure after refs have moved.
+- Using mutable refs as stored commit identities.
+- Updating the manually rebased anchor branch during apply.
+
+## Why This Solves The Target Problem
+
+In the target workflow, the important old structure still exists before the user rebases the anchor branch.
+
+The plan captures that structure first. After the manual rebase breaks normal ancestry relationships, apply does not need to guess what used to depend on what.
+
+It replays each saved dependent branch range onto the selected rewritten base and then updates all dependent branch refs with compare-and-swap safety.
+
+The result is a practical cascade rebase flow:
+
+```text
+old stack before mutation
+  -> saved immutable plan
+  -> manual anchor rebase
+  -> deterministic dependent branch replay
+  -> atomic dependent branch ref update
+```
