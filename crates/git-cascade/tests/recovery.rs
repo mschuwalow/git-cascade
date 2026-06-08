@@ -193,6 +193,36 @@ fn continue_after_conflict_finishes_apply() {
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
+#[test]
+fn continue_can_stop_again_on_later_conflict() {
+    let repo = repeated_conflict_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+
+    repo.cascade()
+        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .assert()
+        .failure();
+    let first_state = read_state(&repo);
+    let first_conflict = first_state.current.unwrap().commit;
+    let worktree = std::path::PathBuf::from(first_state.worktree);
+    std::fs::write(worktree.join("a.txt"), "resolved a\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "a.txt"]);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "apply stopped while replaying branch `pr-2`",
+        ));
+
+    let second_state = read_state(&repo);
+    assert_eq!(second_state.phase, "conflict");
+    let second_conflict = second_state.current.unwrap().commit;
+    assert_ne!(second_conflict, first_conflict);
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+}
+
 fn conflicting_stack() -> TestRepo {
     let repo = TestRepo::new();
     repo.commit_file("conflict.txt", "base\n", "initial");
@@ -208,6 +238,33 @@ fn conflicting_stack() -> TestRepo {
         .success();
     repo.switch("pr-1");
     repo.commit_file("conflict.txt", "anchor new\n", "anchor new");
+    repo.switch("main");
+    repo
+}
+
+fn repeated_conflict_stack() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("a.txt", "base a\n", "initial a");
+    repo.commit_file("b.txt", "base b\n", "initial b");
+    repo.switch_new("pr-1");
+    repo.write("a.txt", "anchor old a\n");
+    repo.write("b.txt", "anchor old b\n");
+    repo.git_ok(["add", "a.txt", "b.txt"]);
+    repo.git_ok(["commit", "-m", "anchor old"]);
+    repo.switch_new("pr-2");
+    repo.commit_file("a.txt", "dependent a\n", "dependent a");
+    repo.commit_file("b.txt", "dependent b\n", "dependent b");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "pr-1", "--name", "stack"])
+        .assert()
+        .success();
+    repo.switch("pr-1");
+    repo.write("a.txt", "anchor new a\n");
+    repo.write("b.txt", "anchor new b\n");
+    repo.git_ok(["add", "a.txt", "b.txt"]);
+    repo.git_ok(["commit", "-m", "anchor new"]);
     repo.switch("main");
     repo
 }

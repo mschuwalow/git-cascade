@@ -205,7 +205,7 @@ Version 1 supports linear commit ranges only. Merge commits are rejected unless 
 
 The plan is machine-readable and immutable after creation.
 
-In normal use, plans are named and stored inside the repository's Git common directory. A path-based `--plan <path>` mode may exist for import, export, tests, and debugging, but it is not the primary UX.
+Plans are named and stored inside the repository's Git common directory. Version 1 does not support exported or path-based plans.
 
 Important rules:
 
@@ -269,17 +269,8 @@ Useful plan management commands:
 ```bash
 git cascade list
 git cascade show --name permissions-stack
-git cascade export --name permissions-stack > permissions-stack.yaml
 git cascade delete --name permissions-stack
 ```
-
-The path-based mode remains available for advanced cases:
-
-```bash
-git cascade apply --plan ./permissions-stack.yaml --new-anchor my-branch
-```
-
-When `--plan` is used, the command reads that file directly instead of loading a named plan from `<git-common-dir>/cascade/plans/`.
 
 ### State As Lock
 
@@ -478,12 +469,6 @@ git cascade apply --name <plan-name> --new-anchor <ref-or-commit>
 ```
 
 Apply-time behavior is selected by flags, not by defaults stored in the plan. With the default `--strategy preserve-fork-points`, apply preserves fork points between non-anchor branches. With `--strategy move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.
-
-For path-based plans, use:
-
-```bash
-git cascade apply --plan <plan-file> --new-anchor <ref-or-commit>
-```
 
 High-level algorithm:
 

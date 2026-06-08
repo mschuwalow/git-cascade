@@ -64,7 +64,7 @@ fn apply_dry_run_linear_stack_prints_commands_without_mutating_refs() {
 }
 
 #[test]
-fn apply_dry_run_move_to_heads_changes_dependent_base_descriptions() {
+fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");

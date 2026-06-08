@@ -52,7 +52,7 @@ fn apply_preserves_intermediate_fork_point() {
 }
 
 #[test]
-fn apply_move_to_heads_replays_child_on_parent_tip() {
+fn apply_strategy_replays_child_on_parent_tip() {
     let repo = intermediate_stack();
     repo.cascade()
         .args(["plan", "pr-1", "--name", "stack"])
