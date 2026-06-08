@@ -8,7 +8,7 @@ use common::repo::TestRepo;
 #[test]
 fn plan_creates_anchor_keyed_plan_for_linear_stack() {
     let repo = TestRepo::new();
-    repo.commit_file("README.md", "base\n", "initial");
+    let initial = repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
     repo.commit_file("pr1-a.txt", "a\n", "pr-1 a");
     let pr1_b = repo.commit_file("pr1-b.txt", "b\n", "pr-1 b");
@@ -27,6 +27,7 @@ fn plan_creates_anchor_keyed_plan_for_linear_stack() {
     let plan = read_plan(&repo, "pr-1");
     assert_eq!(plan.version, 1);
     assert_eq!(plan.source.anchor_ref, "pr-1");
+    assert_eq!(plan.source.anchor_old_base, initial);
     assert_eq!(plan.source.anchor_old_tip, pr1_b);
     assert_eq!(plan.nodes.len(), 3);
     assert_eq!(plan.dependencies.len(), 2);
@@ -77,6 +78,52 @@ fn plan_preserves_intermediate_fork_point() {
 
     assert_eq!(child.parent(), Some("pr-1"));
     assert_eq!(child.old_base(), Some(fork_point.as_str()));
+}
+
+#[test]
+fn plan_does_not_treat_advanced_main_as_dependent() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+    repo.commit_file("main.txt", "new main\n", "advance main");
+
+    repo.cascade()
+        .args(["plan", "--anchor", "pr-1"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "pr-1");
+    let branches = plan
+        .nodes
+        .iter()
+        .map(|node| node.branch.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(branches, ["pr-1", "pr-2"]);
+}
+
+#[test]
+fn plan_base_option_uses_merge_base_with_anchor() {
+    let repo = TestRepo::new();
+    let initial = repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+    repo.commit_file("main.txt", "new main\n", "advance main");
+
+    repo.cascade()
+        .args(["plan", "--anchor", "pr-1", "--base", "main"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "pr-1");
+    assert_eq!(plan.source.anchor_old_base, initial);
+    assert_eq!(plan.nodes.len(), 2);
 }
 
 #[test]

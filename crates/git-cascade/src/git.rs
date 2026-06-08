@@ -215,6 +215,16 @@ impl Git {
         self.try_rev_parse(&format!("{default_ref}^{{commit}}"))
     }
 
+    pub fn local_default_branch_tip(&self) -> Result<Option<String>> {
+        for branch in ["main", "master"] {
+            if let Some(tip) = self.try_rev_parse(&format!("refs/heads/{branch}^{{commit}}"))? {
+                return Ok(Some(tip));
+            }
+        }
+
+        Ok(None)
+    }
+
     pub fn worktree_add_detached(&self, path: &Path, commit: &str) -> Result<()> {
         self.output([
             OsString::from("worktree"),

@@ -27,6 +27,9 @@ enum Command {
         /// Old anchor ref or commit-ish to snapshot before rewriting dependents.
         #[arg(long, value_name = "REF")]
         anchor: String,
+        /// Old base of the anchor; inferred from upstream/default branch when omitted.
+        #[arg(long, value_name = "REF")]
+        base: Option<String>,
         /// Overwrite an existing plan for the same anchor key.
         #[arg(long)]
         replace: bool,
@@ -86,7 +89,11 @@ where
     let cli = Cli::parse_from(args);
 
     match cli.command {
-        Command::Plan { anchor, replace } => plan(&anchor, replace),
+        Command::Plan {
+            anchor,
+            base,
+            replace,
+        } => plan(&anchor, base.as_deref(), replace),
         Command::Apply {
             old_anchor,
             new_anchor,
@@ -171,7 +178,7 @@ fn apply(old_anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: boo
     Ok(())
 }
 
-fn plan(anchor_ref: &str, replace: bool) -> Result<()> {
+fn plan(anchor_ref: &str, base: Option<&str>, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     generate_anchor_keyed_plan(
@@ -179,6 +186,7 @@ fn plan(anchor_ref: &str, replace: bool) -> Result<()> {
         &storage,
         GenerateOptions {
             anchor_ref: anchor_ref.to_owned(),
+            base: base.map(str::to_owned),
             replace,
         },
     )?;

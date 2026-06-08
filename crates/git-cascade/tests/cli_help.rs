@@ -52,6 +52,7 @@ fn plan_help_mentions_anchor_and_replace() {
         .success()
         .stdout(
             predicate::str::contains("--anchor")
+                .and(predicate::str::contains("--base"))
                 .and(predicate::str::contains("--replace"))
                 .and(predicate::str::contains("Old anchor ref or commit-ish")),
         );

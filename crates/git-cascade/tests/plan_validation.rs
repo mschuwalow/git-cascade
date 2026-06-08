@@ -83,6 +83,35 @@ fn validation_rejects_dependency_parent_mismatch() {
     assert!(error.contains("is missing dependency edge"));
 }
 
+#[test]
+fn validation_rejects_direct_child_at_anchor_base() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args(["plan", "--anchor", "pr-1"])
+        .assert()
+        .success();
+    let mut plan = read_plan(&repo, "pr-1");
+    let git = Git::new(repo.path());
+
+    let node = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.branch == "pr-2")
+        .unwrap();
+    let NodeKind::Dependent {
+        old_base, commits, ..
+    } = &mut node.kind
+    else {
+        panic!("pr-2 should be dependent");
+    };
+    *old_base = plan.source.anchor_old_base.clone();
+    *commits = repo.rev_list_reverse(&format!("{}..{}", old_base, node.old_tip));
+
+    let error = validate_plan(&git, &plan).unwrap_err().to_string();
+
+    assert!(error.contains("is outside anchor range"));
+}
+
 fn linear_stack() -> TestRepo {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");

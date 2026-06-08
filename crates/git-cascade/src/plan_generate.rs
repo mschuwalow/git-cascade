@@ -15,6 +15,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
     pub anchor_ref: String,
+    pub base: Option<String>,
     pub replace: bool,
 }
 
@@ -31,15 +32,16 @@ pub fn generate_anchor_keyed_plan(
     storage: &Storage,
     options: GenerateOptions,
 ) -> Result<Plan> {
-    let plan = generate_plan(git, &options.anchor_ref)?;
+    let plan = generate_plan(git, &options.anchor_ref, options.base.as_deref())?;
     validate_plan(git, &plan)?;
     let key = PlanKey::from_anchor(&options.anchor_ref)?;
     write_anchor_keyed_plan(storage, &key, &plan, options.replace)?;
     Ok(plan)
 }
 
-pub fn generate_plan(git: &Git, anchor_ref: &str) -> Result<Plan> {
+pub fn generate_plan(git: &Git, anchor_ref: &str, base: Option<&str>) -> Result<Plan> {
     let anchor_tip = git.resolve_commit(anchor_ref)?;
+    let anchor_base = resolve_anchor_base(git, anchor_ref, &anchor_tip, base)?;
 
     let mut nodes = vec![Node {
         branch: anchor_ref.to_owned(),
@@ -53,7 +55,7 @@ pub fn generate_plan(git: &Git, anchor_ref: &str) -> Result<Plan> {
     }
     let branches = git.local_branches()?;
 
-    while let Some(candidate) = next_candidate(git, &branches, &nodes, &assigned)? {
+    while let Some(candidate) = next_candidate(git, &branches, &nodes, &assigned, &anchor_base)? {
         assigned.insert(candidate.branch.name.clone());
         dependencies.push(Dependency {
             parent: candidate.parent_branch.clone(),
@@ -86,10 +88,73 @@ pub fn generate_plan(git: &Git, anchor_ref: &str) -> Result<Plan> {
         },
         source: Source {
             anchor_ref: anchor_ref.to_owned(),
+            anchor_old_base: anchor_base,
             anchor_old_tip: anchor_tip,
         },
         nodes,
         dependencies,
+    })
+}
+
+fn resolve_anchor_base(
+    git: &Git,
+    anchor_ref: &str,
+    anchor_tip: &str,
+    base: Option<&str>,
+) -> Result<String> {
+    if let Some(base) = base {
+        let base_tip = git.resolve_commit(base)?;
+        return anchor_base_from_tip(git, anchor_ref, anchor_tip, base, &base_tip);
+    }
+
+    if let Some(local_branch) = anchor_local_branch(git, anchor_ref)?
+        && let Some(upstream_tip) = git.upstream_tip(&local_branch)?
+    {
+        return anchor_base_from_tip(
+            git,
+            anchor_ref,
+            anchor_tip,
+            &format!("{local_branch}@{{upstream}}"),
+            &upstream_tip,
+        );
+    }
+
+    if let Some(default_tip) = git.origin_default_branch_tip()? {
+        return anchor_base_from_tip(
+            git,
+            anchor_ref,
+            anchor_tip,
+            "origin default branch",
+            &default_tip,
+        );
+    }
+
+    if let Some(default_tip) = git.local_default_branch_tip()? {
+        return anchor_base_from_tip(
+            git,
+            anchor_ref,
+            anchor_tip,
+            "local default branch",
+            &default_tip,
+        );
+    }
+
+    Err(Error::CannotInferAnchorBase {
+        anchor: anchor_ref.to_owned(),
+    })
+}
+
+fn anchor_base_from_tip(
+    git: &Git,
+    anchor_ref: &str,
+    anchor_tip: &str,
+    base_label: &str,
+    base_tip: &str,
+) -> Result<String> {
+    git.merge_base(anchor_tip, base_tip)?.ok_or_else(|| {
+        Error::InvalidInvocation(format!(
+            "base `{base_label}` has no merge base with anchor `{anchor_ref}`"
+        ))
     })
 }
 
@@ -141,6 +206,7 @@ fn next_candidate(
     branches: &[LocalBranch],
     nodes: &[Node],
     assigned: &HashSet<String>,
+    anchor_base: &str,
 ) -> Result<Option<Candidate>> {
     let node_by_branch = nodes
         .iter()
@@ -160,6 +226,9 @@ fn next_candidate(
 
             if parent.is_anchor() {
                 if git.is_ancestor(&branch.tip, &parent.old_tip)? {
+                    continue;
+                }
+                if base == anchor_base || !git.is_ancestor(anchor_base, &base)? {
                     continue;
                 }
             } else {

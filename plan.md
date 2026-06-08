@@ -82,6 +82,7 @@ The plan is stored in the repository's Git common directory keyed by the raw `--
 The generated plan records:
 
 - The anchor ref/key.
+- The old anchor base used to bound direct dependent discovery.
 - The anchor tip before mutation.
 - Every dependent branch in the cascade.
 - Each dependent branch's old tip.
@@ -359,6 +360,7 @@ repository:
 
 source:
   anchor_ref: "agent-permissions-8"
+  anchor_old_base: "1111111111111111111111111111111111111111"
   anchor_old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
 
 nodes:
@@ -410,7 +412,7 @@ dependencies:
 ## Plan Generation
 
 ```bash
-git cascade plan --anchor <anchor-ref>
+git cascade plan --anchor <anchor-ref> [--base <base-ref>]
 ```
 
 Plan generation is a read-only phase.
@@ -439,6 +441,9 @@ Forbidden Git operations include:
 Generation rules:
 
 - Resolve the anchor and all saved commits to full object IDs.
+- Resolve the old anchor base as `merge-base(<anchor-ref>, <base-ref>)` when `--base` is provided.
+- When `--base` is omitted, infer the old anchor base from the anchor branch upstream, `origin/HEAD`, or the local default branch (`main` then `master`).
+- Direct children of the anchor must fork after `anchor_old_base`; branches whose merge-base with the anchor is exactly `anchor_old_base` are treated as upstream/sibling branches, not dependents.
 - Reject merge commits unless merge replay is explicitly supported by a later schema version.
 - Reject a dependent branch if its `old_base` is not reachable from the `old_tip` of its declared parent.
 - For a non-anchor parent, prefer the parent that owns the dependent branch's `old_base`, not merely a descendant branch that contains it.

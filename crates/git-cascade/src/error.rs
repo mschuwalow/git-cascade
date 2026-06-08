@@ -56,6 +56,9 @@ pub enum Error {
     #[error("cannot start a new cascade operation while state file exists at {path}")]
     ActiveOperation { path: PathBuf },
 
+    #[error("cannot infer old anchor base for `{anchor}`; pass --base <ref>")]
+    CannotInferAnchorBase { anchor: String },
+
     #[error("{0}")]
     Unsupported(String),
 

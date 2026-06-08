@@ -48,6 +48,7 @@ Implemented so far:
 `git cascade plan` currently:
 
 - Resolves the anchor as a Git ref or commit-ish and uses the raw `--anchor` value as the plan key.
+- Resolves `--base` by taking `merge-base(<anchor>, <base>)`; when omitted, infers it from the anchor upstream, `origin/HEAD`, or local `main`/`master`.
 - Discovers dependent branches by their attachment points to the anchor or already discovered dependents.
 - Captures owned commits with `git rev-list --reverse <base>..<tip>`.
 - Rejects merge commits in captured ranges.
@@ -68,6 +69,8 @@ Current tests include:
 - Real-Git integration tests for anchor refs containing path separators.
 - Real-Git integration tests for tag anchors and full `refs/heads/*` anchors.
 - Real-Git integration tests for linear stack plan generation.
+- Real-Git integration tests proving an advanced default branch is not treated as a dependent.
+- Real-Git integration tests for explicit `--base` planning.
 - Real-Git integration tests for intermediate fork-point preservation.
 - Real-Git integration tests for `--replace` behavior.
 - Real-Git integration tests for refusing plan creation while state exists.

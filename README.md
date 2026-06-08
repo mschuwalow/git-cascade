@@ -16,6 +16,12 @@ Create a repository-local plan before rewriting the anchor ref:
 git cascade plan --anchor pr-1
 ```
 
+If the old anchor base cannot be inferred, pass the upstream/base ref explicitly:
+
+```sh
+git cascade plan --anchor pr-1 --base main
+```
+
 Rewrite the replacement anchor manually:
 
 ```sh
@@ -110,6 +116,7 @@ git cascade completions fish
 
 - Version 1 updates dependent local branches only.
 - Version 1 supports linear commit ranges only and rejects merge commits.
+- Direct dependents are discovered only inside the old anchor range bounded by inferred or explicit `--base`.
 - Plans are keyed by the raw `--anchor` ref string and stored under the repository Git common directory.
 - Successful apply removes the stored plan for its anchor.
 - Exported or path-based plans are not supported.
