@@ -8,7 +8,7 @@ use crate::git::Git;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
 use crate::recovery;
 use crate::state::Strategy;
-use crate::storage::{PlanName, Storage};
+use crate::storage::{PlanKey, Storage};
 
 #[derive(Debug, Parser)]
 #[command(name = "git-cascade")]
@@ -24,13 +24,11 @@ enum Command {
         #[arg(long)]
         anchor: String,
         #[arg(long)]
-        name: PlanName,
-        #[arg(long)]
         replace: bool,
     },
     Apply {
         #[arg(long)]
-        name: PlanName,
+        anchor: String,
         #[arg(long)]
         new_anchor: String,
         #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
@@ -41,7 +39,7 @@ enum Command {
     List,
     Show {
         #[arg(long)]
-        name: PlanName,
+        anchor: String,
     },
     Status,
     Abort,
@@ -66,19 +64,15 @@ where
     let cli = Cli::parse_from(args);
 
     match cli.command {
-        Command::Plan {
-            anchor,
-            name,
-            replace,
-        } => plan(&anchor, name, replace),
+        Command::Plan { anchor, replace } => plan(&anchor, replace),
         Command::Apply {
-            name,
+            anchor,
             new_anchor,
             strategy,
             dry_run,
-        } => apply(name, &new_anchor, strategy, dry_run),
+        } => apply(&anchor, &new_anchor, strategy, dry_run),
         Command::List => list_plans(),
-        Command::Show { name } => show_plan(&name),
+        Command::Show { anchor } => show_plan(&anchor),
         Command::Status => status(),
         Command::Abort => abort(),
         Command::Continue => continue_operation(),
@@ -111,10 +105,11 @@ fn abort() -> Result<()> {
     Ok(())
 }
 
-fn apply(name: PlanName, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
+fn apply(anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let plan = serde_yaml::from_str(&storage.read_named_plan(&name)?)?;
+    let key = PlanKey::from_anchor(anchor)?;
+    let plan = serde_yaml::from_str(&storage.read_plan(&key)?)?;
 
     if is_dry_run {
         print!(
@@ -135,7 +130,7 @@ fn apply(name: PlanName, new_anchor: &str, strategy: Strategy, is_dry_run: bool)
             &storage,
             &plan,
             ApplyOptions {
-                plan_name: name,
+                plan_key: key,
                 new_anchor_input: new_anchor.to_owned(),
                 strategy,
             },
@@ -146,20 +141,18 @@ fn apply(name: PlanName, new_anchor: &str, strategy: Strategy, is_dry_run: bool)
     Ok(())
 }
 
-fn plan(anchor_branch: &str, name: PlanName, replace: bool) -> Result<()> {
+fn plan(anchor_branch: &str, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let display_name = name.to_string();
     generate_named_plan(
         &git,
         &storage,
         GenerateOptions {
             anchor_branch: anchor_branch.to_owned(),
-            name,
             replace,
         },
     )?;
-    println!("created plan `{display_name}`");
+    println!("created plan for anchor `{anchor_branch}`");
 
     Ok(())
 }
@@ -168,17 +161,18 @@ fn list_plans() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
 
-    for name in storage.list_plan_names()? {
+    for name in storage.list_plan_keys()? {
         println!("{name}");
     }
 
     Ok(())
 }
 
-fn show_plan(name: &PlanName) -> Result<()> {
+fn show_plan(anchor: &str) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    print!("{}", storage.read_named_plan(name)?);
+    let key = PlanKey::from_anchor(anchor)?;
+    print!("{}", storage.read_plan(&key)?);
 
     Ok(())
 }

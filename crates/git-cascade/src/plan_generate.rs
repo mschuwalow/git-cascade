@@ -8,14 +8,13 @@ use time::format_description::well_known::Rfc3339;
 use crate::git::{Git, LocalBranch};
 use crate::plan::{Dependency, Node, NodeKind, Plan, Repository, Source};
 use crate::plan_validate::validate_plan;
-use crate::storage::{PlanName, Storage};
+use crate::storage::{PlanKey, Storage};
 use crate::{Error, Result};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
     pub anchor_branch: String,
-    pub name: PlanName,
     pub replace: bool,
 }
 
@@ -30,7 +29,8 @@ struct Candidate {
 pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
     let plan = generate_plan(git, &options.anchor_branch)?;
     validate_plan(git, &plan)?;
-    write_named_plan(storage, &options.name, &plan, options.replace)?;
+    let key = PlanKey::from_anchor(&options.anchor_branch)?;
+    write_named_plan(storage, &key, &plan, options.replace)?;
     Ok(plan)
 }
 
@@ -86,7 +86,7 @@ pub fn generate_plan(git: &Git, anchor_branch: &str) -> Result<Plan> {
     })
 }
 
-fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bool) -> Result<()> {
+fn write_named_plan(storage: &Storage, key: &PlanKey, plan: &Plan, replace: bool) -> Result<()> {
     if storage.state_path().exists() {
         return Err(Error::ActiveOperation {
             path: storage.state_path(),
@@ -94,10 +94,10 @@ fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bo
     }
 
     storage.ensure_plans_dir()?;
-    let path = storage.named_plan_path(name);
+    let path = storage.plan_path(key);
     if path.exists() && !replace {
         return Err(Error::PlanExists {
-            name: name.to_string(),
+            name: key.to_string(),
             path,
         });
     }

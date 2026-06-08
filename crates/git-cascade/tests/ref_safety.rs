@@ -20,7 +20,7 @@ fn apply_refuses_final_update_if_new_anchor_ref_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -33,7 +33,7 @@ fn apply_refuses_final_update_if_new_anchor_ref_moved() {
 
     let hook = write_move_anchor_hook(&repo);
     repo.cascade()
-        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
         .env("GIT_CASCADE_TEST_HOOK_BEFORE_FINAL_UPDATE", &hook)
         .env("GIT_CASCADE_TEST_REPO", repo.path())
         .assert()

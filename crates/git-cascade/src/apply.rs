@@ -10,7 +10,7 @@ use crate::recovery;
 use crate::state::{
     ApplyState, ApplyStateInput, CurrentState, StateFile, Strategy, initial_apply_state,
 };
-use crate::storage::{PlanName, Storage};
+use crate::storage::{PlanKey, Storage};
 use crate::test_hooks;
 use crate::{Error, Result};
 
@@ -22,7 +22,7 @@ pub struct DryRunOptions {
 
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
-    pub plan_name: PlanName,
+    pub plan_key: PlanKey,
     pub new_anchor_input: String,
     pub strategy: Strategy,
 }
@@ -184,7 +184,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     mappings.insert(plan.source.anchor_old_tip.clone(), new_anchor.clone());
     let worktree = storage.worktrees_dir().join(&plan.plan_id);
     let mut state = initial_apply_state(ApplyStateInput {
-        plan_name: &options.plan_name,
+        plan_key: &options.plan_key,
         plan_id: &plan.plan_id,
         new_anchor_input: &options.new_anchor_input,
         new_anchor_resolved: &new_anchor,
@@ -287,8 +287,10 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
 
     if worktree_created || !temp_refs.is_empty() || storage.state_path().exists() {
         recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
+        storage.delete_plan(options.plan_key)?;
     } else {
         state_file.remove()?;
+        storage.delete_plan(options.plan_key)?;
     }
 
     Ok(())
@@ -320,10 +322,10 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let current = state.current.clone().ok_or_else(|| {
         Error::InvalidInvocation("active apply state has no current commit".to_owned())
     })?;
-    let plan_name = PlanName::new(state.plan_name.clone().ok_or_else(|| {
-        Error::InvalidInvocation("active apply state does not record a named plan".to_owned())
+    let plan_key = PlanKey::from_anchor(state.plan_anchor.clone().ok_or_else(|| {
+        Error::InvalidInvocation("active apply state does not record an anchor plan".to_owned())
     })?)?;
-    let plan: Plan = serde_yaml::from_str(&storage.read_named_plan(&plan_name)?)?;
+    let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_key)?)?;
     validate_plan_for_apply(git, &plan)?;
 
     if state.new_anchor.input_was_ref {
@@ -502,6 +504,10 @@ fn continue_replay_after_resolved_commit(
     )?)?;
 
     recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
+    let plan_key = PlanKey::from_anchor(state.plan_anchor.clone().ok_or_else(|| {
+        Error::InvalidInvocation("active apply state does not record an anchor plan".to_owned())
+    })?)?;
+    storage.delete_plan(plan_key)?;
 
     Ok(())
 }

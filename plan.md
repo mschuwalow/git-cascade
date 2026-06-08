@@ -21,9 +21,9 @@ The plan exists so the tool does not need to infer the old stack structure after
 The intended workflow is:
 
 ```bash
-git cascade plan --anchor my-branch --name permissions-stack
+git cascade plan --anchor my-branch
 git rebase --onto origin/main 3e1e56f91cad6cc45281f86849ee9e727ccac340
-git cascade apply --name permissions-stack --new-anchor <new-anchor>
+git cascade apply --anchor my-branch --new-anchor <new-anchor>
 ```
 
 The user manually rebases one branch. The tool then uses the saved plan to cascade that rewrite through all dependent branches.
@@ -72,12 +72,12 @@ The plan describes transformations over commits, not branches. Branch names are 
 ### 1. Create The Plan
 
 ```bash
-git cascade plan --anchor my-branch --name permissions-stack
+git cascade plan --anchor my-branch
 ```
 
 This command is read-only. It inspects the current Git repository and captures the cascade rooted at `my-branch`.
 
-The plan is stored in the repository's Git common directory under the supplied name. Users do not normally pass plan files around manually.
+The plan is stored in the repository's Git common directory keyed by the anchor branch. Users do not normally pass plan files around manually.
 
 The generated plan records:
 
@@ -105,7 +105,7 @@ This step may break the old relationships between the anchor and its dependent b
 ### 3. Apply The Plan
 
 ```bash
-git cascade apply --name permissions-stack --new-anchor <new-anchor>
+git cascade apply --anchor my-branch --new-anchor <new-anchor>
 ```
 
 Apply always requires an explicit replacement anchor. The tool resolves `--new-anchor` exactly once and treats the resolved commit as the replacement for the old anchor boundary.
@@ -135,13 +135,13 @@ The apply step does not rebase the anchor branch. The anchor branch was already 
 The replacement anchor is always explicit:
 
 ```bash
-git cascade apply --name permissions-stack --new-anchor origin/main
+git cascade apply --anchor my-branch --new-anchor origin/main
 ```
 
 or:
 
 ```bash
-git cascade apply --name permissions-stack --new-anchor <commit-sha>
+git cascade apply --anchor my-branch --new-anchor <commit-sha>
 ```
 
 When `--new-anchor` is provided, the tool resolves that ref or commit exactly once at the start of execution and uses the resolved object ID as the new anchor tip.
@@ -149,7 +149,7 @@ When `--new-anchor` is provided, the tool resolves that ref or commit exactly on
 There is no implicit fallback to the current tip of the original anchor branch. If the desired new anchor is the manually rebased anchor branch, pass it explicitly:
 
 ```bash
-git cascade apply --name permissions-stack --new-anchor my-branch
+git cascade apply --anchor my-branch --new-anchor my-branch
 ```
 
 ### Move To Heads
@@ -159,7 +159,7 @@ The default apply mode preserves fork points between non-anchor branches.
 The `--strategy move-to-heads` option selects a simpler strategy:
 
 ```bash
-git cascade apply --name permissions-stack --new-anchor my-branch --strategy move-to-heads
+git cascade apply --anchor my-branch --new-anchor my-branch --strategy move-to-heads
 ```
 
 With this flag, every dependent branch is replayed onto the rewritten tip of its parent, even if it originally forked from an intermediate parent commit.
@@ -238,7 +238,7 @@ Repository-local storage layout:
     <plan-id>/
 ```
 
-`plans/<base64url-plan-name>.yaml` stores immutable named plans. The user-facing plan name is encoded for filesystem safety.
+`plans/<base64url-anchor-branch>.yaml` stores immutable anchor-keyed plans. The anchor branch is encoded for filesystem safety.
 
 `state.yaml` stores the single active cascade operation and acts as the repository-wide cascade lock.
 
@@ -249,15 +249,15 @@ Repository-local storage layout:
 Named plans are the default interface:
 
 ```bash
-git cascade plan --anchor my-branch --name permissions-stack
-git cascade apply --name permissions-stack --new-anchor my-branch
+git cascade plan --anchor my-branch
+git cascade apply --anchor my-branch --new-anchor my-branch
 ```
 
 Plan names are user-facing strings and are encoded as unpadded base64url for filesystem storage.
 
 Creating a plan:
 
-- Writes `<git-common-dir>/cascade/plans/<base64url-plan-name>.yaml`.
+- Writes `<git-common-dir>/cascade/plans/<base64url-anchor-branch>.yaml`.
 - Refuses to overwrite an existing plan unless `--replace` is passed.
 - Refuses to run while `state.yaml` exists.
 - Stores a stable `plan_id` inside the plan.
@@ -267,8 +267,8 @@ Useful plan management commands:
 
 ```bash
 git cascade list
-git cascade show --name permissions-stack
-git cascade delete --name permissions-stack
+git cascade show --anchor my-branch
+git cascade delete --anchor my-branch
 ```
 
 ### State As Lock
@@ -303,7 +303,7 @@ The state file should contain enough information to resume, abort, diagnose stal
 version: 1
 operation: apply
 phase: conflict
-plan_name: permissions-stack
+plan_anchor: my-branch
 plan_id: "2026-06-08T14-00-00Z-agent-permissions"
 started_at: "2026-06-08T14:00:00Z"
 updated_at: "2026-06-08T14:05:12Z"
@@ -403,7 +403,7 @@ dependencies:
 ## Plan Generation
 
 ```bash
-git cascade plan --anchor <anchor-branch> --name <plan-name>
+git cascade plan --anchor <anchor-branch>
 ```
 
 Plan generation is a read-only phase.
@@ -457,7 +457,7 @@ There is no implicit use of `refs/heads/<anchor-branch>`. If the manually rebase
 ## Apply Execution
 
 ```bash
-git cascade apply --name <plan-name> --new-anchor <ref-or-commit>
+git cascade apply --anchor <anchor-branch> --new-anchor <ref-or-commit>
 ```
 
 Apply-time behavior is selected by flags, not by defaults stored in the plan. With the default `--strategy preserve-fork-points`, apply preserves fork points between non-anchor branches. With `--strategy move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.
@@ -700,7 +700,7 @@ git cascade status
 Continue behavior:
 
 - Load the active operation from `<git-common-dir>/cascade/state.yaml`.
-- Validate that the saved conflict state matches the named plan recorded in state.
+- Validate that the saved conflict state matches the anchor-keyed plan recorded in state.
 - Validate that the saved apply strategy is internally consistent with the recorded operation state.
 - Validate that the replacement anchor ref still points at the resolved replacement anchor tip when `--new-anchor` was a ref.
 - Validate that permanent dependent branch refs still point at their saved `old_tip` values.

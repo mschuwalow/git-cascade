@@ -10,10 +10,10 @@ use common::repo::TestRepo;
 fn validates_generated_plan() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
-    let plan = read_plan(&repo, "stack");
+    let plan = read_plan(&repo, "pr-1");
     let git = Git::new(repo.path());
 
     validate_plan(&git, &plan).unwrap();
@@ -24,10 +24,10 @@ fn validates_generated_plan() {
 fn validation_rejects_tampered_commit_list() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
-    let mut plan = read_plan(&repo, "stack");
+    let mut plan = read_plan(&repo, "pr-1");
     let git = Git::new(repo.path());
 
     let node = plan
@@ -49,10 +49,10 @@ fn validation_rejects_tampered_commit_list() {
 fn apply_validation_rejects_dependent_branch_that_moved_after_planning() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
-    let plan = read_plan(&repo, "stack");
+    let plan = read_plan(&repo, "pr-1");
     let git = Git::new(repo.path());
 
     repo.switch("pr-2");
@@ -70,10 +70,10 @@ fn apply_validation_rejects_dependent_branch_that_moved_after_planning() {
 fn validation_rejects_dependency_parent_mismatch() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
-    let mut plan = read_plan(&repo, "stack");
+    let mut plan = read_plan(&repo, "pr-1");
     let git = Git::new(repo.path());
 
     plan.dependencies[0].parent = "pr-3".to_owned();
@@ -97,7 +97,7 @@ fn linear_stack() -> TestRepo {
 }
 
 fn read_plan(repo: &TestRepo, name: &str) -> Plan {
-    let content = std::fs::read_to_string(repo.named_plan_path(name)).unwrap();
+    let content = std::fs::read_to_string(repo.plan_path(name)).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }
 use git_cascade::plan::NodeKind;

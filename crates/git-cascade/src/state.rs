@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::storage::{PlanName, Storage};
+use crate::storage::{PlanKey, Storage};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +17,7 @@ pub struct ApplyState {
     pub version: u32,
     pub operation: String,
     pub phase: String,
-    pub plan_name: Option<String>,
+    pub plan_anchor: Option<String>,
     pub plan_id: String,
     pub started_at: String,
     pub updated_at: String,
@@ -183,7 +183,7 @@ pub fn remove_state(storage: &Storage) -> Result<()> {
 }
 
 pub struct ApplyStateInput<'a> {
-    pub plan_name: &'a PlanName,
+    pub plan_key: &'a PlanKey,
     pub plan_id: &'a str,
     pub new_anchor_input: &'a str,
     pub new_anchor_resolved: &'a str,
@@ -201,7 +201,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         version: 1,
         operation: "apply".to_owned(),
         phase: "replay".to_owned(),
-        plan_name: Some(input.plan_name.to_string()),
+        plan_anchor: Some(input.plan_key.to_string()),
         plan_id: input.plan_id.to_owned(),
         started_at: now.clone(),
         updated_at: now,

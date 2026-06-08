@@ -8,7 +8,7 @@ use common::repo::TestRepo;
 fn apply_linear_stack_updates_dependents_and_cleans_up() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -16,7 +16,7 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .success()
         .stdout("applied cascade plan\n");
@@ -35,13 +35,13 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
 fn apply_preserves_intermediate_fork_point() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .success();
 
@@ -55,7 +55,7 @@ fn apply_preserves_intermediate_fork_point() {
 fn apply_strategy_replays_child_on_parent_tip() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -63,8 +63,8 @@ fn apply_strategy_replays_child_on_parent_tip() {
     repo.cascade()
         .args([
             "apply",
-            "--name",
-            "stack",
+            "--anchor",
+            "pr-1",
             "--new-anchor",
             "pr-1",
             "--strategy",
@@ -80,7 +80,7 @@ fn apply_strategy_replays_child_on_parent_tip() {
 fn apply_refuses_when_state_exists() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -90,7 +90,7 @@ fn apply_refuses_when_state_exists() {
     let pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -102,7 +102,7 @@ fn apply_refuses_when_state_exists() {
 fn apply_refuses_when_dependent_branch_moved() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -111,7 +111,7 @@ fn apply_refuses_when_dependent_branch_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -130,7 +130,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -139,7 +139,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .args(["apply", "--anchor", "pr-1", "--new-anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(

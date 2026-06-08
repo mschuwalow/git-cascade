@@ -21,8 +21,8 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
     output.push_str("Active cascade operation:\n");
     output.push_str(&format!("operation: {}\n", state.operation));
     output.push_str(&format!("phase: {}\n", state.phase));
-    if let Some(plan_name) = &state.plan_name {
-        output.push_str(&format!("plan: {plan_name}\n"));
+    if let Some(plan_anchor) = &state.plan_anchor {
+        output.push_str(&format!("anchor: {plan_anchor}\n"));
     }
     output.push_str(&format!("plan-id: {}\n", state.plan_id));
     output.push_str(&format!(

@@ -19,12 +19,12 @@ fn plan_creates_named_plan_for_linear_stack() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success()
-        .stdout("created plan `stack`\n");
+        .stdout("created plan for anchor `pr-1`\n");
 
-    let plan = read_plan(&repo, "stack");
+    let plan = read_plan(&repo, "pr-1");
     assert_eq!(plan.version, 1);
     assert_eq!(plan.source.anchor_branch, "pr-1");
     assert_eq!(plan.source.anchor_old_tip, pr1_b);
@@ -64,11 +64,11 @@ fn plan_preserves_intermediate_fork_point() {
     repo.commit_file("d.txt", "d\n", "d");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "intermediate"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
 
-    let plan = read_plan(&repo, "intermediate");
+    let plan = read_plan(&repo, "pr-1");
     let child = plan
         .nodes
         .iter()
@@ -87,18 +87,18 @@ fn plan_refuses_to_overwrite_without_replace() {
     repo.commit_file("a.txt", "a\n", "a");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .success();
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already exists"));
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack", "--replace"])
+        .args(["plan", "--anchor", "pr-1", "--replace"])
         .assert()
         .success();
 }
@@ -114,7 +114,7 @@ fn plan_refuses_while_state_exists() {
     std::fs::write(&state_path, "version: 1\n").unwrap();
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -135,13 +135,13 @@ fn plan_rejects_merge_commits() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--name", "stack"])
+        .args(["plan", "--anchor", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("merge replay is not supported"));
 }
 
 fn read_plan(repo: &TestRepo, name: &str) -> Plan {
-    let content = std::fs::read_to_string(repo.named_plan_path(name)).unwrap();
+    let content = std::fs::read_to_string(repo.plan_path(name)).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }

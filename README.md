@@ -13,7 +13,7 @@ git cascade <command>
 Create a repository-local plan before rewriting the anchor branch:
 
 ```sh
-git cascade plan --anchor pr-1 --name stack
+git cascade plan --anchor pr-1
 ```
 
 Rewrite the anchor branch manually:
@@ -26,25 +26,25 @@ git rebase main
 Apply the cascade to dependent branches:
 
 ```sh
-git cascade apply --name stack --new-anchor pr-1
+git cascade apply --anchor pr-1 --new-anchor pr-1
 ```
 
 Preview the Git commands without mutating refs, worktrees, or state:
 
 ```sh
-git cascade apply --name stack --new-anchor pr-1 --dry-run
+git cascade apply --anchor pr-1 --new-anchor pr-1 --dry-run
 ```
 
 Use the simpler strategy that replays every child onto the rewritten tip of its parent:
 
 ```sh
-git cascade apply --name stack --new-anchor pr-1 --strategy move-to-heads
+git cascade apply --anchor pr-1 --new-anchor pr-1 --strategy move-to-heads
 ```
 
 The default strategy is:
 
 ```sh
-git cascade apply --name stack --new-anchor pr-1 --strategy preserve-fork-points
+git cascade apply --anchor pr-1 --new-anchor pr-1 --strategy preserve-fork-points
 ```
 
 ## Conflicts
@@ -78,29 +78,30 @@ git cascade abort
 
 ## Plan Management
 
-List named plans:
+List stored plans by anchor branch:
 
 ```sh
 git cascade list
 ```
 
-Show a named plan:
+Show the plan for an anchor branch:
 
 ```sh
-git cascade show --name stack
+git cascade show --anchor pr-1
 ```
 
 Replace an existing plan:
 
 ```sh
-git cascade plan --anchor pr-1 --name stack --replace
+git cascade plan --anchor pr-1 --replace
 ```
 
 ## Current Limits
 
 - Version 1 targets local branches only.
 - Version 1 supports linear commit ranges only and rejects merge commits.
-- Plans are named and stored under the repository Git common directory.
+- Plans are keyed by anchor branch and stored under the repository Git common directory.
+- Successful apply removes the stored plan for its anchor.
 - Exported or path-based plans are not supported.
 - Only one active cascade operation is allowed per repository.
 

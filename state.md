@@ -11,14 +11,14 @@ Implemented so far:
 - Synchronous Git subprocess wrapper using `std::process::Command`.
 - `test-hooks` Cargo feature for internal test hooks, compiled out by default.
 - Repository-local storage path handling via `git rev-parse --path-format=absolute --git-common-dir`.
-- `PlanName` newtype with unpadded base64url filesystem serialization for named plan files.
+- `PlanKey` newtype with unpadded base64url filesystem serialization for anchor-keyed plan files.
 - Base64url component encoding for branch-derived ref/file components.
 - Typed YAML plan schema where anchor/dependent data is represented by a `kind` enum.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
-- `git cascade apply --name <name> --new-anchor <ref> --dry-run` command preview.
+- `git cascade apply --anchor <anchor-branch> --new-anchor <ref> --dry-run` command preview.
 - `apply --dry-run --strategy move-to-heads` base preview.
-- Mutating `git cascade apply --name <name> --new-anchor <ref>` for clean linear branch stacks.
+- Mutating `git cascade apply --anchor <anchor-branch> --new-anchor <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
 - Apply strategy is stored as an enum value (`preserve-fork-points` or `move-to-heads`) in state.
@@ -34,10 +34,10 @@ Implemented so far:
 - Cleanup marks state as `phase: deleting` before deleting temp refs/worktrees/state.
 - Loading a `phase: deleting` state continues cleanup and then behaves as if no active state exists.
 - Feature-gated `before-final-update` test hook for ref-safety testing.
-- `git cascade list` for named plans.
-- `git cascade show --name <name>` for named plans.
-- Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
-- `git cascade plan --anchor <anchor-branch> --name <name>` for initial linear-stack planning.
+- `git cascade list` for anchor-keyed plans.
+- `git cascade show --anchor <anchor-branch>` for anchor-keyed plans.
+- Apply only supports anchor-keyed plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
+- `git cascade plan --anchor <anchor-branch>` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
 - Real-Git integration test harness using temporary repositories.
 
@@ -51,7 +51,7 @@ Implemented so far:
 - Rejects merge commits in captured ranges.
 - Discovers dependent local branches by finding fork points inside already-captured parent commits.
 - Preserves intermediate fork points in the generated plan.
-- Writes plans to `<git-common-dir>/cascade/plans/<base64url-plan-name>.yaml`.
+- Writes plans to `<git-common-dir>/cascade/plans/<base64url-anchor-branch>.yaml`.
 - Refuses to overwrite existing plans unless `--replace` is passed.
 - Refuses to create a plan while `<git-common-dir>/cascade/state.yaml` exists.
 
@@ -63,7 +63,7 @@ Current tests include:
 - Unit tests for plan-name filesystem encoding/decoding.
 - Unit tests for storage path construction.
 - Real-Git integration tests for `list` and `show`.
-- Real-Git integration tests for plan names containing path separators and spaces.
+- Real-Git integration tests for anchor branches containing path separators.
 - Real-Git integration tests for linear stack plan generation.
 - Real-Git integration tests for intermediate fork-point preservation.
 - Real-Git integration tests for `--replace` behavior.
@@ -94,7 +94,7 @@ Current tests include:
 - Real-Git integration tests for abort tolerating already-deleted worktree files.
 - Real-Git integration tests for `phase: deleting` state cleanup on status.
 - CLI help tests covering commands and apply strategy options.
-- CLI invalid-input tests for missing `--name` and invalid `--strategy`.
+- CLI invalid-input tests for missing `--anchor` and invalid `--strategy`.
 
 Verified commands:
 
@@ -110,7 +110,7 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 - Plan generation supports linear ranges only and rejects merge commits.
 - Dependent branch discovery is first-pass and may need more edge-case coverage.
 - Remote-tracking branches are not updated; v1 should continue to target local branches only.
-- Conflict continuation is implemented for named plans and resolved cherry-pick conflicts.
+- Conflict continuation is implemented for anchor-keyed plans and resolved cherry-pick conflicts.
 - `apply --dry-run` prints the Git operations that would run without promising conflict-free replay.
 - Exported/path-based plans are not supported.
 - Release workflow will only become fully usable once the `git-cascade` package is published through normal release flow.
