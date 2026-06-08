@@ -170,6 +170,7 @@ fn apply(
                 &storage,
                 &plan,
                 DryRunOptions {
+                    plan_name: name.clone(),
                     new_tip_input: new_tip.to_owned(),
                     strategy,
                     in_place,

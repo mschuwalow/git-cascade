@@ -81,6 +81,18 @@ pub fn cleanup_state_artifacts(
     state_file: StateFile,
     state: &ApplyState,
 ) -> Result<()> {
+    cleanup_artifacts(git, storage, state)?;
+
+    match state_file.remove_if_exists() {
+        Ok(()) => Ok(()),
+        Err(Error::IoWithPath { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn cleanup_artifacts(git: &Git, storage: &Storage, state: &ApplyState) -> Result<()> {
     let worktree = worktree_path(storage, state);
     if worktree.exists() {
         let worktree_git = Git::new(&worktree);
@@ -107,13 +119,7 @@ pub fn cleanup_state_artifacts(
         }
     }
 
-    match state_file.remove_if_exists() {
-        Ok(()) => Ok(()),
-        Err(Error::IoWithPath { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
+    Ok(())
 }
 
 fn restore_checkout(git: &Git, restore: &RestoreState) -> Result<()> {
