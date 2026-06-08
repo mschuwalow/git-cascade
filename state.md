@@ -29,6 +29,7 @@ Implemented so far:
 - `git cascade abort` for aborting preserved conflict state and cleaning temp refs/worktrees.
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
+- Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
 - `git cascade plan <anchor-branch> --name <name>` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
 - `git cascade plan --main <ref>` explicit main/base reference selection.
@@ -100,6 +101,7 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 - Remote-tracking branches are not updated; v1 should continue to target local branches only.
 - Conflict continuation is not implemented yet; apply stops with state/worktree preserved and `abort` can clean up.
 - `apply --dry-run` prints the Git operations that would run without promising conflict-free replay.
+- Exported/path-based plans are not supported.
 - Release workflow will only become fully usable once the `git-cascade` package is published through normal release flow.
 
 ## Next Steps
@@ -107,9 +109,8 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 1. Implement `git cascade continue` for completing conflict resolutions.
 2. Add crash/restart tests for continuing from preserved state.
 3. Add explicit final anchor-ref verification tests.
-4. Add tests for `--plan <path>` apply flows.
-5. Harden cleanup behavior when temp refs or worktrees already exist.
-6. Add richer status output for completed mappings/temp refs if needed.
+4. Harden cleanup behavior when temp refs or worktrees already exist.
+5. Add richer status output for completed mappings/temp refs if needed.
 
 ## Recommended Immediate Next Step
 

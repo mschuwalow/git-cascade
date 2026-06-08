@@ -20,7 +20,7 @@ pub struct DryRunOptions {
 
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
-    pub plan_name: Option<PlanName>,
+    pub plan_name: PlanName,
     pub new_anchor_input: String,
     pub move_to_heads: bool,
 }
@@ -185,7 +185,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     let mut mappings = BTreeMap::new();
     mappings.insert(plan.source.anchor_old_tip.clone(), new_anchor.clone());
     let mut state = initial_apply_state(ApplyStateInput {
-        plan_name: options.plan_name.as_ref(),
+        plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_anchor_input: &options.new_anchor_input,
         new_anchor_resolved: &new_anchor,

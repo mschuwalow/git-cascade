@@ -2,13 +2,12 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use crate::Result;
 use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
 use crate::git::Git;
-use crate::plan::Plan;
 use crate::plan_generate::{GenerateOptions, generate_named_plan};
 use crate::recovery;
 use crate::storage::{PlanName, Storage};
-use crate::{Error, Result};
 
 #[derive(Debug, Parser)]
 #[command(name = "git-cascade")]
@@ -30,10 +29,8 @@ enum Command {
         replace: bool,
     },
     Apply {
-        #[arg(long, conflicts_with = "plan")]
-        name: Option<PlanName>,
-        #[arg(long, conflicts_with = "name")]
-        plan: Option<std::path::PathBuf>,
+        #[arg(long)]
+        name: PlanName,
         #[arg(long)]
         new_anchor: String,
         #[arg(long)]
@@ -76,11 +73,10 @@ where
         } => plan(&anchor_branch, name, main.as_deref(), replace),
         Command::Apply {
             name,
-            plan,
             new_anchor,
             move_to_heads,
             dry_run,
-        } => apply(name, plan.as_deref(), &new_anchor, move_to_heads, dry_run),
+        } => apply(name, &new_anchor, move_to_heads, dry_run),
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
         Command::Status => status(),
@@ -105,16 +101,10 @@ fn abort() -> Result<()> {
     Ok(())
 }
 
-fn apply(
-    name: Option<PlanName>,
-    plan_path: Option<&std::path::Path>,
-    new_anchor: &str,
-    move_to_heads: bool,
-    is_dry_run: bool,
-) -> Result<()> {
+fn apply(name: PlanName, new_anchor: &str, move_to_heads: bool, is_dry_run: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let plan = load_apply_plan(&storage, name.as_ref(), plan_path)?;
+    let plan = serde_yaml::from_str(&storage.read_named_plan(&name)?)?;
 
     if is_dry_run {
         print!(
@@ -144,34 +134,6 @@ fn apply(
     }
 
     Ok(())
-}
-
-fn load_apply_plan(
-    storage: &Storage,
-    name: Option<&PlanName>,
-    plan_path: Option<&std::path::Path>,
-) -> Result<Plan> {
-    let content = match (name, plan_path) {
-        (Some(name), None) => storage.read_named_plan(name)?,
-        (None, Some(path)) => {
-            std::fs::read_to_string(path).map_err(|source| Error::IoWithPath {
-                path: path.to_owned(),
-                source,
-            })?
-        }
-        (None, None) => {
-            return Err(Error::InvalidInvocation(
-                "apply requires either --name <name> or --plan <path>".to_owned(),
-            ));
-        }
-        (Some(_), Some(_)) => {
-            return Err(Error::InvalidInvocation(
-                "apply accepts only one of --name or --plan".to_owned(),
-            ));
-        }
-    };
-
-    Ok(serde_yaml::from_str(&content)?)
 }
 
 fn plan(anchor_branch: &str, name: PlanName, main: Option<&str>, replace: bool) -> Result<()> {

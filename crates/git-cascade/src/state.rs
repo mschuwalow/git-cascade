@@ -137,7 +137,7 @@ pub fn remove_state(storage: &Storage) -> Result<()> {
 }
 
 pub struct ApplyStateInput<'a> {
-    pub plan_name: Option<&'a PlanName>,
+    pub plan_name: &'a PlanName,
     pub plan_id: &'a str,
     pub new_anchor_input: &'a str,
     pub new_anchor_resolved: &'a str,
@@ -154,7 +154,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         version: 1,
         operation: "apply".to_owned(),
         phase: "replay".to_owned(),
-        plan_name: input.plan_name.map(ToString::to_string),
+        plan_name: Some(input.plan_name.to_string()),
         plan_id: input.plan_id.to_owned(),
         started_at: now.clone(),
         updated_at: now,
