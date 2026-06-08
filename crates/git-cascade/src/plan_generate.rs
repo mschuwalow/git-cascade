@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
-    pub anchor_branch: String,
+    pub anchor_ref: String,
     pub replace: bool,
 }
 
@@ -31,23 +31,26 @@ pub fn generate_anchor_keyed_plan(
     storage: &Storage,
     options: GenerateOptions,
 ) -> Result<Plan> {
-    let plan = generate_plan(git, &options.anchor_branch)?;
+    let plan = generate_plan(git, &options.anchor_ref)?;
     validate_plan(git, &plan)?;
-    let key = PlanKey::from_anchor(&options.anchor_branch)?;
+    let key = PlanKey::from_anchor(&options.anchor_ref)?;
     write_anchor_keyed_plan(storage, &key, &plan, options.replace)?;
     Ok(plan)
 }
 
-pub fn generate_plan(git: &Git, anchor_branch: &str) -> Result<Plan> {
-    let anchor_tip = git.local_branch_tip(anchor_branch)?;
+pub fn generate_plan(git: &Git, anchor_ref: &str) -> Result<Plan> {
+    let anchor_tip = git.resolve_commit(anchor_ref)?;
 
     let mut nodes = vec![Node {
-        branch: anchor_branch.to_owned(),
+        branch: anchor_ref.to_owned(),
         old_tip: anchor_tip.clone(),
         kind: NodeKind::Anchor,
     }];
     let mut dependencies = Vec::new();
-    let mut assigned = HashSet::from([anchor_branch.to_owned()]);
+    let mut assigned = HashSet::from([anchor_ref.to_owned()]);
+    if let Some(local_branch) = anchor_local_branch(git, anchor_ref)? {
+        assigned.insert(local_branch);
+    }
     let branches = git.local_branches()?;
 
     while let Some(candidate) = next_candidate(git, &branches, &nodes, &assigned)? {
@@ -82,12 +85,18 @@ pub fn generate_plan(git: &Git, anchor_branch: &str) -> Result<Plan> {
             head_at_generation: git.head_oid()?,
         },
         source: Source {
-            anchor_branch: anchor_branch.to_owned(),
+            anchor_ref: anchor_ref.to_owned(),
             anchor_old_tip: anchor_tip,
         },
         nodes,
         dependencies,
     })
+}
+
+fn anchor_local_branch(git: &Git, anchor_ref: &str) -> Result<Option<String>> {
+    Ok(git
+        .symbolic_full_name(anchor_ref)?
+        .and_then(|refname| refname.strip_prefix("refs/heads/").map(str::to_owned)))
 }
 
 fn write_anchor_keyed_plan(

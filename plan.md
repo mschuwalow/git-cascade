@@ -63,9 +63,9 @@ At that point, normal Git ancestry may no longer contain enough information to s
 The process is intentionally split into two phases:
 
 1. Plan generation: read-only Git inspection before mutation.
-2. Plan application: destructive branch updates after the user manually rewrites the anchor branch.
+2. Plan application: destructive branch updates after the user manually rewrites or selects the replacement anchor.
 
-The plan describes transformations over commits, not branches. Branch names are used as entry points, output targets, and safety checks. They are not used during apply to rediscover history.
+The plan describes transformations over commits, not branches. The anchor can be any Git ref or commit-ish; dependent branch names are output targets and safety checks. They are not used during apply to rediscover history.
 
 ## Primary Workflow
 
@@ -75,14 +75,14 @@ The plan describes transformations over commits, not branches. Branch names are 
 git cascade plan --anchor my-branch
 ```
 
-This command is read-only. It inspects the current Git repository and captures the cascade rooted at `my-branch`.
+This command is read-only. It inspects the current Git repository and captures the cascade rooted at `my-branch`. The `--anchor` value may also be a full ref such as `refs/tags/old-stack` or `refs/remotes/origin/main`.
 
-The plan is stored in the repository's Git common directory keyed by the anchor branch. Users do not normally pass plan files around manually.
+The plan is stored in the repository's Git common directory keyed by the raw `--anchor` value. Users do not normally pass plan files around manually.
 
 The generated plan records:
 
-- The anchor branch name.
-- The anchor branch tip before mutation.
+- The anchor ref/key.
+- The anchor tip before mutation.
 - Every dependent branch in the cascade.
 - Each dependent branch's old tip.
 - Each dependent branch's old base.
@@ -126,7 +126,7 @@ new-my-branch-tip
       rewritten-pr-3
 ```
 
-The apply step does not rebase the anchor branch. The anchor branch was already rewritten manually.
+The apply step does not rebase or update the anchor. The replacement anchor was already created manually.
 
 ## Apply Modes
 
@@ -146,7 +146,7 @@ git cascade apply --anchor my-branch --new-anchor <commit-sha>
 
 When `--new-anchor` is provided, the tool resolves that ref or commit exactly once at the start of execution and uses the resolved object ID as the new anchor tip.
 
-There is no implicit fallback to the current tip of the original anchor branch. If the desired new anchor is the manually rebased anchor branch, pass it explicitly:
+There is no implicit fallback to the current tip of the original anchor ref. If the desired new anchor is a manually rebased branch, pass it explicitly:
 
 ```bash
 git cascade apply --anchor my-branch --new-anchor my-branch
@@ -166,11 +166,11 @@ With this flag, every dependent branch is replayed onto the rewritten tip of its
 
 ## Concepts
 
-### Anchor Branch
+### Anchor Ref
 
-The anchor branch is the branch selected when creating the plan. The user is expected to manually rebase, replace, or otherwise move this branch before applying the plan.
+The anchor ref is the `--anchor` value selected when creating the plan. It may be a branch, tag, remote-tracking ref, full refname, or commit-ish that resolves to a commit.
 
-The apply step does not rewrite the anchor branch.
+The apply step does not rewrite the anchor. It only uses `--new-anchor` as the replacement commit for replaying dependents.
 
 ### Dependent Branch
 
@@ -232,13 +232,13 @@ Repository-local storage layout:
 ```text
 <git-common-dir>/cascade/
   plans/
-    <base64url-anchor-branch>.yaml
+    <base64url-anchor-ref>.yaml
   state.yaml
   worktrees/
     <plan-id>/
 ```
 
-`plans/<base64url-anchor-branch>.yaml` stores immutable anchor-keyed plans. The anchor branch is encoded for filesystem safety.
+`plans/<base64url-anchor-ref>.yaml` stores immutable anchor-keyed plans. The raw anchor key is encoded for filesystem safety.
 
 `state.yaml` stores the single active cascade operation and acts as the repository-wide cascade lock.
 
@@ -253,11 +253,11 @@ git cascade plan --anchor my-branch
 git cascade apply --anchor my-branch --new-anchor my-branch
 ```
 
-Plan keys are anchor branch names and are encoded as unpadded base64url for filesystem storage.
+Plan keys are raw `--anchor` values and are encoded as unpadded base64url for filesystem storage.
 
 Creating a plan:
 
-- Writes `<git-common-dir>/cascade/plans/<base64url-anchor-branch>.yaml`.
+- Writes `<git-common-dir>/cascade/plans/<base64url-anchor-ref>.yaml`.
 - Refuses to overwrite an existing plan unless `--replace` is passed.
 - Refuses to run while `state.yaml` exists.
 - Stores a stable `plan_id` inside the plan.
@@ -350,7 +350,7 @@ repository:
   head_at_generation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 source:
-  anchor_branch: "agent-permissions-8"
+  anchor_ref: "agent-permissions-8"
   anchor_old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
 
 nodes:
@@ -393,7 +393,7 @@ dependencies:
 
 `repository` contains optional diagnostic metadata. It must not be required for correctness because plans should not depend on absolute paths.
 
-`source` describes the anchor branch and its old state.
+`source` describes the anchor ref/key and its old state.
 
 `nodes` contains the captured branch graph. It must include exactly one anchor node.
 
@@ -402,12 +402,12 @@ dependencies:
 ## Plan Generation
 
 ```bash
-git cascade plan --anchor <anchor-branch>
+git cascade plan --anchor <anchor-ref>
 ```
 
 Plan generation is a read-only phase.
 
-It stores the generated plan at `<git-common-dir>/cascade/plans/<plan-name>.yaml`.
+It stores the generated plan at `<git-common-dir>/cascade/plans/<base64url-anchor-ref>.yaml`.
 
 Allowed Git operations include:
 
@@ -430,7 +430,7 @@ Forbidden Git operations include:
 
 Generation rules:
 
-- Resolve all symbolic refs to full object IDs.
+- Resolve the anchor and all saved commits to full object IDs.
 - Reject merge commits unless merge replay is explicitly supported by a later schema version.
 - Reject a dependent branch if its `old_base` is not reachable from the `old_tip` of its declared parent.
 - For a non-anchor parent, prefer the parent that owns the dependent branch's `old_base`, not merely a descendant branch that contains it.
@@ -440,23 +440,23 @@ Generation rules:
 
 ## Manual Rebase Handoff
 
-After the plan is created, the user can freely rebase or otherwise replace the anchor branch.
+After the plan is created, the user can freely rebase or otherwise create the replacement anchor.
 
-Expected manual commands:
+If the replacement anchor is a branch, expected manual commands look like:
 
 ```bash
-git switch <anchor-branch>
+git switch <replacement-anchor-branch>
 git rebase --onto <new-base> <anchor-old-base>
 ```
 
 Apply requires `--new-anchor`. The tool resolves that ref or commit exactly once at the start of execution and uses the resolved commit as the replacement anchor.
 
-There is no implicit use of `refs/heads/<anchor-branch>`. If the manually rebased anchor branch is the desired replacement anchor, the user must pass that branch name explicitly.
+There is no implicit use of `refs/heads/<anchor-ref>`. If a manually rebased branch is the desired replacement anchor, the user must pass that branch name explicitly as `--new-anchor`.
 
 ## Apply Execution
 
 ```bash
-git cascade apply --anchor <anchor-branch> --new-anchor <ref-or-commit>
+git cascade apply --anchor <anchor-ref> --new-anchor <ref-or-commit>
 ```
 
 Apply-time behavior is selected by flags, not by defaults stored in the plan. With the default `--strategy preserve-fork-points`, apply preserves fork points between non-anchor branches. With `--strategy move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.
@@ -804,11 +804,11 @@ Critical implementation requirements:
 - GitHub or GitLab PR retargeting.
 - Guessing stack structure after refs have moved.
 - Using mutable refs as stored commit identities.
-- Updating the manually rebased anchor branch during apply.
+- Updating the replacement anchor during apply.
 
 ## Why This Solves The Target Problem
 
-In the target workflow, the important old structure still exists before the user rebases the anchor branch.
+In the target workflow, the important old structure still exists before the user rewrites or selects the replacement anchor.
 
 The plan captures that structure first. After the manual rebase breaks normal ancestry relationships, apply does not need to guess what used to depend on what.
 

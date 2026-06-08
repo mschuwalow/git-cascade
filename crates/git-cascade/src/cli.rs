@@ -141,18 +141,18 @@ fn apply(anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -
     Ok(())
 }
 
-fn plan(anchor_branch: &str, replace: bool) -> Result<()> {
+fn plan(anchor_ref: &str, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     generate_anchor_keyed_plan(
         &git,
         &storage,
         GenerateOptions {
-            anchor_branch: anchor_branch.to_owned(),
+            anchor_ref: anchor_ref.to_owned(),
             replace,
         },
     )?;
-    println!("created plan for anchor `{anchor_branch}`");
+    println!("created plan for anchor `{anchor_ref}`");
 
     Ok(())
 }

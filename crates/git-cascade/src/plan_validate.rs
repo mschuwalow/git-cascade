@@ -81,8 +81,8 @@ fn validate_shape(plan: &Plan) -> Result<()> {
 
     let node_by_branch = node_by_branch(plan)?;
     let anchor = anchor_node(plan)?;
-    if anchor.branch != plan.source.anchor_branch {
-        return invalid("source anchor_branch does not match the anchor node");
+    if anchor.branch != plan.source.anchor_ref {
+        return invalid("source anchor_ref does not match the anchor node");
     }
     if anchor.old_tip != plan.source.anchor_old_tip {
         return invalid("source anchor_old_tip does not match the anchor node");
@@ -406,7 +406,7 @@ mod tests {
                 head_at_generation: "0".repeat(40),
             },
             source: Source {
-                anchor_branch: "anchor".to_owned(),
+                anchor_ref: "anchor".to_owned(),
                 anchor_old_tip: "0".repeat(40),
             },
             nodes,

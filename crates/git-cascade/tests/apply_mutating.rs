@@ -150,6 +150,39 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     assert!(repo.common_dir().join("cascade/state.yaml").exists());
 }
 
+#[test]
+fn apply_uses_arbitrary_ref_anchor_plan_key() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.git_ok(["tag", "old-anchor"]);
+    repo.switch_new("pr-2");
+    let old_pr2 = repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "--anchor", "refs/tags/old-anchor"])
+        .assert()
+        .success();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "apply",
+            "--anchor",
+            "refs/tags/old-anchor",
+            "--new-anchor",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    repo.git_ok(["merge-base", "--is-ancestor", "pr-1", "pr-2"]);
+    assert!(!repo.plan_path("refs/tags/old-anchor").exists());
+}
+
 fn linear_stack() -> TestRepo {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");

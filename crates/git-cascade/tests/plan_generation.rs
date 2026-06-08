@@ -26,7 +26,7 @@ fn plan_creates_anchor_keyed_plan_for_linear_stack() {
 
     let plan = read_plan(&repo, "pr-1");
     assert_eq!(plan.version, 1);
-    assert_eq!(plan.source.anchor_branch, "pr-1");
+    assert_eq!(plan.source.anchor_ref, "pr-1");
     assert_eq!(plan.source.anchor_old_tip, pr1_b);
     assert_eq!(plan.nodes.len(), 3);
     assert_eq!(plan.dependencies.len(), 2);
@@ -77,6 +77,53 @@ fn plan_preserves_intermediate_fork_point() {
 
     assert_eq!(child.parent(), Some("pr-1"));
     assert_eq!(child.old_base(), Some(fork_point.as_str()));
+}
+
+#[test]
+fn plan_accepts_tag_anchor() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    let anchor_tip = repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.git_ok(["tag", "stack-anchor"]);
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "--anchor", "refs/tags/stack-anchor"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "refs/tags/stack-anchor");
+    assert_eq!(plan.source.anchor_ref, "refs/tags/stack-anchor");
+    assert_eq!(plan.source.anchor_old_tip, anchor_tip);
+    assert_eq!(plan.nodes.len(), 2);
+    assert_eq!(plan.nodes[0].branch, "refs/tags/stack-anchor");
+    assert_eq!(plan.nodes[1].branch, "pr-2");
+    assert_eq!(plan.nodes[1].parent(), Some("refs/tags/stack-anchor"));
+}
+
+#[test]
+fn plan_with_full_local_branch_ref_does_not_include_anchor_branch_as_dependent() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "--anchor", "refs/heads/pr-1"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "refs/heads/pr-1");
+    assert_eq!(plan.nodes.len(), 2);
+    assert_eq!(plan.nodes[0].branch, "refs/heads/pr-1");
+    assert_eq!(plan.nodes[1].branch, "pr-2");
+    assert_eq!(plan.nodes[1].parent(), Some("refs/heads/pr-1"));
 }
 
 #[test]

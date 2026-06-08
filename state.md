@@ -16,9 +16,9 @@ Implemented so far:
 - Typed YAML plan schema where anchor/dependent data is represented by a `kind` enum.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
-- `git cascade apply --anchor <anchor-branch> --new-anchor <ref> --dry-run` command preview.
+- `git cascade apply --anchor <anchor-ref> --new-anchor <ref> --dry-run` command preview.
 - `apply --dry-run --strategy move-to-heads` base preview.
-- Mutating `git cascade apply --anchor <anchor-branch> --new-anchor <ref>` for clean linear branch stacks.
+- Mutating `git cascade apply --anchor <anchor-ref> --new-anchor <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
 - Active apply state uses typed enum values for operation, phase, and strategy, and stores the plan anchor as a required `PlanKey`.
@@ -35,9 +35,9 @@ Implemented so far:
 - Loading a `phase: deleting` state continues cleanup and then behaves as if no active state exists.
 - Feature-gated `before-final-update` test hook for ref-safety testing.
 - `git cascade list` for anchor-keyed plans.
-- `git cascade show --anchor <anchor-branch>` for anchor-keyed plans.
+- `git cascade show --anchor <anchor-ref>` for anchor-keyed plans.
 - Apply only supports anchor-keyed plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
-- `git cascade plan --anchor <anchor-branch>` for initial linear-stack planning.
+- `git cascade plan --anchor <anchor-ref>` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
 - Real-Git integration test harness using temporary repositories.
 
@@ -45,13 +45,13 @@ Implemented so far:
 
 `git cascade plan` currently:
 
-- Resolves the anchor as a local branch under `refs/heads`.
+- Resolves the anchor as a Git ref or commit-ish and uses the raw `--anchor` value as the plan key.
 - Discovers dependent branches by their attachment points to the anchor or already discovered dependents.
 - Captures owned commits with `git rev-list --reverse <base>..<tip>`.
 - Rejects merge commits in captured ranges.
 - Discovers dependent local branches by finding fork points inside already-captured parent commits.
 - Preserves intermediate fork points in the generated plan.
-- Writes plans to `<git-common-dir>/cascade/plans/<base64url-anchor-branch>.yaml`.
+- Writes plans to `<git-common-dir>/cascade/plans/<base64url-anchor-ref>.yaml`.
 - Refuses to overwrite existing plans unless `--replace` is passed.
 - Refuses to create a plan while `<git-common-dir>/cascade/state.yaml` exists.
 
@@ -63,7 +63,8 @@ Current tests include:
 - Unit tests for plan-key filesystem encoding/decoding.
 - Unit tests for storage path construction.
 - Real-Git integration tests for `list` and `show`.
-- Real-Git integration tests for anchor branches containing path separators.
+- Real-Git integration tests for anchor refs containing path separators.
+- Real-Git integration tests for tag anchors and full `refs/heads/*` anchors.
 - Real-Git integration tests for linear stack plan generation.
 - Real-Git integration tests for intermediate fork-point preservation.
 - Real-Git integration tests for `--replace` behavior.
