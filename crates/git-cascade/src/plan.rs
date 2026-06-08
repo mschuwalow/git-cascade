@@ -19,9 +19,9 @@ pub struct Repository {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Source {
-    pub anchor_ref: String,
-    pub anchor_old_base: String,
-    pub anchor_old_tip: String,
+    pub name: String,
+    pub old_base: String,
+    pub old_tip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

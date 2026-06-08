@@ -11,20 +11,20 @@ use crate::state::{
     ApplyState, ApplyStateInput, CurrentState, Operation, Phase, StateFile, Strategy,
     initial_apply_state,
 };
-use crate::storage::{PlanKey, Storage};
+use crate::storage::{PlanName, Storage};
 use crate::test_hooks;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct DryRunOptions {
-    pub new_anchor_input: String,
+    pub new_tip_input: String,
     pub strategy: Strategy,
 }
 
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
-    pub plan_key: PlanKey,
-    pub new_anchor_input: String,
+    pub plan_name: PlanName,
+    pub new_tip_input: String,
     pub strategy: Strategy,
 }
 
@@ -41,7 +41,7 @@ struct ActualReplayContext<'a> {
     selected_bases: &'a HashMap<String, String>,
     temp_tips: &'a HashMap<String, String>,
     mappings: &'a BTreeMap<String, String>,
-    new_anchor: &'a str,
+    new_tip: &'a str,
     strategy: Strategy,
 }
 
@@ -64,7 +64,7 @@ pub fn dry_run(
     options: DryRunOptions,
 ) -> Result<String> {
     validate_plan_for_apply(git, plan)?;
-    let new_anchor = git.resolve_commit(&options.new_anchor_input)?;
+    let new_tip = git.resolve_commit(&options.new_tip_input)?;
     let ordered = topological_order(plan)?;
     let nodes = plan
         .nodes
@@ -85,12 +85,7 @@ pub fn dry_run(
     let strategy = options.strategy.as_str();
 
     writeln!(output, "# git-cascade apply --dry-run").unwrap();
-    writeln!(
-        output,
-        "new-anchor {} -> {}",
-        options.new_anchor_input, new_anchor
-    )
-    .unwrap();
+    writeln!(output, "new-tip {} -> {}", options.new_tip_input, new_tip).unwrap();
     writeln!(output, "strategy {strategy}").unwrap();
     writeln!(output, "worktree {}", worktree.display()).unwrap();
     writeln!(output, "temp-refs refs/cascade/tmp/{}", plan.plan_id).unwrap();
@@ -104,7 +99,7 @@ pub fn dry_run(
             anchor,
             &nodes,
             &selected_bases,
-            &new_anchor,
+            &new_tip,
             options.strategy,
         )?;
         selected_bases.insert(node.branch.clone(), base.clone());
@@ -165,8 +160,8 @@ pub fn dry_run(
 
 pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<()> {
     validate_plan_for_apply(git, plan)?;
-    let new_anchor = git.resolve_commit(&options.new_anchor_input)?;
-    let new_anchor_ref = git.symbolic_full_name(&options.new_anchor_input)?;
+    let new_tip = git.resolve_commit(&options.new_tip_input)?;
+    let new_tip_ref = git.symbolic_full_name(&options.new_tip_input)?;
     let ordered = topological_order(plan)?;
     let nodes = plan
         .nodes
@@ -182,14 +177,14 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         })?;
 
     let mut mappings = BTreeMap::new();
-    mappings.insert(plan.source.anchor_old_tip.clone(), new_anchor.clone());
+    mappings.insert(plan.source.old_tip.clone(), new_tip.clone());
     let worktree = storage.worktrees_dir().join(&plan.plan_id);
     let mut state = initial_apply_state(ApplyStateInput {
-        plan_key: &options.plan_key,
+        plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
-        new_anchor_input: &options.new_anchor_input,
-        new_anchor_resolved: &new_anchor,
-        new_anchor_input_was_ref: new_anchor_ref.is_some(),
+        new_tip_input: &options.new_tip_input,
+        new_tip_resolved: &new_tip,
+        new_tip_input_was_ref: new_tip_ref.is_some(),
         strategy: options.strategy,
         pending_branches: ordered.clone(),
         mappings: mappings.clone(),
@@ -218,7 +213,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
                 selected_bases: &selected_bases,
                 temp_tips: &temp_tips,
                 mappings: &mappings,
-                new_anchor: &new_anchor,
+                new_tip: &new_tip,
                 strategy: options.strategy,
             },
         )?;
@@ -282,16 +277,16 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         &ordered,
         &nodes,
         &temp_tips,
-        new_anchor_ref.as_deref(),
-        &new_anchor,
+        new_tip_ref.as_deref(),
+        &new_tip,
     )?)?;
 
     if worktree_created || !temp_refs.is_empty() || storage.state_path().exists() {
         recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
-        storage.delete_plan(options.plan_key)?;
+        storage.delete_plan(options.plan_name)?;
     } else {
         state_file.remove()?;
-        storage.delete_plan(options.plan_key)?;
+        storage.delete_plan(options.plan_name)?;
     }
 
     Ok(())
@@ -323,16 +318,16 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let current = state.current.clone().ok_or_else(|| {
         Error::InvalidInvocation("active apply state has no current commit".to_owned())
     })?;
-    let plan_key = state.plan_anchor.clone();
-    let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_key)?)?;
+    let plan_name = state.plan_name.clone();
+    let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_name)?)?;
     validate_plan_for_apply(git, &plan)?;
 
-    if state.new_anchor.input_was_ref {
-        let resolved = git.resolve_commit(&state.new_anchor.input)?;
-        if resolved != state.new_anchor.resolved {
+    if state.new_tip.input_was_ref {
+        let resolved = git.resolve_commit(&state.new_tip.input)?;
+        if resolved != state.new_tip.resolved {
             return Err(Error::InvalidInvocation(format!(
-                "new anchor `{}` moved after apply started: expected `{}`, found `{resolved}`",
-                state.new_anchor.input, state.new_anchor.resolved
+                "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`",
+                state.new_tip.input, state.new_tip.resolved
             )));
         }
     }
@@ -423,7 +418,7 @@ fn continue_replay_after_resolved_commit(
                     selected_bases: &selected_bases,
                     temp_tips: &temp_tips,
                     mappings: &mappings,
-                    new_anchor: &state.new_anchor.resolved,
+                    new_tip: &state.new_tip.resolved,
                     strategy: state.strategy,
                 },
             )?;
@@ -480,13 +475,13 @@ fn continue_replay_after_resolved_commit(
 
     state.phase = Phase::FinalUpdate;
     state_file.write_state(&mut state)?;
-    let new_anchor_ref = if state.new_anchor.input_was_ref {
+    let new_tip_ref = if state.new_tip.input_was_ref {
         Some(
-            git.symbolic_full_name(&state.new_anchor.input)?
+            git.symbolic_full_name(&state.new_tip.input)?
                 .ok_or_else(|| {
                     Error::InvalidInvocation(format!(
-                        "new anchor `{}` no longer resolves to a ref",
-                        state.new_anchor.input
+                        "new tip `{}` no longer resolves to a ref",
+                        state.new_tip.input
                     ))
                 })?,
         )
@@ -498,13 +493,13 @@ fn continue_replay_after_resolved_commit(
         &ordered,
         &nodes,
         &temp_tips,
-        new_anchor_ref.as_deref(),
-        &state.new_anchor.resolved,
+        new_tip_ref.as_deref(),
+        &state.new_tip.resolved,
     )?)?;
 
     recovery::mark_deleting_and_cleanup(git, storage, state_file, &mut state)?;
-    let plan_key = state.plan_anchor.clone();
-    storage.delete_plan(plan_key)?;
+    let plan_name = state.plan_name.clone();
+    storage.delete_plan(plan_name)?;
 
     Ok(())
 }
@@ -514,7 +509,7 @@ fn replay_base(
     anchor: &Node,
     nodes: &HashMap<&str, &Node>,
     selected_bases: &HashMap<String, ReplayBase>,
-    new_anchor: &str,
+    new_tip: &str,
     strategy: Strategy,
 ) -> Result<ReplayBase> {
     let parent_branch = node.parent().ok_or_else(|| {
@@ -525,7 +520,7 @@ fn replay_base(
         .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
 
     if parent.branch == anchor.branch {
-        return Ok(ReplayBase::ResolvedCommit(new_anchor.to_owned()));
+        return Ok(ReplayBase::ResolvedCommit(new_tip.to_owned()));
     }
 
     if strategy == Strategy::MoveToHeads {
@@ -560,7 +555,7 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
         .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
 
     if parent.branch == context.anchor.branch {
-        return Ok(context.new_anchor.to_owned());
+        return Ok(context.new_tip.to_owned());
     }
 
     if context.strategy == Strategy::MoveToHeads {
@@ -631,13 +626,13 @@ fn final_ref_transaction(
     ordered: &[String],
     nodes: &HashMap<&str, &Node>,
     temp_tips: &HashMap<String, String>,
-    new_anchor_ref: Option<&str>,
-    new_anchor: &str,
+    new_tip_ref: Option<&str>,
+    new_tip: &str,
 ) -> Result<String> {
     let mut transaction = String::new();
     writeln!(transaction, "start").unwrap();
-    if let Some(new_anchor_ref) = new_anchor_ref {
-        writeln!(transaction, "verify {new_anchor_ref} {new_anchor}").unwrap();
+    if let Some(new_tip_ref) = new_tip_ref {
+        writeln!(transaction, "verify {new_tip_ref} {new_tip}").unwrap();
     }
     for branch in ordered {
         let node = nodes

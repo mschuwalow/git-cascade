@@ -10,19 +10,19 @@ git cascade <command>
 
 ## Workflow
 
-Create a repository-local plan before rewriting the anchor ref:
+Create a repository-local plan before rewriting the root range:
 
 ```sh
-git cascade plan --anchor pr-1
+git cascade plan stack --old-base main --old-tip pr-1
 ```
 
-If the old anchor base cannot be inferred, pass the upstream/base ref explicitly:
+For a single-commit root rewrite, use that commit's parent as the old base:
 
 ```sh
-git cascade plan --anchor pr-1 --base main
+git cascade plan stack --old-base '<old-commit>^' --old-tip <old-commit>
 ```
 
-Rewrite the replacement anchor manually:
+Rewrite the replacement root tip manually:
 
 ```sh
 git switch pr-1
@@ -32,25 +32,25 @@ git rebase main
 Apply the cascade to dependent branches:
 
 ```sh
-git cascade apply --old-anchor pr-1 --new-anchor pr-1
+git cascade apply stack --new-tip pr-1
 ```
 
 Preview the Git commands without mutating refs, worktrees, or state:
 
 ```sh
-git cascade apply --old-anchor pr-1 --new-anchor pr-1 --dry-run
+git cascade apply stack --new-tip pr-1 --dry-run
 ```
 
 Use the simpler strategy that replays every child onto the rewritten tip of its parent:
 
 ```sh
-git cascade apply --old-anchor pr-1 --new-anchor pr-1 --strategy move-to-heads
+git cascade apply stack --new-tip pr-1 --strategy move-to-heads
 ```
 
 The default strategy is:
 
 ```sh
-git cascade apply --old-anchor pr-1 --new-anchor pr-1 --strategy preserve-fork-points
+git cascade apply stack --new-tip pr-1 --strategy preserve-fork-points
 ```
 
 ## Conflicts
@@ -84,22 +84,22 @@ git cascade abort
 
 ## Plan Management
 
-List stored plans by anchor key:
+List stored plans by name:
 
 ```sh
 git cascade list
 ```
 
-Show the plan for an anchor key:
+Show a named plan:
 
 ```sh
-git cascade show --anchor pr-1
+git cascade show stack
 ```
 
 Replace an existing plan:
 
 ```sh
-git cascade plan --anchor pr-1 --replace
+git cascade plan stack --old-base main --old-tip pr-1 --replace
 ```
 
 ## Shell Completions
@@ -116,8 +116,8 @@ git cascade completions fish
 
 - Version 1 updates dependent local branches only.
 - Version 1 supports linear commit ranges only and rejects merge commits.
-- Direct dependents are discovered only inside the old anchor range bounded by inferred or explicit `--base`.
-- Plans are keyed by the raw `--anchor` ref string and stored under the repository Git common directory.
+- Direct dependents are discovered only inside the explicit old root range `old_base..old_tip`.
+- Plans are keyed by explicit names and stored under the repository Git common directory.
 - Successful apply removes the stored plan for its anchor.
 - Exported or path-based plans are not supported.
 - Only one active cascade operation is allowed per repository.

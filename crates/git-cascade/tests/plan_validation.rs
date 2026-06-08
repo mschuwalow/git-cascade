@@ -10,10 +10,10 @@ use common::repo::TestRepo;
 fn validates_generated_plan() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
-    let plan = read_plan(&repo, "pr-1");
+    let plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
     validate_plan(&git, &plan).unwrap();
@@ -24,10 +24,10 @@ fn validates_generated_plan() {
 fn validation_rejects_tampered_commit_list() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
-    let mut plan = read_plan(&repo, "pr-1");
+    let mut plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
     let node = plan
@@ -49,10 +49,10 @@ fn validation_rejects_tampered_commit_list() {
 fn apply_validation_rejects_dependent_branch_that_moved_after_planning() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
-    let plan = read_plan(&repo, "pr-1");
+    let plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
     repo.switch("pr-2");
@@ -70,10 +70,10 @@ fn apply_validation_rejects_dependent_branch_that_moved_after_planning() {
 fn validation_rejects_dependency_parent_mismatch() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
-    let mut plan = read_plan(&repo, "pr-1");
+    let mut plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
     plan.dependencies[0].parent = "pr-3".to_owned();
@@ -87,10 +87,10 @@ fn validation_rejects_dependency_parent_mismatch() {
 fn validation_rejects_direct_child_at_anchor_base() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
-    let mut plan = read_plan(&repo, "pr-1");
+    let mut plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
     let node = plan
@@ -104,12 +104,12 @@ fn validation_rejects_direct_child_at_anchor_base() {
     else {
         panic!("pr-2 should be dependent");
     };
-    *old_base = plan.source.anchor_old_base.clone();
+    *old_base = plan.source.old_base.clone();
     *commits = repo.rev_list_reverse(&format!("{}..{}", old_base, node.old_tip));
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
-    assert!(error.contains("is outside anchor range"));
+    assert!(error.contains("is outside root range"));
 }
 
 fn linear_stack() -> TestRepo {

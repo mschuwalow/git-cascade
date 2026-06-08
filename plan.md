@@ -21,9 +21,9 @@ The plan exists so the tool does not need to infer the old stack structure after
 The intended workflow is:
 
 ```bash
-git cascade plan --anchor my-branch
+git cascade plan stack --old-base main --old-tip my-branch
 git rebase --onto origin/main 3e1e56f91cad6cc45281f86849ee9e727ccac340
-git cascade apply --old-anchor my-branch --new-anchor <new-anchor>
+git cascade apply stack --new-tip <new-tip>
 ```
 
 The user manually rebases one branch. The tool then uses the saved plan to cascade that rewrite through all dependent branches.
@@ -63,7 +63,7 @@ At that point, normal Git ancestry may no longer contain enough information to s
 The process is intentionally split into two phases:
 
 1. Plan generation: read-only Git inspection before mutation.
-2. Plan application: destructive branch updates after the user manually rewrites or selects the replacement anchor.
+2. Plan application: destructive branch updates after the user manually rewrites or selects the replacement root tip.
 
 The plan describes transformations over commits, not branches. The anchor can be any Git ref or commit-ish; dependent branch names are output targets and safety checks. They are not used during apply to rediscover history.
 
@@ -72,18 +72,18 @@ The plan describes transformations over commits, not branches. The anchor can be
 ### 1. Create The Plan
 
 ```bash
-git cascade plan --anchor my-branch
+git cascade plan stack --old-base main --old-tip my-branch
 ```
 
-This command is read-only. It inspects the current Git repository and captures the cascade rooted at `my-branch`. The `--anchor` value may also be a full ref such as `refs/tags/old-stack` or `refs/remotes/origin/main`.
+This command is read-only. It inspects the current Git repository and captures the cascade rooted at the old range `old-base..old-tip`. The `--old-tip` value may be a branch, tag, full ref, or commit-ish.
 
-The plan is stored in the repository's Git common directory keyed by the raw `--anchor` value. Users do not normally pass plan files around manually.
+The plan is stored in the repository's Git common directory keyed by the explicit plan name. Users do not normally pass plan files around manually.
 
 The generated plan records:
 
-- The anchor ref/key.
-- The old anchor base used to bound direct dependent discovery.
-- The anchor tip before mutation.
+- The plan name.
+- The old root range base used to bound direct dependent discovery.
+- The old root range tip before mutation.
 - Every dependent branch in the cascade.
 - Each dependent branch's old tip.
 - Each dependent branch's old base.
@@ -106,10 +106,10 @@ This step may break the old relationships between the anchor and its dependent b
 ### 3. Apply The Plan
 
 ```bash
-git cascade apply --old-anchor my-branch --new-anchor <new-anchor>
+git cascade apply stack --new-tip <new-tip>
 ```
 
-Apply requires both the old anchor key and an explicit replacement anchor. `--old-anchor` selects the stored plan created from the old anchor ref/key. The tool resolves `--new-anchor` exactly once and treats the resolved commit as the replacement for the old anchor boundary.
+Apply requires both the plan name and an explicit replacement tip. The tool resolves `--new-tip` exactly once and treats the resolved commit as the replacement for the old root range tip.
 
 Then it replays each dependent branch's saved commit range onto the rewritten equivalent of its original fork point.
 
@@ -127,30 +127,30 @@ new-my-branch-tip
       rewritten-pr-3
 ```
 
-The apply step does not rebase or update the anchor. The replacement anchor was already created manually.
+The apply step does not rebase or update the old root tip. The replacement root tip was already created manually.
 
 ## Apply Modes
 
-### Required Replacement Anchor
+### Required Replacement Tip
 
-The replacement anchor is always explicit:
+The replacement root tip is always explicit:
 
 ```bash
-git cascade apply --old-anchor my-branch --new-anchor origin/main
+git cascade apply stack --new-tip origin/main
 ```
 
 or:
 
 ```bash
-git cascade apply --old-anchor my-branch --new-anchor <commit-sha>
+git cascade apply stack --new-tip <commit-sha>
 ```
 
-When `--new-anchor` is provided, the tool resolves that ref or commit exactly once at the start of execution and uses the resolved object ID as the new anchor tip.
+When `--new-tip` is provided, the tool resolves that ref or commit exactly once at the start of execution and uses the resolved object ID as the new root tip.
 
-There is no implicit fallback to the current tip of the original anchor ref. If the desired new anchor is a manually rebased branch, pass it explicitly:
+There is no implicit fallback to the current tip of the original old tip ref. If the desired new tip is a manually rebased branch, pass it explicitly:
 
 ```bash
-git cascade apply --old-anchor my-branch --new-anchor my-branch
+git cascade apply stack --new-tip my-branch
 ```
 
 ### Move To Heads
@@ -160,18 +160,18 @@ The default apply mode preserves fork points between non-anchor branches.
 The `--strategy move-to-heads` option selects a simpler strategy:
 
 ```bash
-git cascade apply --old-anchor my-branch --new-anchor my-branch --strategy move-to-heads
+git cascade apply stack --new-tip my-branch --strategy move-to-heads
 ```
 
 With this flag, every dependent branch is replayed onto the rewritten tip of its parent, even if it originally forked from an intermediate parent commit.
 
 ## Concepts
 
-### Anchor Ref
+### Old Root Range
 
-The anchor ref is the `--anchor` value selected when creating the plan. It may be a branch, tag, remote-tracking ref, full refname, or commit-ish that resolves to a commit.
+The old root range is selected when creating the plan with `--old-base` and `--old-tip`. `--old-base` is combined with `--old-tip` through `merge-base`, so `--old-base main --old-tip pr-1` remains stable even if `main` has advanced.
 
-The apply step does not rewrite the anchor. It only uses `--new-anchor` as the replacement commit for replaying dependents.
+The apply step does not rewrite the old tip. It only uses `--new-tip` as the replacement commit for replaying dependents.
 
 ### Dependent Branch
 
@@ -216,7 +216,7 @@ Important rules:
 - Apply does not use merge-base inference to rediscover the old stack.
 - The plan does not store the new base by default.
 
-The new base is intentionally not stored because the plan is created before the manual rewrite happens. The replacement anchor is supplied explicitly with `--new-anchor` during apply.
+The new base is intentionally not stored because the plan is created before the manual rewrite happens. The replacement tip is supplied explicitly with `--new-tip` during apply.
 
 ## Repository Storage
 
@@ -233,32 +233,32 @@ Repository-local storage layout:
 ```text
 <git-common-dir>/cascade/
   plans/
-    <base64url-anchor-ref>.yaml
+    <base64url-plan-name>.yaml
   state.yaml
   worktrees/
     <plan-id>/
 ```
 
-`plans/<base64url-anchor-ref>.yaml` stores immutable anchor-keyed plans. The raw anchor key is encoded for filesystem safety.
+`plans/<base64url-plan-name>.yaml` stores immutable named plans. The plan name is encoded for filesystem safety.
 
 `state.yaml` stores the single active cascade operation and acts as the repository-wide cascade lock.
 
 `worktrees/<plan-id>/` stores the temporary Git worktree used for isolated replay and conflict resolution for the active operation.
 
-### Anchor-Keyed Plans
+### Named Plans
 
-Anchor-keyed plans are the default interface:
+Named plans are the default interface:
 
 ```bash
-git cascade plan --anchor my-branch
-git cascade apply --old-anchor my-branch --new-anchor my-branch
+git cascade plan stack --old-base main --old-tip my-branch
+git cascade apply stack --new-tip my-branch
 ```
 
-Plan keys are raw `--anchor` values and are encoded as unpadded base64url for filesystem storage.
+Plan names are encoded as unpadded base64url for filesystem storage.
 
 Creating a plan:
 
-- Writes `<git-common-dir>/cascade/plans/<base64url-anchor-ref>.yaml`.
+- Writes `<git-common-dir>/cascade/plans/<base64url-plan-name>.yaml`.
 - Refuses to overwrite an existing plan unless `--replace` is passed.
 - Refuses to run while `state.yaml` exists.
 - Stores a stable `plan_id` inside the plan.
@@ -268,8 +268,8 @@ Useful plan management commands:
 
 ```bash
 git cascade list
-git cascade show --anchor my-branch
-git cascade delete --anchor my-branch
+git cascade show stack
+git cascade delete stack
 ```
 
 Shell completion scripts are generated by Clap:
@@ -312,13 +312,13 @@ The state file should contain enough information to resume, abort, diagnose stal
 version: 1
 operation: apply
 phase: conflict
-plan_anchor: my-branch
+plan_name: permissions-stack
 plan_id: "2026-06-08T14-00-00Z-agent-permissions"
 started_at: "2026-06-08T14:00:00Z"
 updated_at: "2026-06-08T14:05:12Z"
 pid: 12345
 
-new_anchor:
+new_tip:
   input: my-branch
   resolved: "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
   input_was_ref: true
@@ -359,9 +359,9 @@ repository:
   head_at_generation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 source:
-  anchor_ref: "agent-permissions-8"
-  anchor_old_base: "1111111111111111111111111111111111111111"
-  anchor_old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
+  name: "permissions-stack"
+  old_base: "1111111111111111111111111111111111111111"
+  old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
 
 nodes:
   - branch: "agent-permissions-8"
@@ -403,7 +403,7 @@ dependencies:
 
 `repository` contains optional diagnostic metadata. It must not be required for correctness because plans should not depend on absolute paths.
 
-`source` describes the anchor ref/key and its old state.
+`source` describes the plan name and old root range.
 
 `nodes` contains the captured branch graph. It must include exactly one anchor node.
 
@@ -412,12 +412,12 @@ dependencies:
 ## Plan Generation
 
 ```bash
-git cascade plan --anchor <anchor-ref> [--base <base-ref>]
+git cascade plan <name> --old-base <base-ref> --old-tip <old-tip-ref>
 ```
 
 Plan generation is a read-only phase.
 
-It stores the generated plan at `<git-common-dir>/cascade/plans/<base64url-anchor-ref>.yaml`.
+It stores the generated plan at `<git-common-dir>/cascade/plans/<base64url-plan-name>.yaml`.
 
 Allowed Git operations include:
 
@@ -441,9 +441,8 @@ Forbidden Git operations include:
 Generation rules:
 
 - Resolve the anchor and all saved commits to full object IDs.
-- Resolve the old anchor base as `merge-base(<anchor-ref>, <base-ref>)` when `--base` is provided.
-- When `--base` is omitted, infer the old anchor base from the anchor branch upstream, `origin/HEAD`, or the local default branch (`main` then `master`).
-- Direct children of the anchor must fork after `anchor_old_base`; branches whose merge-base with the anchor is exactly `anchor_old_base` are treated as upstream/sibling branches, not dependents.
+- Resolve the old root base as `merge-base(<old-tip-ref>, <base-ref>)`.
+- Direct children of the root must fork after `old_base`; branches whose merge-base with `old_tip` is exactly `old_base` are treated as upstream/sibling branches, not dependents.
 - Reject merge commits unless merge replay is explicitly supported by a later schema version.
 - Reject a dependent branch if its `old_base` is not reachable from the `old_tip` of its declared parent.
 - For a non-anchor parent, prefer the parent that owns the dependent branch's `old_base`, not merely a descendant branch that contains it.
@@ -453,23 +452,23 @@ Generation rules:
 
 ## Manual Rebase Handoff
 
-After the plan is created, the user can freely rebase or otherwise create the replacement anchor.
+After the plan is created, the user can freely rebase or otherwise create the replacement root tip.
 
-If the replacement anchor is a branch, expected manual commands look like:
+If the replacement root tip is a branch, expected manual commands look like:
 
 ```bash
 git switch <replacement-anchor-branch>
 git rebase --onto <new-base> <anchor-old-base>
 ```
 
-Apply requires `--new-anchor`. The tool resolves that ref or commit exactly once at the start of execution and uses the resolved commit as the replacement anchor.
+Apply requires `--new-tip`. The tool resolves that ref or commit exactly once at the start of execution and uses the resolved commit as the replacement root tip.
 
-There is no implicit use of `refs/heads/<anchor-ref>`. If a manually rebased branch is the desired replacement anchor, the user must pass that branch name explicitly as `--new-anchor`.
+There is no implicit use of the original `--old-tip` input. If a manually rebased branch is the desired replacement tip, the user must pass that branch name explicitly as `--new-tip`.
 
 ## Apply Execution
 
 ```bash
-git cascade apply --old-anchor <anchor-ref> --new-anchor <ref-or-commit>
+git cascade apply <name> --new-tip <ref-or-commit>
 ```
 
 Apply-time behavior is selected by flags, not by defaults stored in the plan. With the default `--strategy preserve-fork-points`, apply preserves fork points between non-anchor branches. With `--strategy move-to-heads`, apply replays each dependent branch onto the rewritten tip of its parent.
@@ -479,7 +478,7 @@ High-level algorithm:
 1. Load and validate the plan schema.
 2. Refuse to start if `<git-common-dir>/cascade/state.yaml` already exists.
 3. Verify every saved old commit still exists in the object database.
-4. Require `--new-anchor` and resolve the replacement anchor tip once.
+4. Require `--new-tip` and resolve the replacement root tip once.
 5. Create `<git-common-dir>/cascade/state.yaml` atomically.
 6. Verify dependent branch refs still point at their saved `old_tip` values.
 7. Topologically order dependent nodes from parent to child.
@@ -494,7 +493,7 @@ High-level algorithm:
 
 Replay base rules for the default apply mode:
 
-- A direct child of the anchor is replayed onto the replacement anchor tip.
+- A direct child of the root is replayed onto the replacement root tip.
 - A child of another dependent branch is replayed onto the rewritten equivalent of its original `old_base`.
 - The rewritten equivalent is found from the old-to-new commit map produced while replaying the parent branch.
 - If the child's `old_base` equals the parent's `old_base`, the child is replayed onto the parent's selected apply-time base.
@@ -502,7 +501,7 @@ Replay base rules for the default apply mode:
 
 Replay base rules for `--strategy move-to-heads`:
 
-- A direct child of the anchor is replayed onto the replacement anchor tip.
+- A direct child of the root is replayed onto the replacement root tip.
 - A child of another dependent branch is replayed onto `refs/cascade/tmp/<plan-id>/<parent-branch>`.
 
 The `move-to-heads` strategy ignores the dependent branch's original offset within the parent during apply. The original `old_base` is still required for planning and validation because it defines which commits belong to the dependent branch.
@@ -541,7 +540,7 @@ The default apply mode requires an apply-time map from old commits to rewritten 
 
 The map is built as replay progresses:
 
-- The replacement anchor maps from `source.anchor_old_tip` to the resolved `--new-anchor` commit.
+- The replacement tip maps from `source.old_tip` to the resolved `--new-tip` commit.
 - For each dependent node, the selected apply-time base maps from `node.old_base` to the commit used as the replay base.
 - After each saved commit is replayed, the old commit ID maps to the newly created commit ID.
 - Descendant branches use this map to find the rewritten equivalent of their `old_base`.
@@ -590,7 +589,7 @@ Use a single `git update-ref --stdin` transaction with expected old values:
 
 ```text
 start
-verify <new-anchor-ref> <resolved-anchor-tip>
+verify <new-tip-ref> <resolved-new-tip>
 update refs/heads/agent-permissions-9 <new-tip-9> 5b58f121371d5e79ab4c769bbe8c7867958f939a
 update refs/heads/agent-permissions-10 <new-tip-10> 7777777777777777777777777777777777777777
 prepare
@@ -601,7 +600,7 @@ Requirements:
 
 - All dependent refs are updated in one prepared transaction.
 - Each update includes the expected `old_tip` from the plan.
-- If `--new-anchor` was a ref, verify it still points at the resolved replacement tip.
+- If `--new-tip` was a ref, verify it still points at the resolved replacement tip.
 - No dependent branch ref is updated if any expected old value does not match.
 
 ## Validation
@@ -610,7 +609,7 @@ Before replay:
 
 - The plan version is supported.
 - `plan_id` is present and safe for use in a ref namespace.
-- `--new-anchor` is present and resolves to a commit.
+- `--new-tip` is present and resolves to a commit.
 - The selected apply strategy is either `preserve-fork-points` or `move-to-heads`.
 - All `old_base`, `old_tip`, and `commits` objects exist locally.
 - The dependency graph is acyclic.
@@ -627,7 +626,7 @@ Before final ref update:
 - Every dependent node has a temporary rewritten tip.
 - Every temporary rewritten tip exists.
 - Every dependent branch ref still equals `old_tip`.
-- The `--new-anchor` ref still equals the resolved replacement tip when the replacement anchor was a ref.
+- The `--new-tip` ref still equals the resolved replacement tip when the replacement tip was a ref.
 
 ## Atomicity And Safety
 
@@ -669,7 +668,7 @@ Default behavior when a replay conflict occurs:
 Conflict state should include:
 
 - The `plan_id`.
-- The resolved replacement anchor tip.
+- The resolved replacement root tip.
 - The selected apply strategy.
 - The old-to-new commit mappings produced so far.
 - The current dependent branch being replayed.
@@ -712,9 +711,9 @@ git cascade status
 Continue behavior:
 
 - Load the active operation from `<git-common-dir>/cascade/state.yaml`.
-- Validate that the saved conflict state matches the anchor-keyed plan recorded in state.
+- Validate that the saved conflict state matches the named plan recorded in state.
 - Validate that the saved apply strategy is internally consistent with the recorded operation state.
-- Validate that the replacement anchor ref still points at the resolved replacement anchor tip when `--new-anchor` was a ref.
+- Validate that the replacement tip ref still points at the resolved replacement tip when `--new-tip` was a ref.
 - Validate that permanent dependent branch refs still point at their saved `old_tip` values.
 - Validate that the conflict worktree has no unmerged index entries.
 - Complete the current replayed commit using the user's resolution.
@@ -765,7 +764,7 @@ The old `resume` wording can exist as an alias, but the primary user-facing comm
 
 ## Invariants
 
-- Same plan plus same replacement anchor tip produces the same replay attempts.
+- Same plan plus same replacement root tip produces the same replay attempts.
 - Apply does not use merge-base inference to rediscover the old stack.
 - A dependent branch is never replayed before its parent has a rewritten tip.
 - Saved old commits are treated as immutable inputs.
@@ -817,11 +816,11 @@ Critical implementation requirements:
 - GitHub or GitLab PR retargeting.
 - Guessing stack structure after refs have moved.
 - Using mutable refs as stored commit identities.
-- Updating the replacement anchor during apply.
+- Updating the replacement root tip during apply.
 
 ## Why This Solves The Target Problem
 
-In the target workflow, the important old structure still exists before the user rewrites or selects the replacement anchor.
+In the target workflow, the important old structure still exists before the user rewrites or selects the replacement root tip.
 
 The plan captures that structure first. After the manual rebase breaks normal ancestry relationships, apply does not need to guess what used to depend on what.
 

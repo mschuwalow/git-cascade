@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use git_cascade::storage::PlanKey;
+use git_cascade::storage::PlanName;
 use tempfile::TempDir;
 
 pub struct TestRepo {
@@ -116,7 +116,7 @@ impl TestRepo {
     }
 
     pub fn plan_path(&self, name: &str) -> std::path::PathBuf {
-        let name = PlanKey::from_anchor(name).unwrap();
+        let name = PlanName::new(name).unwrap();
         self.common_dir()
             .join("cascade")
             .join("plans")

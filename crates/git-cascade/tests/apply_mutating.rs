@@ -8,7 +8,7 @@ use common::repo::TestRepo;
 fn apply_linear_stack_updates_dependents_and_cleans_up() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -16,7 +16,7 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success()
         .stdout("applied cascade plan\n");
@@ -35,13 +35,13 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
 fn apply_preserves_intermediate_fork_point() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success();
 
@@ -55,7 +55,7 @@ fn apply_preserves_intermediate_fork_point() {
 fn apply_strategy_replays_child_on_parent_tip() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -63,9 +63,8 @@ fn apply_strategy_replays_child_on_parent_tip() {
     repo.cascade()
         .args([
             "apply",
-            "--old-anchor",
-            "pr-1",
-            "--new-anchor",
+            "stack",
+            "--new-tip",
             "pr-1",
             "--strategy",
             "move-to-heads",
@@ -80,7 +79,7 @@ fn apply_strategy_replays_child_on_parent_tip() {
 fn apply_refuses_when_state_exists() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -90,7 +89,7 @@ fn apply_refuses_when_state_exists() {
     let pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -102,7 +101,7 @@ fn apply_refuses_when_state_exists() {
 fn apply_refuses_when_dependent_branch_moved() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -111,7 +110,7 @@ fn apply_refuses_when_dependent_branch_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -130,7 +129,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -139,7 +138,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -151,7 +150,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
 }
 
 #[test]
-fn apply_uses_arbitrary_ref_anchor_plan_key() {
+fn apply_uses_arbitrary_old_tip_ref() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -162,25 +161,52 @@ fn apply_uses_arbitrary_ref_anchor_plan_key() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "refs/tags/old-anchor"])
+        .args([
+            "plan",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "refs/tags/old-anchor",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args([
-            "apply",
-            "--old-anchor",
-            "refs/tags/old-anchor",
-            "--new-anchor",
-            "pr-1",
-        ])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success();
 
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     repo.git_ok(["merge-base", "--is-ancestor", "pr-1", "pr-2"]);
-    assert!(!repo.plan_path("refs/tags/old-anchor").exists());
+    assert!(!repo.plan_path("stack").exists());
+}
+
+#[test]
+fn apply_single_commit_root_range_updates_dependent() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "old\n", "old single root");
+    repo.switch_new("pr-2");
+    let old_pr2 = repo.commit_file("pr2.txt", "dependent\n", "dependent");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "single", "--old-base", "pr-1^", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args(["apply", "single", "--new-tip", "pr-1"])
+        .assert()
+        .success();
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    repo.git_ok(["merge-base", "--is-ancestor", "pr-1", "pr-2"]);
+    assert_eq!(repo.show("pr-2:pr2.txt"), "dependent\n");
 }
 
 fn linear_stack() -> TestRepo {

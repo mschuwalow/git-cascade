@@ -21,11 +21,11 @@ pub fn status(git: &Git, storage: &Storage) -> Result<String> {
     output.push_str("Active cascade operation:\n");
     output.push_str(&format!("operation: {}\n", state.operation));
     output.push_str(&format!("phase: {}\n", state.phase));
-    output.push_str(&format!("anchor: {}\n", state.plan_anchor));
+    output.push_str(&format!("plan: {}\n", state.plan_name));
     output.push_str(&format!("plan-id: {}\n", state.plan_id));
     output.push_str(&format!(
-        "new-anchor: {} -> {}\n",
-        state.new_anchor.input, state.new_anchor.resolved
+        "new-tip: {} -> {}\n",
+        state.new_tip.input, state.new_tip.resolved
     ));
     output.push_str(&format!("strategy: {}\n", state.strategy.as_str()));
     if let Some(current) = &state.current {

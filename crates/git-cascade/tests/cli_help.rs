@@ -33,8 +33,8 @@ fn apply_help_mentions_strategy_and_dry_run() {
                 .and(predicate::str::contains("preserve-fork-points"))
                 .and(predicate::str::contains("move-to-heads"))
                 .and(predicate::str::contains("--dry-run"))
-                .and(predicate::str::contains("--old-anchor"))
-                .and(predicate::str::contains("--new-anchor"))
+                .and(predicate::str::contains("--new-tip"))
+                .and(predicate::str::contains("<NAME>"))
                 .and(predicate::str::contains(
                     "Replay planned dependent branches",
                 ))
@@ -43,7 +43,7 @@ fn apply_help_mentions_strategy_and_dry_run() {
 }
 
 #[test]
-fn plan_help_mentions_anchor_and_replace() {
+fn plan_help_mentions_name_range_and_replace() {
     let repo = TestRepo::new();
 
     repo.cascade()
@@ -51,10 +51,11 @@ fn plan_help_mentions_anchor_and_replace() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("--anchor")
-                .and(predicate::str::contains("--base"))
+            predicate::str::contains("<NAME>")
+                .and(predicate::str::contains("--old-base"))
+                .and(predicate::str::contains("--old-tip"))
                 .and(predicate::str::contains("--replace"))
-                .and(predicate::str::contains("Old anchor ref or commit-ish")),
+                .and(predicate::str::contains("old range base")),
         );
 }
 
@@ -84,20 +85,20 @@ fn completions_generate_bash_script() {
         .success()
         .stdout(
             predicate::str::contains("_git-cascade")
-                .and(predicate::str::contains("--old-anchor"))
+                .and(predicate::str::contains("--new-tip"))
                 .and(predicate::str::contains("completions")),
         );
 }
 
 #[test]
-fn apply_requires_old_anchor() {
+fn apply_requires_plan_name() {
     let repo = TestRepo::new();
 
     repo.cascade()
-        .args(["apply", "--new-anchor", "pr-1", "--dry-run"])
+        .args(["apply", "--new-tip", "pr-1", "--dry-run"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--old-anchor"));
+        .stderr(predicate::str::contains("<NAME>"));
 }
 
 #[test]
@@ -107,9 +108,8 @@ fn apply_rejects_invalid_strategy() {
     repo.cascade()
         .args([
             "apply",
-            "--old-anchor",
-            "pr-1",
-            "--new-anchor",
+            "stack",
+            "--new-tip",
             "pr-1",
             "--strategy",
             "invalid",

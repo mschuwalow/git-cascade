@@ -17,21 +17,14 @@ fn apply_dry_run_linear_stack_prints_commands_without_mutating_refs() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     let pr2_tip = repo.rev_parse("pr-2");
     let pr3_tip = repo.rev_parse("pr-3");
 
     repo.cascade()
-        .args([
-            "apply",
-            "--old-anchor",
-            "pr-1",
-            "--new-anchor",
-            "pr-1",
-            "--dry-run",
-        ])
+        .args(["apply", "stack", "--new-tip", "pr-1", "--dry-run"])
         .assert()
         .success()
         .stdout(
@@ -77,19 +70,12 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
 
     repo.cascade()
-        .args([
-            "apply",
-            "--old-anchor",
-            "pr-1",
-            "--new-anchor",
-            "pr-1",
-            "--dry-run",
-        ])
+        .args(["apply", "stack", "--new-tip", "pr-1", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(
@@ -99,9 +85,8 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
     repo.cascade()
         .args([
             "apply",
-            "--old-anchor",
-            "pr-1",
-            "--new-anchor",
+            "stack",
+            "--new-tip",
             "pr-1",
             "--strategy",
             "move-to-heads",
@@ -123,7 +108,7 @@ fn apply_dry_run_refuses_if_dependent_branch_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     repo.switch("pr-2");
@@ -131,14 +116,7 @@ fn apply_dry_run_refuses_if_dependent_branch_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args([
-            "apply",
-            "--old-anchor",
-            "pr-1",
-            "--new-anchor",
-            "pr-1",
-            "--dry-run",
-        ])
+        .args(["apply", "stack", "--new-tip", "pr-1", "--dry-run"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -155,12 +133,12 @@ fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
 
     repo.cascade()
-        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success()
         .stdout("applied cascade plan\n");

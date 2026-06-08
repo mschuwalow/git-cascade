@@ -8,14 +8,15 @@ use time::format_description::well_known::Rfc3339;
 use crate::git::{Git, LocalBranch};
 use crate::plan::{Dependency, Node, NodeKind, Plan, Repository, Source};
 use crate::plan_validate::validate_plan;
-use crate::storage::{PlanKey, Storage};
+use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
-    pub anchor_ref: String,
-    pub base: Option<String>,
+    pub name: PlanName,
+    pub old_base: String,
+    pub old_tip: String,
     pub replace: bool,
 }
 
@@ -27,35 +28,36 @@ struct Candidate {
     commits: Vec<String>,
 }
 
-pub fn generate_anchor_keyed_plan(
-    git: &Git,
-    storage: &Storage,
-    options: GenerateOptions,
-) -> Result<Plan> {
-    let plan = generate_plan(git, &options.anchor_ref, options.base.as_deref())?;
+pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
+    let plan = generate_plan(git, &options.name, &options.old_base, &options.old_tip)?;
     validate_plan(git, &plan)?;
-    let key = PlanKey::from_anchor(&options.anchor_ref)?;
-    write_anchor_keyed_plan(storage, &key, &plan, options.replace)?;
+    write_named_plan(storage, &options.name, &plan, options.replace)?;
     Ok(plan)
 }
 
-pub fn generate_plan(git: &Git, anchor_ref: &str, base: Option<&str>) -> Result<Plan> {
-    let anchor_tip = git.resolve_commit(anchor_ref)?;
-    let anchor_base = resolve_anchor_base(git, anchor_ref, &anchor_tip, base)?;
+pub fn generate_plan(
+    git: &Git,
+    name: &PlanName,
+    old_base_ref: &str,
+    old_tip_ref: &str,
+) -> Result<Plan> {
+    let old_tip = git.resolve_commit(old_tip_ref)?;
+    let old_base_tip = git.resolve_commit(old_base_ref)?;
+    let old_base = old_range_base(git, name.as_str(), &old_tip, old_base_ref, &old_base_tip)?;
 
     let mut nodes = vec![Node {
-        branch: anchor_ref.to_owned(),
-        old_tip: anchor_tip.clone(),
+        branch: name.to_string(),
+        old_tip: old_tip.clone(),
         kind: NodeKind::Anchor,
     }];
     let mut dependencies = Vec::new();
-    let mut assigned = HashSet::from([anchor_ref.to_owned()]);
-    if let Some(local_branch) = anchor_local_branch(git, anchor_ref)? {
+    let mut assigned = HashSet::from([name.to_string()]);
+    if let Some(local_branch) = old_tip_local_branch(git, old_tip_ref)? {
         assigned.insert(local_branch);
     }
     let branches = git.local_branches()?;
 
-    while let Some(candidate) = next_candidate(git, &branches, &nodes, &assigned, &anchor_base)? {
+    while let Some(candidate) = next_candidate(git, &branches, &nodes, &assigned, &old_base)? {
         assigned.insert(candidate.branch.name.clone());
         dependencies.push(Dependency {
             parent: candidate.parent_branch.clone(),
@@ -87,89 +89,36 @@ pub fn generate_plan(git: &Git, anchor_ref: &str, base: Option<&str>) -> Result<
             head_at_generation: git.head_oid()?,
         },
         source: Source {
-            anchor_ref: anchor_ref.to_owned(),
-            anchor_old_base: anchor_base,
-            anchor_old_tip: anchor_tip,
+            name: name.to_string(),
+            old_base,
+            old_tip,
         },
         nodes,
         dependencies,
     })
 }
 
-fn resolve_anchor_base(
+fn old_range_base(
     git: &Git,
-    anchor_ref: &str,
-    anchor_tip: &str,
-    base: Option<&str>,
+    name: &str,
+    old_tip: &str,
+    old_base_input: &str,
+    old_base_tip: &str,
 ) -> Result<String> {
-    if let Some(base) = base {
-        let base_tip = git.resolve_commit(base)?;
-        return anchor_base_from_tip(git, anchor_ref, anchor_tip, base, &base_tip);
-    }
-
-    if let Some(local_branch) = anchor_local_branch(git, anchor_ref)?
-        && let Some(upstream_tip) = git.upstream_tip(&local_branch)?
-    {
-        return anchor_base_from_tip(
-            git,
-            anchor_ref,
-            anchor_tip,
-            &format!("{local_branch}@{{upstream}}"),
-            &upstream_tip,
-        );
-    }
-
-    if let Some(default_tip) = git.origin_default_branch_tip()? {
-        return anchor_base_from_tip(
-            git,
-            anchor_ref,
-            anchor_tip,
-            "origin default branch",
-            &default_tip,
-        );
-    }
-
-    if let Some(default_tip) = git.local_default_branch_tip()? {
-        return anchor_base_from_tip(
-            git,
-            anchor_ref,
-            anchor_tip,
-            "local default branch",
-            &default_tip,
-        );
-    }
-
-    Err(Error::CannotInferAnchorBase {
-        anchor: anchor_ref.to_owned(),
-    })
-}
-
-fn anchor_base_from_tip(
-    git: &Git,
-    anchor_ref: &str,
-    anchor_tip: &str,
-    base_label: &str,
-    base_tip: &str,
-) -> Result<String> {
-    git.merge_base(anchor_tip, base_tip)?.ok_or_else(|| {
+    git.merge_base(old_tip, old_base_tip)?.ok_or_else(|| {
         Error::InvalidInvocation(format!(
-            "base `{base_label}` has no merge base with anchor `{anchor_ref}`"
+            "old base `{old_base_input}` has no merge base with old tip for plan `{name}`"
         ))
     })
 }
 
-fn anchor_local_branch(git: &Git, anchor_ref: &str) -> Result<Option<String>> {
+fn old_tip_local_branch(git: &Git, old_tip: &str) -> Result<Option<String>> {
     Ok(git
-        .symbolic_full_name(anchor_ref)?
+        .symbolic_full_name(old_tip)?
         .and_then(|refname| refname.strip_prefix("refs/heads/").map(str::to_owned)))
 }
 
-fn write_anchor_keyed_plan(
-    storage: &Storage,
-    key: &PlanKey,
-    plan: &Plan,
-    replace: bool,
-) -> Result<()> {
+fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bool) -> Result<()> {
     if storage.state_path().exists() {
         return Err(Error::ActiveOperation {
             path: storage.state_path(),
@@ -177,10 +126,10 @@ fn write_anchor_keyed_plan(
     }
 
     storage.ensure_plans_dir()?;
-    let path = storage.plan_path(key);
+    let path = storage.plan_path(name);
     if path.exists() && !replace {
         return Err(Error::PlanExists {
-            key: key.to_string(),
+            name: name.to_string(),
             path,
         });
     }

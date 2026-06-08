@@ -6,10 +6,10 @@ use clap_complete::{Shell, generate};
 use crate::Result;
 use crate::apply::{ApplyOptions, DryRunOptions, continue_apply, dry_run, execute};
 use crate::git::Git;
-use crate::plan_generate::{GenerateOptions, generate_anchor_keyed_plan};
+use crate::plan_generate::{GenerateOptions, generate_named_plan};
 use crate::recovery;
 use crate::state::Strategy;
-use crate::storage::{PlanKey, Storage};
+use crate::storage::{PlanName, Storage};
 
 #[derive(Debug, Parser)]
 #[command(name = "git-cascade")]
@@ -22,26 +22,29 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create a repository-local cascade plan rooted at an old anchor ref.
+    /// Create a named repository-local cascade plan for an old root range.
     Plan {
-        /// Old anchor ref or commit-ish to snapshot before rewriting dependents.
+        /// Name to store the plan under.
+        #[arg(value_name = "NAME")]
+        name: PlanName,
+        /// Ref used with --old-tip to compute the old range base via merge-base.
         #[arg(long, value_name = "REF")]
-        anchor: String,
-        /// Old base of the anchor; inferred from upstream/default branch when omitted.
+        old_base: String,
+        /// Old top of the root range before rewriting.
         #[arg(long, value_name = "REF")]
-        base: Option<String>,
-        /// Overwrite an existing plan for the same anchor key.
+        old_tip: String,
+        /// Overwrite an existing plan with the same name.
         #[arg(long)]
         replace: bool,
     },
-    /// Replay planned dependent branches onto a replacement anchor.
+    /// Replay planned dependent branches onto a replacement root tip.
     Apply {
-        /// Old anchor key used when the plan was created.
+        /// Name of the stored plan to apply.
+        #[arg(value_name = "NAME")]
+        name: PlanName,
+        /// Replacement ref or commit-ish for the old root tip.
         #[arg(long, value_name = "REF")]
-        old_anchor: String,
-        /// Replacement ref or commit-ish for the old anchor boundary.
-        #[arg(long, value_name = "REF")]
-        new_anchor: String,
+        new_tip: String,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
         strategy: Strategy,
@@ -49,13 +52,13 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// List stored repository-local cascade plans by anchor key.
+    /// List stored repository-local cascade plans by name.
     List,
-    /// Print the stored plan for an anchor key.
+    /// Print a stored plan by name.
     Show {
-        /// Anchor key used when the plan was created.
-        #[arg(long, value_name = "REF")]
-        anchor: String,
+        /// Name of the stored plan to print.
+        #[arg(value_name = "NAME")]
+        name: PlanName,
     },
     /// Show the active cascade operation, if any.
     Status,
@@ -90,18 +93,19 @@ where
 
     match cli.command {
         Command::Plan {
-            anchor,
-            base,
+            name,
+            old_base,
+            old_tip,
             replace,
-        } => plan(&anchor, base.as_deref(), replace),
+        } => plan(name, &old_base, &old_tip, replace),
         Command::Apply {
-            old_anchor,
-            new_anchor,
+            name,
+            new_tip,
             strategy,
             dry_run,
-        } => apply(&old_anchor, &new_anchor, strategy, dry_run),
+        } => apply(name, &new_tip, strategy, dry_run),
         Command::List => list_plans(),
-        Command::Show { anchor } => show_plan(&anchor),
+        Command::Show { name } => show_plan(&name),
         Command::Status => status(),
         Command::Abort => abort(),
         Command::Continue => continue_operation(),
@@ -142,11 +146,10 @@ fn abort() -> Result<()> {
     Ok(())
 }
 
-fn apply(old_anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
+fn apply(name: PlanName, new_tip: &str, strategy: Strategy, is_dry_run: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let key = PlanKey::from_anchor(old_anchor)?;
-    let plan = serde_yaml::from_str(&storage.read_plan(&key)?)?;
+    let plan = serde_yaml::from_str(&storage.read_plan(&name)?)?;
 
     if is_dry_run {
         print!(
@@ -156,7 +159,7 @@ fn apply(old_anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: boo
                 &storage,
                 &plan,
                 DryRunOptions {
-                    new_anchor_input: new_anchor.to_owned(),
+                    new_tip_input: new_tip.to_owned(),
                     strategy,
                 },
             )?
@@ -167,8 +170,8 @@ fn apply(old_anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: boo
             &storage,
             &plan,
             ApplyOptions {
-                plan_key: key,
-                new_anchor_input: new_anchor.to_owned(),
+                plan_name: name,
+                new_tip_input: new_tip.to_owned(),
                 strategy,
             },
         )?;
@@ -178,19 +181,20 @@ fn apply(old_anchor: &str, new_anchor: &str, strategy: Strategy, is_dry_run: boo
     Ok(())
 }
 
-fn plan(anchor_ref: &str, base: Option<&str>, replace: bool) -> Result<()> {
+fn plan(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    generate_anchor_keyed_plan(
+    generate_named_plan(
         &git,
         &storage,
         GenerateOptions {
-            anchor_ref: anchor_ref.to_owned(),
-            base: base.map(str::to_owned),
+            name: name.clone(),
+            old_base: old_base.to_owned(),
+            old_tip: old_tip.to_owned(),
             replace,
         },
     )?;
-    println!("created plan for anchor `{anchor_ref}`");
+    println!("created plan `{name}`");
 
     Ok(())
 }
@@ -199,18 +203,17 @@ fn list_plans() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
 
-    for name in storage.list_plan_keys()? {
+    for name in storage.list_plan_names()? {
         println!("{name}");
     }
 
     Ok(())
 }
 
-fn show_plan(anchor: &str) -> Result<()> {
+fn show_plan(name: &PlanName) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let key = PlanKey::from_anchor(anchor)?;
-    print!("{}", storage.read_plan(&key)?);
+    print!("{}", storage.read_plan(name)?);
 
     Ok(())
 }

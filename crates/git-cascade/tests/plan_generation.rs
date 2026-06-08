@@ -6,7 +6,7 @@ use predicates::prelude::*;
 use common::repo::TestRepo;
 
 #[test]
-fn plan_creates_anchor_keyed_plan_for_linear_stack() {
+fn plan_creates_named_plan_for_linear_stack() {
     let repo = TestRepo::new();
     let initial = repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -19,24 +19,24 @@ fn plan_creates_anchor_keyed_plan_for_linear_stack() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success()
-        .stdout("created plan for anchor `pr-1`\n");
+        .stdout("created plan `stack`\n");
 
-    let plan = read_plan(&repo, "pr-1");
+    let plan = read_plan(&repo, "stack");
     assert_eq!(plan.version, 1);
-    assert_eq!(plan.source.anchor_ref, "pr-1");
-    assert_eq!(plan.source.anchor_old_base, initial);
-    assert_eq!(plan.source.anchor_old_tip, pr1_b);
+    assert_eq!(plan.source.name, "stack");
+    assert_eq!(plan.source.old_base, initial);
+    assert_eq!(plan.source.old_tip, pr1_b);
     assert_eq!(plan.nodes.len(), 3);
     assert_eq!(plan.dependencies.len(), 2);
 
-    assert_eq!(plan.nodes[0].branch, "pr-1");
+    assert_eq!(plan.nodes[0].branch, "stack");
     assert_eq!(plan.nodes[0].kind, NodeKind::Anchor);
 
     assert_eq!(plan.nodes[1].branch, "pr-2");
-    assert_eq!(plan.nodes[1].parent(), Some("pr-1"));
+    assert_eq!(plan.nodes[1].parent(), Some("stack"));
     assert_eq!(plan.nodes[1].old_base(), Some(pr1_b.as_str()));
     assert_eq!(plan.nodes[1].old_tip, pr2);
     assert_eq!(plan.nodes[1].commits(), std::slice::from_ref(&pr2));
@@ -47,7 +47,7 @@ fn plan_creates_anchor_keyed_plan_for_linear_stack() {
     assert_eq!(plan.nodes[2].old_tip, pr3);
     assert_eq!(plan.nodes[2].commits(), std::slice::from_ref(&pr3));
 
-    assert_eq!(plan.dependencies[0].parent, "pr-1");
+    assert_eq!(plan.dependencies[0].parent, "stack");
     assert_eq!(plan.dependencies[0].child, "pr-2");
     assert_eq!(plan.dependencies[1].parent, "pr-2");
     assert_eq!(plan.dependencies[1].child, "pr-3");
@@ -65,18 +65,18 @@ fn plan_preserves_intermediate_fork_point() {
     repo.commit_file("d.txt", "d\n", "d");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
 
-    let plan = read_plan(&repo, "pr-1");
+    let plan = read_plan(&repo, "stack");
     let child = plan
         .nodes
         .iter()
         .find(|node| node.branch == "pr-2")
         .unwrap();
 
-    assert_eq!(child.parent(), Some("pr-1"));
+    assert_eq!(child.parent(), Some("stack"));
     assert_eq!(child.old_base(), Some(fork_point.as_str()));
 }
 
@@ -92,21 +92,21 @@ fn plan_does_not_treat_advanced_main_as_dependent() {
     repo.commit_file("main.txt", "new main\n", "advance main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
 
-    let plan = read_plan(&repo, "pr-1");
+    let plan = read_plan(&repo, "stack");
     let branches = plan
         .nodes
         .iter()
         .map(|node| node.branch.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(branches, ["pr-1", "pr-2"]);
+    assert_eq!(branches, ["stack", "pr-2"]);
 }
 
 #[test]
-fn plan_base_option_uses_merge_base_with_anchor() {
+fn plan_old_base_option_uses_merge_base_with_old_tip() {
     let repo = TestRepo::new();
     let initial = repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -117,13 +117,39 @@ fn plan_base_option_uses_merge_base_with_anchor() {
     repo.commit_file("main.txt", "new main\n", "advance main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--base", "main"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
 
-    let plan = read_plan(&repo, "pr-1");
-    assert_eq!(plan.source.anchor_old_base, initial);
+    let plan = read_plan(&repo, "stack");
+    assert_eq!(plan.source.old_base, initial);
     assert_eq!(plan.nodes.len(), 2);
+}
+
+#[test]
+fn plan_supports_single_commit_root_range() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    let old_commit = repo.commit_file("pr1.txt", "a\n", "single root commit");
+    let old_base = repo.rev_parse("pr-1^");
+    repo.switch_new("pr-2");
+    let pr2 = repo.commit_file("pr2.txt", "b\n", "dependent");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "single", "--old-base", "pr-1^", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "single");
+    assert_eq!(plan.source.old_base, old_base);
+    assert_eq!(plan.source.old_tip, old_commit);
+    assert_eq!(plan.nodes.len(), 2);
+    assert_eq!(plan.nodes[1].branch, "pr-2");
+    assert_eq!(plan.nodes[1].parent(), Some("single"));
+    assert_eq!(plan.nodes[1].old_base(), Some(old_commit.as_str()));
+    assert_eq!(plan.nodes[1].old_tip, pr2);
 }
 
 #[test]
@@ -138,17 +164,24 @@ fn plan_accepts_tag_anchor() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "refs/tags/stack-anchor"])
+        .args([
+            "plan",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "refs/tags/stack-anchor",
+        ])
         .assert()
         .success();
 
-    let plan = read_plan(&repo, "refs/tags/stack-anchor");
-    assert_eq!(plan.source.anchor_ref, "refs/tags/stack-anchor");
-    assert_eq!(plan.source.anchor_old_tip, anchor_tip);
+    let plan = read_plan(&repo, "stack");
+    assert_eq!(plan.source.name, "stack");
+    assert_eq!(plan.source.old_tip, anchor_tip);
     assert_eq!(plan.nodes.len(), 2);
-    assert_eq!(plan.nodes[0].branch, "refs/tags/stack-anchor");
+    assert_eq!(plan.nodes[0].branch, "stack");
     assert_eq!(plan.nodes[1].branch, "pr-2");
-    assert_eq!(plan.nodes[1].parent(), Some("refs/tags/stack-anchor"));
+    assert_eq!(plan.nodes[1].parent(), Some("stack"));
 }
 
 #[test]
@@ -162,15 +195,22 @@ fn plan_with_full_local_branch_ref_does_not_include_anchor_branch_as_dependent()
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "refs/heads/pr-1"])
+        .args([
+            "plan",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "refs/heads/pr-1",
+        ])
         .assert()
         .success();
 
-    let plan = read_plan(&repo, "refs/heads/pr-1");
+    let plan = read_plan(&repo, "stack");
     assert_eq!(plan.nodes.len(), 2);
-    assert_eq!(plan.nodes[0].branch, "refs/heads/pr-1");
+    assert_eq!(plan.nodes[0].branch, "stack");
     assert_eq!(plan.nodes[1].branch, "pr-2");
-    assert_eq!(plan.nodes[1].parent(), Some("refs/heads/pr-1"));
+    assert_eq!(plan.nodes[1].parent(), Some("stack"));
 }
 
 #[test]
@@ -181,18 +221,26 @@ fn plan_refuses_to_overwrite_without_replace() {
     repo.commit_file("a.txt", "a\n", "a");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already exists"));
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1", "--replace"])
+        .args([
+            "plan",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+            "--replace",
+        ])
         .assert()
         .success();
 }
@@ -208,7 +256,7 @@ fn plan_refuses_while_state_exists() {
     std::fs::write(&state_path, "version: 1\n").unwrap();
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -229,7 +277,7 @@ fn plan_rejects_merge_commits() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("merge replay is not supported"));

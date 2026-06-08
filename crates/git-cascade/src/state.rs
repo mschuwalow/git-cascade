@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::storage::{PlanKey, Storage};
+use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,12 +17,12 @@ pub struct ApplyState {
     pub version: u32,
     pub operation: Operation,
     pub phase: Phase,
-    pub plan_anchor: PlanKey,
+    pub plan_name: PlanName,
     pub plan_id: String,
     pub started_at: String,
     pub updated_at: String,
     pub pid: u32,
-    pub new_anchor: NewAnchorState,
+    pub new_tip: NewTipState,
     pub strategy: Strategy,
     pub current: Option<CurrentState>,
     pub worktree: String,
@@ -78,7 +78,7 @@ impl std::fmt::Display for Phase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewAnchorState {
+pub struct NewTipState {
     pub input: String,
     pub resolved: String,
     pub input_was_ref: bool,
@@ -231,11 +231,11 @@ pub fn remove_state(storage: &Storage) -> Result<()> {
 }
 
 pub struct ApplyStateInput<'a> {
-    pub plan_key: &'a PlanKey,
+    pub plan_name: &'a PlanName,
     pub plan_id: &'a str,
-    pub new_anchor_input: &'a str,
-    pub new_anchor_resolved: &'a str,
-    pub new_anchor_input_was_ref: bool,
+    pub new_tip_input: &'a str,
+    pub new_tip_resolved: &'a str,
+    pub new_tip_input_was_ref: bool,
     pub strategy: Strategy,
     pub pending_branches: Vec<String>,
     pub mappings: BTreeMap<String, String>,
@@ -249,15 +249,15 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         version: 1,
         operation: Operation::Apply,
         phase: Phase::Replay,
-        plan_anchor: input.plan_key.clone(),
+        plan_name: input.plan_name.clone(),
         plan_id: input.plan_id.to_owned(),
         started_at: now.clone(),
         updated_at: now,
         pid: std::process::id(),
-        new_anchor: NewAnchorState {
-            input: input.new_anchor_input.to_owned(),
-            resolved: input.new_anchor_resolved.to_owned(),
-            input_was_ref: input.new_anchor_input_was_ref,
+        new_tip: NewTipState {
+            input: input.new_tip_input.to_owned(),
+            resolved: input.new_tip_resolved.to_owned(),
+            input_was_ref: input.new_tip_input_was_ref,
         },
         strategy: input.strategy,
         current: None,

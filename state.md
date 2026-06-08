@@ -11,17 +11,17 @@ Implemented so far:
 - Synchronous Git subprocess wrapper using `std::process::Command`.
 - `test-hooks` Cargo feature for internal test hooks, compiled out by default.
 - Repository-local storage path handling via `git rev-parse --path-format=absolute --git-common-dir`.
-- `PlanKey` newtype with unpadded base64url filesystem serialization for anchor-keyed plan files.
+- `PlanName` newtype with unpadded base64url filesystem serialization for named plan files.
 - Base64url component encoding for branch-derived ref/file components.
 - Typed YAML plan schema where anchor/dependent data is represented by a `kind` enum.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
-- `git cascade apply --old-anchor <anchor-ref> --new-anchor <ref> --dry-run` command preview.
+- `git cascade apply <name> --new-tip <ref> --dry-run` command preview.
 - `apply --dry-run --strategy move-to-heads` base preview.
-- Mutating `git cascade apply --old-anchor <anchor-ref> --new-anchor <ref>` for clean linear branch stacks.
+- Mutating `git cascade apply <name> --new-tip <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
 - Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
-- Active apply state uses typed enum values for operation, phase, and strategy, and stores the plan anchor as a required `PlanKey`.
+- Active apply state uses typed enum values for operation, phase, and strategy, and stores the plan name as a required `PlanName`.
 - Plan IDs are UUIDs.
 - Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
@@ -34,10 +34,10 @@ Implemented so far:
 - Cleanup marks state as `phase: deleting` before deleting temp refs/worktrees/state.
 - Loading a `phase: deleting` state continues cleanup and then behaves as if no active state exists.
 - Feature-gated `before-final-update` test hook for ref-safety testing.
-- `git cascade list` for anchor-keyed plans.
-- `git cascade show --anchor <anchor-ref>` for anchor-keyed plans.
-- Apply only supports anchor-keyed plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
-- `git cascade plan --anchor <anchor-ref>` for initial linear-stack planning.
+- `git cascade list` for named plans.
+- `git cascade show <name>` for named plans.
+- Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
+- `git cascade plan <name> --old-base <ref> --old-tip <ref>` for initial linear-stack planning.
 - `git cascade plan --replace` overwrite behavior.
 - Command and flag help text exposed through Clap help output.
 - `git cascade completions <shell>` for shell completion script generation.
@@ -47,14 +47,13 @@ Implemented so far:
 
 `git cascade plan` currently:
 
-- Resolves the anchor as a Git ref or commit-ish and uses the raw `--anchor` value as the plan key.
-- Resolves `--base` by taking `merge-base(<anchor>, <base>)`; when omitted, infers it from the anchor upstream, `origin/HEAD`, or local `main`/`master`.
+- Resolves `--old-tip` as the old root range tip and resolves `--old-base` by taking `merge-base(<old-tip>, <old-base>)`.
 - Discovers dependent branches by their attachment points to the anchor or already discovered dependents.
 - Captures owned commits with `git rev-list --reverse <base>..<tip>`.
 - Rejects merge commits in captured ranges.
 - Discovers dependent local branches by finding fork points inside already-captured parent commits.
 - Preserves intermediate fork points in the generated plan.
-- Writes plans to `<git-common-dir>/cascade/plans/<base64url-anchor-ref>.yaml`.
+- Writes plans to `<git-common-dir>/cascade/plans/<base64url-plan-name>.yaml`.
 - Refuses to overwrite existing plans unless `--replace` is passed.
 - Refuses to create a plan while `<git-common-dir>/cascade/state.yaml` exists.
 
@@ -66,8 +65,8 @@ Current tests include:
 - Unit tests for plan-key filesystem encoding/decoding.
 - Unit tests for storage path construction.
 - Real-Git integration tests for `list` and `show`.
-- Real-Git integration tests for anchor refs containing path separators.
-- Real-Git integration tests for tag anchors and full `refs/heads/*` anchors.
+- Real-Git integration tests for plan names containing path separators.
+- Real-Git integration tests for tag and full `refs/heads/*` old tips.
 - Real-Git integration tests for linear stack plan generation.
 - Real-Git integration tests proving an advanced default branch is not treated as a dependent.
 - Real-Git integration tests for explicit `--base` planning.
@@ -95,13 +94,13 @@ Current tests include:
 - Real-Git integration tests for `continue` after manual conflict resolution.
 - Real-Git integration tests for `continue` refusing unresolved conflicts.
 - Real-Git integration tests for `continue` without active state.
-- Feature-gated real-Git integration test proving final update refuses a moved replacement anchor ref.
+- Feature-gated real-Git integration test proving final update refuses a moved replacement tip ref.
 - Real-Git integration assertion that conflict state records the plan-id worktree path.
 - Real-Git integration tests for abort tolerating already-deleted worktree files.
 - Real-Git integration tests for `phase: deleting` state cleanup on status.
 - CLI help tests covering commands and apply strategy options.
 - CLI tests for shell completion help and Bash completion generation.
-- CLI invalid-input tests for missing `--anchor` and invalid `--strategy`.
+- CLI invalid-input tests for missing plan name and invalid `--strategy`.
 
 Verified commands:
 
@@ -117,7 +116,7 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 - Plan generation supports linear ranges only and rejects merge commits.
 - Dependent branch discovery is first-pass and may need more edge-case coverage.
 - Remote-tracking branches are not updated; v1 should continue to target local branches only.
-- Conflict continuation is implemented for anchor-keyed plans and resolved cherry-pick conflicts.
+- Conflict continuation is implemented for named plans and resolved cherry-pick conflicts.
 - `apply --dry-run` prints the Git operations that would run without promising conflict-free replay.
 - Exported/path-based plans are not supported.
 - Release workflow will only become fully usable once the `git-cascade` package is published through normal release flow.

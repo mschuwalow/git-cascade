@@ -10,7 +10,7 @@ use predicates::prelude::*;
 use common::repo::TestRepo;
 
 #[test]
-fn apply_refuses_final_update_if_new_anchor_ref_moved() {
+fn apply_refuses_final_update_if_new_tip_ref_moved() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -20,7 +20,7 @@ fn apply_refuses_final_update_if_new_anchor_ref_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "--anchor", "pr-1"])
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -33,7 +33,7 @@ fn apply_refuses_final_update_if_new_anchor_ref_moved() {
 
     let hook = write_move_anchor_hook(&repo);
     repo.cascade()
-        .args(["apply", "--old-anchor", "pr-1", "--new-anchor", "pr-1"])
+        .args(["apply", "stack", "--new-tip", "pr-1"])
         .env("GIT_CASCADE_TEST_HOOK_BEFORE_FINAL_UPDATE", &hook)
         .env("GIT_CASCADE_TEST_REPO", repo.path())
         .assert()

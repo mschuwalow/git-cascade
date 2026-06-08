@@ -10,19 +10,19 @@ use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct PlanKey(String);
+pub struct PlanName(String);
 
-impl PlanKey {
-    pub fn from_anchor(anchor: impl Into<String>) -> Result<Self> {
-        let anchor = anchor.into();
-        if anchor.is_empty() {
-            return Err(Error::InvalidPlanKey {
-                key: anchor,
+impl PlanName {
+    pub fn new(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(Error::InvalidPlanName {
+                name,
                 reason: "must not be empty".to_owned(),
             });
         }
 
-        Ok(Self(anchor))
+        Ok(Self(name))
     }
 
     pub fn as_str(&self) -> &str {
@@ -34,33 +34,33 @@ impl PlanKey {
     }
 
     pub fn from_encoded(encoded: &str) -> Result<Self> {
-        Self::from_anchor(decode_component(encoded)?)
+        Self::new(decode_component(encoded)?)
     }
 }
 
-impl FromStr for PlanKey {
+impl FromStr for PlanName {
     type Err = Error;
 
     fn from_str(name: &str) -> Result<Self> {
-        Self::from_anchor(name)
+        Self::new(name)
     }
 }
 
-impl TryFrom<String> for PlanKey {
+impl TryFrom<String> for PlanName {
     type Error = Error;
 
-    fn try_from(anchor: String) -> Result<Self> {
-        Self::from_anchor(anchor)
+    fn try_from(name: String) -> Result<Self> {
+        Self::new(name)
     }
 }
 
-impl From<PlanKey> for String {
-    fn from(key: PlanKey) -> Self {
-        key.0
+impl From<PlanName> for String {
+    fn from(name: PlanName) -> Self {
+        name.0
     }
 }
 
-impl std::fmt::Display for PlanKey {
+impl std::fmt::Display for PlanName {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0)
     }
@@ -104,8 +104,8 @@ impl Storage {
         self.cascade_dir().join("worktrees")
     }
 
-    pub fn plan_path(&self, key: &PlanKey) -> PathBuf {
-        self.plans_dir().join(format!("{}.yaml", key.encoded()))
+    pub fn plan_path(&self, name: &PlanName) -> PathBuf {
+        self.plans_dir().join(format!("{}.yaml", name.encoded()))
     }
 
     pub fn ensure_plans_dir(&self) -> Result<()> {
@@ -123,12 +123,12 @@ impl Storage {
         fs::create_dir_all(&path).map_err(|source| Error::IoWithPath { path, source })
     }
 
-    pub fn read_plan(&self, key: &PlanKey) -> Result<String> {
-        let path = self.plan_path(key);
+    pub fn read_plan(&self, name: &PlanName) -> Result<String> {
+        let path = self.plan_path(name);
         fs::read_to_string(&path).map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
                 Error::PlanNotFound {
-                    key: key.to_string(),
+                    name: name.to_string(),
                     path,
                 }
             } else {
@@ -137,12 +137,12 @@ impl Storage {
         })
     }
 
-    pub fn delete_plan(&self, key: PlanKey) -> Result<()> {
-        let path = self.plan_path(&key);
+    pub fn delete_plan(&self, name: PlanName) -> Result<()> {
+        let path = self.plan_path(&name);
         fs::remove_file(&path).map_err(|source| Error::IoWithPath { path, source })
     }
 
-    pub fn list_plan_keys(&self) -> Result<Vec<PlanKey>> {
+    pub fn list_plan_names(&self) -> Result<Vec<PlanName>> {
         let path = self.plans_dir();
         if !path.exists() {
             return Ok(Vec::new());
@@ -169,7 +169,7 @@ impl Storage {
                 continue;
             };
 
-            if let Ok(name) = PlanKey::from_encoded(encoded_name) {
+            if let Ok(name) = PlanName::from_encoded(encoded_name) {
                 names.push(name);
             }
         }
@@ -181,7 +181,7 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlanKey, Storage};
+    use super::{PlanName, Storage};
 
     #[test]
     fn builds_repository_storage_paths() {
@@ -203,9 +203,9 @@ mod tests {
     }
 
     #[test]
-    fn encodes_anchor_keyed_plan_paths() {
+    fn encodes_named_plan_paths() {
         let storage = Storage::new("/repo/.git");
-        let name = PlanKey::from_anchor("feature/stack with spaces").unwrap();
+        let name = PlanName::new("feature/stack with spaces").unwrap();
 
         assert_eq!(
             storage.plan_path(&name),
@@ -216,13 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn decodes_plan_keys_from_storage_components() {
-        let encoded = PlanKey::from_anchor("feature/stack with spaces")
+    fn decodes_plan_names_from_storage_components() {
+        let encoded = PlanName::new("feature/stack with spaces")
             .unwrap()
             .encoded();
 
         assert_eq!(
-            PlanKey::from_encoded(&encoded).unwrap().as_str(),
+            PlanName::from_encoded(&encoded).unwrap().as_str(),
             "feature/stack with spaces"
         );
     }

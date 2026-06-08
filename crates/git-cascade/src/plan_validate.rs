@@ -81,14 +81,17 @@ fn validate_shape(plan: &Plan) -> Result<()> {
 
     let node_by_branch = node_by_branch(plan)?;
     let anchor = anchor_node(plan)?;
-    if anchor.branch != plan.source.anchor_ref {
-        return invalid("source anchor_ref does not match the anchor node");
+    if plan.source.name.is_empty() {
+        return invalid("source name must not be empty");
     }
-    if anchor.old_tip != plan.source.anchor_old_tip {
-        return invalid("source anchor_old_tip does not match the anchor node");
+    if anchor.branch != plan.source.name {
+        return invalid("source name does not match the anchor node");
     }
-    if plan.source.anchor_old_base == plan.source.anchor_old_tip {
-        return invalid("source anchor_old_base must differ from anchor_old_tip");
+    if anchor.old_tip != plan.source.old_tip {
+        return invalid("source old_tip does not match the anchor node");
+    }
+    if plan.source.old_base == plan.source.old_tip {
+        return invalid("source old_base must differ from old_tip");
     }
 
     let dependency_set = dependency_set(plan)?;
@@ -133,8 +136,8 @@ fn validate_shape(plan: &Plan) -> Result<()> {
 
 fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
     let mut commits = HashSet::<&str>::new();
-    commits.insert(plan.source.anchor_old_base.as_str());
-    commits.insert(plan.source.anchor_old_tip.as_str());
+    commits.insert(plan.source.old_base.as_str());
+    commits.insert(plan.source.old_tip.as_str());
 
     for node in &plan.nodes {
         commits.insert(node.old_tip.as_str());
@@ -181,10 +184,10 @@ fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
 }
 
 fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
-    if !git.is_ancestor(&plan.source.anchor_old_base, &plan.source.anchor_old_tip)? {
+    if !git.is_ancestor(&plan.source.old_base, &plan.source.old_tip)? {
         return invalid(format!(
-            "source anchor_old_base `{}` is not reachable from anchor_old_tip `{}`",
-            plan.source.anchor_old_base, plan.source.anchor_old_tip
+            "source old_base `{}` is not reachable from old_tip `{}`",
+            plan.source.old_base, plan.source.old_tip
         ));
     }
 
@@ -196,12 +199,12 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
         let old_base = node.old_base().expect("dependent node has an old base");
         let parent = node_by_branch[parent];
         if parent.is_anchor()
-            && (old_base == plan.source.anchor_old_base
-                || !git.is_ancestor(&plan.source.anchor_old_base, old_base)?)
+            && (old_base == plan.source.old_base
+                || !git.is_ancestor(&plan.source.old_base, old_base)?)
         {
             return invalid(format!(
-                "old_base `{}` for branch `{}` is outside anchor range {}..{}",
-                old_base, node.branch, plan.source.anchor_old_base, parent.old_tip
+                "old_base `{}` for branch `{}` is outside root range {}..{}",
+                old_base, node.branch, plan.source.old_base, parent.old_tip
             ));
         }
         if !git.is_ancestor(old_base, &parent.old_tip)? {
@@ -426,9 +429,9 @@ mod tests {
                 head_at_generation: "0".repeat(40),
             },
             source: Source {
-                anchor_ref: "anchor".to_owned(),
-                anchor_old_base: "0".repeat(40),
-                anchor_old_tip: "0".repeat(40),
+                name: "anchor".to_owned(),
+                old_base: "0".repeat(40),
+                old_tip: "0".repeat(40),
             },
             nodes,
             dependencies,
