@@ -173,7 +173,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
     let mut state = state_file.read_state()?;
-    if state.phase != Phase::Conflict {
+    if !matches!(state.phase, Phase::Conflict | Phase::FinalUpdate) {
         return Err(Error::InvalidInvocation(format!(
             "cannot continue cascade operation in phase `{}`",
             state.phase
@@ -184,12 +184,20 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_name)?)?;
     validate_plan_for_apply(git, &plan)?;
     if state.new_tip.input_was_ref {
-        let resolved = git.resolve_commit(&state.new_tip.input)?;
-        if resolved != state.new_tip.resolved {
-            eprintln!(
-                "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`",
-                state.new_tip.input, state.new_tip.resolved
-            );
+        match git.resolve_commit(&state.new_tip.input) {
+            Ok(resolved) if resolved != state.new_tip.resolved => {
+                eprintln!(
+                    "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`; continuing with persisted tip",
+                    state.new_tip.input, state.new_tip.resolved
+                );
+            }
+            Ok(_) => {}
+            Err(_) => {
+                eprintln!(
+                    "new tip `{}` no longer resolves; continuing with persisted tip `{}`",
+                    state.new_tip.input, state.new_tip.resolved
+                );
+            }
         }
     }
 
@@ -243,6 +251,7 @@ fn run_apply_state(
                 backend.final_update(plan, state)?;
                 state.phase = Phase::Deleting;
                 state_writer.write_state(state)?;
+                backend.delete_applied_plan(state)?;
             }
             Phase::Conflict => {
                 resolve_conflict(backend, state)?;

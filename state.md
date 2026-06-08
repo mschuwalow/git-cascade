@@ -96,7 +96,7 @@ Current tests include:
 - Real-Git integration tests for `continue` after manual conflict resolution.
 - Real-Git integration tests for `continue` refusing unresolved conflicts.
 - Real-Git integration tests for `continue` without active state.
-- Feature-gated real-Git integration test proving final update refuses a moved replacement tip ref.
+- Feature-gated real-Git integration tests for moved replacement tip refs and resumable final update failures.
 - Real-Git integration assertion that conflict state records the plan-id worktree path.
 - Real-Git integration tests for abort tolerating already-deleted worktree files.
 - Real-Git integration tests for `phase: deleting` state cleanup on status.

@@ -594,7 +594,6 @@ Use a single `git update-ref --stdin` transaction with expected old values:
 
 ```text
 start
-verify <new-tip-ref> <resolved-new-tip>
 update refs/heads/agent-permissions-9 <new-tip-9> 5b58f121371d5e79ab4c769bbe8c7867958f939a
 update refs/heads/agent-permissions-10 <new-tip-10> 7777777777777777777777777777777777777777
 prepare
@@ -605,7 +604,7 @@ Requirements:
 
 - All dependent refs are updated in one prepared transaction.
 - Each update includes the expected `old_tip` from the plan.
-- If `--new-tip` was a ref, verify it still points at the resolved replacement tip.
+- `--new-tip` is resolved once when apply starts; final update uses the persisted resolved commit even if the input ref later moves.
 - No dependent branch ref is updated if any expected old value does not match.
 
 ## Validation
@@ -632,7 +631,7 @@ Before final ref update:
 - Every node has a temporary rewritten tip.
 - Every temporary rewritten tip exists.
 - Every branch ref still equals the apply-time tip captured before replay started.
-- The `--new-tip` ref still equals the resolved replacement tip when the replacement tip was a ref.
+- The persisted resolved `--new-tip` commit is used as the replacement root tip.
 
 ## Atomicity And Safety
 
@@ -719,7 +718,7 @@ Continue behavior:
 - Load the active operation from `<git-common-dir>/cascade/state.yaml`.
 - Validate that the saved conflict state matches the named plan recorded in state.
 - Validate that the saved apply strategy is internally consistent with the recorded operation state.
-- Validate that the replacement tip ref still points at the resolved replacement tip when `--new-tip` was a ref.
+- If the operation is in `final_update`, retry the final ref transaction using the persisted resolved replacement tip.
 - Validate that permanent dependent branch refs still point at their saved `old_tip` values.
 - Validate that the conflict worktree has no unmerged index entries.
 - Complete the current replayed commit using the user's resolution.

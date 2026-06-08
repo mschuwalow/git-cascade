@@ -55,6 +55,7 @@ pub(crate) trait ReplayBackend {
         rewritten_tip: &str,
     ) -> Result<(String, String)>;
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()>;
+    fn delete_applied_plan(&mut self, state: &ApplyState) -> Result<()>;
     fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()>;
 }
 
@@ -247,6 +248,10 @@ impl ReplayBackend for GitReplayBackend<'_> {
         finish_final_update(self.git, plan, state)
     }
 
+    fn delete_applied_plan(&mut self, state: &ApplyState) -> Result<()> {
+        self.storage.delete_plan_if_exists(state.plan_name.clone())
+    }
+
     fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
         eprintln!("Cleaning temporary cascade state");
         let worktree = worktree_path(self.storage, state);
@@ -281,8 +286,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
             }
         }
 
-        let plan_name = state.plan_name.clone();
-        self.storage.delete_plan(plan_name)
+        Ok(())
     }
 }
 
@@ -415,6 +419,10 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
+    fn delete_applied_plan(&mut self, _state: &ApplyState) -> Result<()> {
+        Ok(())
+    }
+
     fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
         let WorktreeState::InPlace { path, restore } = &state.worktree else {
             return Ok(());
@@ -443,40 +451,15 @@ fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()>
         .collect::<HashMap<_, _>>();
     let temp_tips = temp_tips_from_refs(git, &state.completed.temp_refs)?;
     ensure_target_branches_not_checked_out(git, &ordered)?;
-    let new_tip_ref = new_tip_ref_for_state(git, state)?;
     test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
         &nodes,
         &temp_tips,
         &state.branch_tips,
-        new_tip_ref.as_deref(),
+        None,
         &state.new_tip.resolved,
     )?)
-}
-
-fn new_tip_ref_for_state(git: &Git, state: &ApplyState) -> Result<Option<String>> {
-    if !state.new_tip.input_was_ref {
-        return Ok(None);
-    }
-
-    let resolved = git.resolve_commit(&state.new_tip.input)?;
-    if resolved != state.new_tip.resolved {
-        return Err(Error::InvalidInvocation(format!(
-            "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`",
-            state.new_tip.input, state.new_tip.resolved
-        )));
-    }
-
-    git.symbolic_full_name(&state.new_tip.input)?.map_or_else(
-        || {
-            Err(Error::InvalidInvocation(format!(
-                "new tip `{}` no longer resolves to a ref",
-                state.new_tip.input
-            )))
-        },
-        |name| Ok(Some(name)),
-    )
 }
 
 fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<String, String>> {

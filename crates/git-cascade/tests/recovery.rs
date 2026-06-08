@@ -75,6 +75,7 @@ fn abort_cleans_conflict_state_without_moving_refs() {
 
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.plan_path("stack").exists());
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
     repo.cascade()
         .arg("status")
@@ -114,6 +115,7 @@ fn abort_in_place_conflict_restores_original_checkout() {
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert!(repo.git_output(["status", "--porcelain"]).is_empty());
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.plan_path("stack").exists());
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
@@ -135,6 +137,30 @@ fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
         .stdout("aborted cascade operation\n");
 
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
+fn abort_succeeds_when_plan_was_already_deleted() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure();
+    let mut state = read_state(&repo);
+    state.phase = Phase::Deleting;
+    write_state(&repo, &state);
+    std::fs::remove_file(repo.plan_path("stack")).unwrap();
+
+    repo.cascade()
+        .arg("abort")
+        .assert()
+        .success()
+        .stdout("aborted cascade operation\n");
+
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!std::path::Path::new(state.worktree.path()).exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
 #[test]
@@ -203,6 +229,7 @@ fn abort_finishes_cleanup_for_deleting_state() {
 
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!std::path::Path::new(state.worktree.path()).exists());
+    assert!(repo.plan_path("stack").exists());
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
@@ -271,6 +298,7 @@ fn continue_after_conflict_finishes_apply() {
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.show("pr-2:conflict.txt"), "resolved\n");
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 

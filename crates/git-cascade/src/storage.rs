@@ -142,6 +142,15 @@ impl Storage {
         fs::remove_file(&path).map_err(|source| Error::IoWithPath { path, source })
     }
 
+    pub fn delete_plan_if_exists(&self, name: PlanName) -> Result<()> {
+        let path = self.plan_path(&name);
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(Error::IoWithPath { path, source }),
+        }
+    }
+
     pub fn list_plan_names(&self) -> Result<Vec<PlanName>> {
         let path = self.plans_dir();
         if !path.exists() {
