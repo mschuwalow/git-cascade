@@ -98,7 +98,7 @@ fn continue_operation() -> Result<()> {
 fn status() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    print!("{}", recovery::status(&storage)?);
+    print!("{}", recovery::status(&git, &storage)?);
 
     Ok(())
 }

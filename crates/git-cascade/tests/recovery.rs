@@ -30,7 +30,7 @@ fn status_reports_conflict_state() {
         worktree.parent().unwrap(),
         repo.common_dir().join("cascade/worktrees")
     );
-    assert_ne!(
+    assert_eq!(
         worktree.file_name().unwrap().to_str().unwrap(),
         state.plan_id
     );
@@ -58,6 +58,12 @@ fn abort_cleans_conflict_state_without_moving_refs() {
         .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
         .assert()
         .failure();
+    let state = read_state(&repo);
+    repo.git_ok([
+        "update-ref",
+        &format!("refs/cascade/tmp/{}/extra", state.plan_id),
+        "HEAD",
+    ]);
     assert!(repo.common_dir().join("cascade/state.yaml").exists());
 
     repo.cascade()
@@ -74,6 +80,49 @@ fn abort_cleans_conflict_state_without_moving_refs() {
         .assert()
         .success()
         .stdout("No active cascade operation.\n");
+}
+
+#[test]
+fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .assert()
+        .failure();
+    let state = read_state(&repo);
+    std::fs::remove_dir_all(&state.worktree).unwrap();
+
+    repo.cascade()
+        .arg("abort")
+        .assert()
+        .success()
+        .stdout("aborted cascade operation\n");
+
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
+fn status_finishes_cleanup_for_deleting_state() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["apply", "--name", "stack", "--new-anchor", "pr-1"])
+        .assert()
+        .failure();
+    let mut state = read_state(&repo);
+    state.phase = "deleting".to_owned();
+    write_state(&repo, &state);
+
+    repo.cascade()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout("No active cascade operation.\n");
+
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!std::path::Path::new(&state.worktree).exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
 #[test]
@@ -166,4 +215,9 @@ fn conflicting_stack() -> TestRepo {
 fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
     let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
     serde_yaml::from_str(&content).unwrap()
+}
+
+fn write_state(repo: &TestRepo, state: &git_cascade::state::ApplyState) {
+    let content = serde_yaml::to_string(state).unwrap();
+    std::fs::write(repo.common_dir().join("cascade/state.yaml"), content).unwrap();
 }

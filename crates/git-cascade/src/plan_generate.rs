@@ -10,6 +10,7 @@ use crate::plan::{Dependency, Node, Plan, Repository, Source};
 use crate::plan_validate::validate_plan;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
@@ -28,23 +29,13 @@ struct Candidate {
 }
 
 pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
-    let plan = generate_plan(
-        git,
-        &options.anchor_branch,
-        &options.name,
-        options.main.as_deref(),
-    )?;
+    let plan = generate_plan(git, &options.anchor_branch, options.main.as_deref())?;
     validate_plan(git, &plan)?;
     write_named_plan(storage, &options.name, &plan, options.replace)?;
     Ok(plan)
 }
 
-pub fn generate_plan(
-    git: &Git,
-    anchor_branch: &str,
-    plan_name: &PlanName,
-    main: Option<&str>,
-) -> Result<Plan> {
+pub fn generate_plan(git: &Git, anchor_branch: &str, main: Option<&str>) -> Result<Plan> {
     let anchor_tip = git.local_branch_tip(anchor_branch)?;
     let anchor_base = infer_anchor_base(git, anchor_branch, &anchor_tip, main)?;
     let anchor_commits = owned_commits(git, &anchor_base, &anchor_tip, anchor_branch)?;
@@ -79,7 +70,7 @@ pub fn generate_plan(
     let generated_at = now.format(&Rfc3339).map_err(|error| {
         Error::Unsupported(format!("failed to format generation timestamp: {error}"))
     })?;
-    let plan_id = format!("{}-{}", now.unix_timestamp(), plan_name.encoded());
+    let plan_id = Uuid::new_v4().to_string();
 
     Ok(Plan {
         version: 1,

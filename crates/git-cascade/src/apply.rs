@@ -6,14 +6,14 @@ use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
 use crate::plan_validate::{topological_order, validate_plan_for_apply};
+use crate::recovery;
 use crate::state::{
     ApplyState, ApplyStateInput, CurrentState, StateLock, initial_apply_state, read_state,
-    remove_state, write_state_atomic,
+    write_state_atomic,
 };
 use crate::storage::{PlanName, Storage};
 use crate::test_hooks;
 use crate::{Error, Result};
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct DryRunOptions {
@@ -81,7 +81,7 @@ pub fn dry_run(
 
     let mut selected_bases = HashMap::<String, ReplayBase>::new();
     let mut output = String::new();
-    let worktree = storage.worktrees_dir().join("<generated-uuid>");
+    let worktree = storage.worktrees_dir().join(&plan.plan_id);
     let strategy = if options.move_to_heads {
         "move-to-heads"
     } else {
@@ -187,7 +187,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
 
     let mut mappings = BTreeMap::new();
     mappings.insert(plan.source.anchor_old_tip.clone(), new_anchor.clone());
-    let worktree = storage.worktrees_dir().join(Uuid::new_v4().to_string());
+    let worktree = storage.worktrees_dir().join(&plan.plan_id);
     let mut state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
@@ -285,13 +285,11 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         &new_anchor,
     )?)?;
 
-    for temp_ref in &temp_refs {
-        git.delete_ref(temp_ref)?;
+    if worktree_created || !temp_refs.is_empty() || storage.state_path().exists() {
+        recovery::mark_deleting_and_cleanup(git, storage, &mut state)?;
+    } else {
+        state_lock.remove()?;
     }
-    if worktree_created {
-        git.worktree_remove_force(&worktree)?;
-    }
-    state_lock.remove()?;
 
     Ok(())
 }
@@ -299,6 +297,12 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
 pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let mut state = read_state(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
+    if state.phase == "deleting" {
+        recovery::cleanup_state_artifacts(git, storage, &state)?;
+        return Err(Error::InvalidInvocation(
+            "no active cascade operation".to_owned(),
+        ));
+    }
     if state.operation != "apply" {
         return Err(Error::InvalidInvocation(format!(
             "cannot continue unsupported operation `{}`",
@@ -489,11 +493,7 @@ fn continue_replay_after_resolved_commit(
         &state.new_anchor.resolved,
     )?)?;
 
-    for temp_ref in &temp_refs {
-        git.delete_ref(temp_ref)?;
-    }
-    git.worktree_remove_force(&worktree)?;
-    remove_state(storage)?;
+    recovery::mark_deleting_and_cleanup(git, storage, &mut state)?;
 
     Ok(())
 }

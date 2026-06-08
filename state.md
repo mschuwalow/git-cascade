@@ -20,7 +20,8 @@ Implemented so far:
 - `apply --dry-run --move-to-heads` base preview.
 - Mutating `git cascade apply --name <name> --new-anchor <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
-- Temporary worktree replay under generated UUID directories in `<git-common-dir>/cascade/worktrees/`.
+- Plan IDs are UUIDs.
+- Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>`.
 - Temporary rewritten branch refs under `refs/cascade/tmp/<plan-id>/<encoded-branch>`.
 - Final dependent branch promotion through a single `git update-ref --stdin` transaction.
 - Success cleanup for state file, temporary refs, and temporary worktree.
@@ -28,6 +29,8 @@ Implemented so far:
 - `git cascade status` for reporting active operation state.
 - `git cascade abort` for aborting preserved conflict state and cleaning temp refs/worktrees.
 - `git cascade continue` for completing a resolved cherry-pick conflict and resuming the cascade.
+- Cleanup marks state as `phase: deleting` before deleting temp refs/worktrees/state.
+- Loading a `phase: deleting` state continues cleanup and then behaves as if no active state exists.
 - Feature-gated `before-final-update` test hook for ref-safety testing.
 - `git cascade list` for named plans.
 - `git cascade show --name <name>` for named plans.
@@ -89,7 +92,9 @@ Current tests include:
 - Real-Git integration tests for `continue` refusing unresolved conflicts.
 - Real-Git integration tests for `continue` without active state.
 - Feature-gated real-Git integration test proving final update refuses a moved replacement anchor ref.
-- Real-Git integration assertion that conflict state records a generated UUID worktree path.
+- Real-Git integration assertion that conflict state records the plan-id worktree path.
+- Real-Git integration tests for abort tolerating already-deleted worktree files.
+- Real-Git integration tests for `phase: deleting` state cleanup on status.
 
 Verified commands:
 

@@ -3,14 +3,18 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::git::Git;
-use crate::state::{ApplyState, read_state, remove_state, require_state};
+use crate::state::{ApplyState, read_state, remove_state, require_state, write_state_atomic};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
-pub fn status(storage: &Storage) -> Result<String> {
+pub fn status(git: &Git, storage: &Storage) -> Result<String> {
     let Some(state) = read_state(storage)? else {
         return Ok("No active cascade operation.\n".to_owned());
     };
+    if state.phase == "deleting" {
+        cleanup_state_artifacts(git, storage, &state)?;
+        return Ok("No active cascade operation.\n".to_owned());
+    }
 
     let mut output = String::new();
     output.push_str("Active cascade operation:\n");
@@ -53,7 +57,7 @@ pub fn status(storage: &Storage) -> Result<String> {
 }
 
 pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
-    let state = require_state(storage)?;
+    let mut state = require_state(storage)?;
     if state.operation != "apply" {
         return Err(Error::InvalidInvocation(format!(
             "cannot abort unsupported operation `{}`",
@@ -61,9 +65,35 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
         )));
     }
 
-    let worktree = worktree_path(storage, &state);
+    if state.phase != "deleting" {
+        state.phase = "deleting".to_owned();
+        write_state_atomic(storage, &mut state)?;
+    }
+
+    cleanup_state_artifacts(git, storage, &state)
+}
+
+pub fn mark_deleting_and_cleanup(
+    git: &Git,
+    storage: &Storage,
+    state: &mut ApplyState,
+) -> Result<()> {
+    state.phase = "deleting".to_owned();
+    write_state_atomic(storage, state)?;
+    cleanup_state_artifacts(git, storage, state)
+}
+
+pub fn cleanup_state_artifacts(git: &Git, storage: &Storage, state: &ApplyState) -> Result<()> {
+    if state.operation != "apply" {
+        return Err(Error::InvalidInvocation(format!(
+            "cannot clean up unsupported operation `{}`",
+            state.operation
+        )));
+    }
+
+    let worktree = worktree_path(storage, state);
     if worktree.exists() {
-        Git::new(&worktree).try_cherry_pick_abort()?;
+        let _ = Git::new(&worktree).try_cherry_pick_abort();
     }
 
     let mut refs = BTreeSet::new();
@@ -73,17 +103,21 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
         let _ = git.delete_ref(&temp_ref);
     }
 
+    let _ = git.worktree_remove_force(&worktree);
     if worktree.exists() {
-        let _ = git.worktree_remove_force(&worktree);
-        if worktree.exists() {
-            fs::remove_dir_all(&worktree).map_err(|source| Error::IoWithPath {
-                path: worktree.clone(),
-                source,
-            })?;
-        }
+        fs::remove_dir_all(&worktree).map_err(|source| Error::IoWithPath {
+            path: worktree.clone(),
+            source,
+        })?;
     }
 
-    remove_state(storage)
+    match remove_state(storage) {
+        Ok(()) => Ok(()),
+        Err(Error::IoWithPath { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn worktree_path(storage: &Storage, state: &ApplyState) -> PathBuf {
