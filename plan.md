@@ -312,7 +312,7 @@ Refused while `state.yaml` exists:
 - `git cascade delete ...`
 - Any command that creates, updates, or deletes plans, refs, temporary refs, or worktrees outside the active operation
 
-`state.yaml` must be created atomically when an apply operation starts. The implementation should use exclusive create semantics so two processes cannot both acquire the lock.
+Mutating operations take an exclusive lock on `<git-common-dir>/cascade/state.lock` before reading or writing `state.yaml`. State writes should be atomic replacements of `state.yaml` so a crash does not truncate the last valid recovery state.
 
 The state file should contain enough information to resume, abort, diagnose stale state, and avoid recomputing apply-time choices:
 
@@ -320,30 +320,30 @@ The state file should contain enough information to resume, abort, diagnose stal
 version: 1
 phase: conflict
 plan_name: permissions-stack
-plan_id: "2026-06-08T14-00-00Z-agent-permissions"
+plan_id: "550e8400-e29b-41d4-a716-446655440000"
 started_at: "2026-06-08T14:00:00Z"
 updated_at: "2026-06-08T14:05:12Z"
 pid: 12345
 
-new_tip:
-  input: my-branch
-  resolved: "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
-  input_was_ref: true
+new_tip: "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 
 strategy: preserve-fork-points
 
 current:
   branch: agent-permissions-9
   commit: "3333333333333333333333333333333333333333"
-  worktree: "<git-common-dir>/cascade/worktrees/permissions-stack"
+  worktree: "<git-common-dir>/cascade/worktrees/550e8400-e29b-41d4-a716-446655440000"
 
 worktree:
   mode: temporary
-  path: "<git-common-dir>/cascade/worktrees/permissions-stack"
+  path: "<git-common-dir>/cascade/worktrees/550e8400-e29b-41d4-a716-446655440000"
 
 completed:
   temp_refs:
-    - refs/cascade/tmp/2026-06-08T14-00-00Z-agent-permissions/agent-permissions-8
+    - refs/cascade/tmp/550e8400-e29b-41d4-a716-446655440000/agent-permissions-8
+
+cleanup:
+  delete_plan: false
 
 mappings:
   "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42": "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
@@ -362,7 +362,7 @@ The examples below use YAML, but the same schema could be serialized as JSON if 
 
 ```yaml
 version: 1
-plan_id: "2026-06-08T14-00-00Z-agent-permissions"
+plan_id: "550e8400-e29b-41d4-a716-446655440000"
 generated_at: "2026-06-08T14:00:00Z"
 
 repository:
@@ -401,7 +401,7 @@ dependencies:
 
 `version` is the plan schema version. This document defines version 1.
 
-`plan_id` is a stable unique identifier used for temporary ref namespaces.
+`plan_id` is a UUID used for temporary ref namespaces.
 
 `generated_at` is the RFC 3339 timestamp when the plan was created.
 
@@ -580,8 +580,8 @@ refs/cascade/tmp/<plan-id>/
 Example temporary refs:
 
 ```text
-refs/cascade/tmp/2026-06-08T14-00-00Z-agent-permissions/agent-permissions-9
-refs/cascade/tmp/2026-06-08T14-00-00Z-agent-permissions/agent-permissions-10
+refs/cascade/tmp/550e8400-e29b-41d4-a716-446655440000/agent-permissions-9
+refs/cascade/tmp/550e8400-e29b-41d4-a716-446655440000/agent-permissions-10
 ```
 
 Temporary refs are deleted after success. On conflict or failure, they are kept by default so the user can inspect or resume the operation.
@@ -612,7 +612,7 @@ Requirements:
 Before replay:
 
 - The plan version is supported.
-- `plan_id` is present and safe for use in a ref namespace.
+- `plan_id` is a UUID and therefore safe for use in a ref namespace.
 - `--new-tip` is present and resolves to a commit.
 - The selected apply strategy is `preserve-fork-points`, `move-to-planned-tips`, or `move-to-current-tips`.
 - All `old_base`, `old_tip`, and `commits` objects exist locally.

@@ -100,6 +100,10 @@ impl Storage {
         self.cascade_dir().join("state.yaml")
     }
 
+    pub fn state_lock_path(&self) -> PathBuf {
+        self.cascade_dir().join("state.lock")
+    }
+
     pub fn worktrees_dir(&self) -> PathBuf {
         self.cascade_dir().join("worktrees")
     }

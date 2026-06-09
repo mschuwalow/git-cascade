@@ -6,11 +6,10 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::git::{Git, LocalBranch};
-use crate::plan::{Dependency, Node, NodeKind, Plan, Repository, Source};
+use crate::plan::{Dependency, Node, NodeKind, Plan, PlanId, Repository, Source};
 use crate::plan_validate::validate_plan;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
@@ -90,7 +89,7 @@ pub fn generate_plan(
     let generated_at = now.format(&Rfc3339).map_err(|error| {
         Error::Unsupported(format!("failed to format generation timestamp: {error}"))
     })?;
-    let plan_id = Uuid::new_v4().to_string();
+    let plan_id = PlanId::new();
 
     Ok(Plan {
         version: 1,
@@ -231,8 +230,7 @@ fn next_candidate(
                 continue;
             };
 
-            let parent_old_base = parent.old_base().expect("parent node has an old base");
-            if base != parent_old_base && !parent.commits().contains(&base) {
+            if !parent.commits().contains(&base) {
                 continue;
             }
 

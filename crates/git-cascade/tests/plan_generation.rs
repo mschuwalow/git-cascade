@@ -77,6 +77,38 @@ fn plan_preserves_intermediate_fork_point() {
 }
 
 #[test]
+fn plan_keeps_independent_root_siblings_separate() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("pr-1");
+    repo.switch_new("pr-3");
+    repo.commit_file("pr3.txt", "c\n", "pr-3");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+
+    let plan = read_plan(&repo, "stack");
+    assert_eq!(plan.nodes.len(), 2);
+    assert!(plan.dependencies.is_empty());
+    for branch in ["pr-2", "pr-3"] {
+        let node = plan
+            .nodes
+            .iter()
+            .find(|node| node.branch == branch)
+            .unwrap();
+        assert!(matches!(node.kind, NodeKind::Root { .. }));
+        assert_eq!(node.parent(), None);
+    }
+}
+
+#[test]
 fn plan_does_not_treat_advanced_main_as_dependent() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");

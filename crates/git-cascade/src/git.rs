@@ -66,7 +66,11 @@ impl Git {
         self.output(args).map(|_| ())
     }
 
-    pub fn try_output<I, S>(&self, args: I) -> Result<Option<String>>
+    fn output_allowing_status<I, S>(
+        &self,
+        args: I,
+        allowed_statuses: &[i32],
+    ) -> Result<Option<String>>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -78,7 +82,21 @@ impl Git {
             .output()?;
 
         if !output.status.success() {
-            return Ok(None);
+            if output
+                .status
+                .code()
+                .is_some_and(|status| allowed_statuses.contains(&status))
+            {
+                return Ok(None);
+            }
+            return Err(Error::Git {
+                args: display_args(&args),
+                status: output
+                    .status
+                    .code()
+                    .map_or_else(|| "signal".to_owned(), |code| code.to_string()),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
         }
 
         String::from_utf8(output.stdout)
@@ -115,7 +133,16 @@ impl Git {
 
     pub fn symbolic_full_name(&self, rev: &str) -> Result<Option<String>> {
         if let Some(refname) = self
-            .try_output(["rev-parse", "--symbolic-full-name", "--verify", rev])?
+            .output_allowing_status(
+                [
+                    "rev-parse",
+                    "--symbolic-full-name",
+                    "--verify",
+                    "--quiet",
+                    rev,
+                ],
+                &[1],
+            )?
             .map(|output| output.trim().to_owned())
             .filter(|output| output.starts_with("refs/"))
         {
@@ -143,7 +170,7 @@ impl Git {
 
     pub fn try_rev_parse(&self, rev: &str) -> Result<Option<String>> {
         Ok(self
-            .try_output(["rev-parse", "--verify", "--quiet", rev])?
+            .output_allowing_status(["rev-parse", "--verify", "--quiet", rev], &[1])?
             .map(|output| output.trim().to_owned())
             .filter(|output| !output.is_empty()))
     }
@@ -229,7 +256,7 @@ impl Git {
 
     pub fn current_branch(&self) -> Result<Option<String>> {
         Ok(self
-            .try_output(["symbolic-ref", "--quiet", "--short", "HEAD"])?
+            .output_allowing_status(["symbolic-ref", "--quiet", "--short", "HEAD"], &[1])?
             .map(|output| output.trim().to_owned())
             .filter(|output| !output.is_empty()))
     }
@@ -266,7 +293,7 @@ impl Git {
 
     pub fn merge_base(&self, left: &str, right: &str) -> Result<Option<String>> {
         Ok(self
-            .try_output(["merge-base", left, right])?
+            .output_allowing_status(["merge-base", left, right], &[1])?
             .map(|output| output.trim().to_owned())
             .filter(|output| !output.is_empty()))
     }
@@ -290,18 +317,20 @@ impl Git {
     }
 
     pub fn commit_exists(&self, oid: &str) -> Result<bool> {
-        self.try_output(["cat-file", "-e", &format!("{oid}^{{commit}}")])
+        self.output_allowing_status(["cat-file", "-e", &format!("{oid}^{{commit}}")], &[1, 128])
             .map(|output| output.is_some())
     }
 
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
-        self.try_output(["merge-base", "--is-ancestor", ancestor, descendant])
+        self.output_allowing_status(["merge-base", "--is-ancestor", ancestor, descendant], &[1])
             .map(|output| output.is_some())
     }
 
     pub fn origin_default_branch_tip(&self) -> Result<Option<String>> {
-        let Some(default_ref) =
-            self.try_output(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])?
+        let Some(default_ref) = self.output_allowing_status(
+            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            &[1, 128],
+        )?
         else {
             return Ok(None);
         };
@@ -365,7 +394,8 @@ impl Git {
     }
 
     pub fn try_cherry_pick_abort(&self) -> Result<()> {
-        self.try_output(["cherry-pick", "--abort"]).map(|_| ())
+        self.output_allowing_status(["cherry-pick", "--abort"], &[1, 128])
+            .map(|_| ())
     }
 
     pub fn unmerged_entries(&self) -> Result<Vec<String>> {

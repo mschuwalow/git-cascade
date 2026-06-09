@@ -13,10 +13,7 @@ pub fn status(storage: &Storage) -> Result<String> {
     output.push_str(&format!("phase: {}\n", state.phase));
     output.push_str(&format!("plan: {}\n", state.plan_name));
     output.push_str(&format!("plan-id: {}\n", state.plan_id));
-    output.push_str(&format!(
-        "new-tip: {} -> {}\n",
-        state.new_tip.input, state.new_tip.resolved
-    ));
+    output.push_str(&format!("new-tip: {}\n", state.new_tip));
     output.push_str(&format!("strategy: {}\n", state.strategy.as_str()));
     output.push_str(&format!("worktree-mode: {}\n", state.worktree));
     if let Some(current) = &state.current {

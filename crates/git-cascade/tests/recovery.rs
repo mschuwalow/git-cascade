@@ -33,7 +33,7 @@ fn status_reports_conflict_state() {
     );
     assert_eq!(
         worktree.file_name().unwrap().to_str().unwrap(),
-        state.plan_id
+        state.plan_id.to_string()
     );
     assert!(worktree.exists());
 
@@ -41,7 +41,7 @@ fn status_reports_conflict_state() {
         predicate::str::contains("Active cascade operation:")
             .and(predicate::str::contains("phase: conflict"))
             .and(predicate::str::contains("plan: stack"))
-            .and(predicate::str::contains("new-tip: pr-1 ->"))
+            .and(predicate::str::contains("new-tip:"))
             .and(predicate::str::contains("strategy: preserve-fork-points"))
             .and(predicate::str::contains("current-branch: pr-2"))
             .and(predicate::str::contains("current-commit:"))
@@ -186,7 +186,7 @@ fn status_reports_deleting_state_without_cleanup() {
 }
 
 #[test]
-fn continue_refuses_deleting_state() {
+fn continue_finishes_deleting_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
@@ -200,13 +200,12 @@ fn continue_refuses_deleting_state() {
     repo.cascade()
         .arg("continue")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "cannot continue cascade operation in phase `deleting`",
-        ));
+        .success()
+        .stdout("continued cascade operation\n");
 
-    assert!(repo.common_dir().join("cascade/state.yaml").exists());
-    assert!(std::path::Path::new(state.worktree.path()).exists());
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!std::path::Path::new(state.worktree.path()).exists());
+    assert!(repo.plan_path("stack").exists());
 }
 
 #[test]

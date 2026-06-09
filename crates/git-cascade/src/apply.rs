@@ -11,6 +11,7 @@ use crate::state::{
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::{PlanName, Storage};
+use crate::test_hooks;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
@@ -59,13 +60,12 @@ pub fn dry_run(
 ) -> Result<String> {
     validate_plan_for_apply(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    let new_tip_ref = git.symbolic_full_name(&options.new_tip_input)?;
     let ordered = topological_order(plan)?;
     let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
     let worktree = if options.in_place {
         git.worktree_root()?
     } else {
-        storage.worktrees_dir().join(&plan.plan_id)
+        storage.worktrees_dir().join(plan.plan_id.to_string())
     };
     let worktree_state = if options.in_place {
         WorktreeState::InPlace {
@@ -90,9 +90,7 @@ pub fn dry_run(
     let mut state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
-        new_tip_input: &options.new_tip_input,
-        new_tip_resolved: &new_tip,
-        new_tip_input_was_ref: new_tip_ref.is_some(),
+        new_tip: &new_tip,
         strategy: options.strategy,
         pending_branches: ordered,
         branch_tips,
@@ -110,7 +108,6 @@ pub fn dry_run(
 pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<()> {
     validate_plan_for_apply(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    let new_tip_input_was_ref = git.symbolic_full_name(&options.new_tip_input)?.is_some();
     let ordered = topological_order(plan)?;
     let (worktree_state, worktree) = if options.in_place {
         let worktree = git.worktree_root()?;
@@ -124,7 +121,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             worktree,
         )
     } else {
-        let worktree = storage.worktrees_dir().join(&plan.plan_id);
+        let worktree = storage.worktrees_dir().join(plan.plan_id.to_string());
         ensure_target_branches_not_checked_out(git, &ordered)?;
         (
             WorktreeState::Temporary {
@@ -147,9 +144,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     let state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
-        new_tip_input: &options.new_tip_input,
-        new_tip_resolved: &new_tip,
-        new_tip_input_was_ref,
+        new_tip: &new_tip,
         strategy: options.strategy,
         pending_branches: ordered.clone(),
         branch_tips: branch_tips.clone(),
@@ -173,37 +168,25 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
     let mut state = state_file.read_state()?;
-    if !matches!(state.phase, Phase::Conflict | Phase::FinalUpdate) {
+    if !matches!(
+        state.phase,
+        Phase::Conflict | Phase::FinalUpdate | Phase::Deleting
+    ) {
         return Err(Error::InvalidInvocation(format!(
             "cannot continue cascade operation in phase `{}`",
             state.phase
         )));
     }
 
-    let plan_name = state.plan_name.clone();
-    let plan: Plan = serde_yaml::from_str(&storage.read_plan(&plan_name)?)?;
-    validate_plan_for_apply(git, &plan)?;
-    if state.new_tip.input_was_ref {
-        match git.resolve_commit(&state.new_tip.input) {
-            Ok(resolved) if resolved != state.new_tip.resolved => {
-                eprintln!(
-                    "new tip `{}` moved after apply started: expected `{}`, found `{resolved}`; continuing with persisted tip",
-                    state.new_tip.input, state.new_tip.resolved
-                );
-            }
-            Ok(_) => {}
-            Err(_) => {
-                eprintln!(
-                    "new tip `{}` no longer resolves; continuing with persisted tip `{}`",
-                    state.new_tip.input, state.new_tip.resolved
-                );
-            }
-        }
-    }
-
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    run_apply_state(&plan, &mut state_writer, &mut backend, &mut state)
+    if state.phase == Phase::Deleting {
+        run_deleting_state(&mut state_writer, &mut backend, &mut state)
+    } else {
+        let plan_name = state.plan_name.clone();
+        let plan = serde_yaml::from_str(&storage.read_plan(&plan_name)?)?;
+        run_apply_state(&plan, &mut state_writer, &mut backend, &mut state)
+    }
 }
 
 pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
@@ -216,6 +199,7 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
 
     if state.phase != Phase::Deleting {
         state.phase = Phase::Deleting;
+        state.cleanup.delete_plan = false;
         state_file.write_state(&mut state)?;
     }
 
@@ -249,9 +233,11 @@ fn run_apply_state(
             }
             Phase::FinalUpdate => {
                 backend.final_update(plan, state)?;
+                test_hooks::run("after-final-update")?;
                 state.phase = Phase::Deleting;
+                state.cleanup.delete_plan = true;
                 state_writer.write_state(state)?;
-                backend.delete_applied_plan(state)?;
+                test_hooks::run("after-deleting-state-written")?;
             }
             Phase::Conflict => {
                 resolve_conflict(backend, state)?;
@@ -270,6 +256,9 @@ fn run_deleting_state(
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
 ) -> Result<()> {
+    if state.cleanup.delete_plan {
+        backend.delete_applied_plan(state)?;
+    }
     backend.cleanup_deleting_state(state)?;
     state_writer.remove_state()
 }
@@ -426,7 +415,7 @@ fn prepare_branch_replay(
             selected_bases: progress.selected_bases,
             temp_tips,
             mappings: progress.mappings,
-            new_tip: &progress.state.new_tip.resolved,
+            new_tip: &progress.state.new_tip,
             strategy: progress.state.strategy,
         },
     )?;

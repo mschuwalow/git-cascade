@@ -20,7 +20,7 @@ Implemented so far:
 - `apply --dry-run --strategy move-to-planned-tips` and `move-to-current-tips` base preview.
 - Mutating `git cascade apply <name> --new-tip <ref>` for clean linear branch stacks.
 - Repository-wide apply lock creation through `<git-common-dir>/cascade/state.yaml`.
-- Mutating operations hold an exclusive write lock on the open `state.yaml` file for their full duration.
+- Mutating operations hold an exclusive write lock on `<git-common-dir>/cascade/state.lock` for their full duration while writing `state.yaml` atomically.
 - Active apply state uses typed enum values for phase, strategy, and replay worktree mode, and stores the plan name as a required `PlanName`.
 - Plan IDs are UUIDs.
 - Temporary worktree replay under `<git-common-dir>/cascade/worktrees/<plan-id>` by default, with opt-in `--in-place` replay in the current worktree.
@@ -32,9 +32,9 @@ Implemented so far:
 - `git cascade status` for reporting active operation state.
 - `git cascade abort` for aborting preserved conflict state, cleaning temp refs/worktrees, and restoring in-place checkouts.
 - `git cascade continue` for completing a resolved cherry-pick conflict and resuming the cascade.
-- Cleanup marks state as `phase: deleting` before deleting temp refs/worktrees/state.
-- Loading a `phase: deleting` state continues cleanup and then behaves as if no active state exists.
-- Feature-gated `before-final-update` test hook for ref-safety testing.
+- Cleanup marks state as `phase: deleting` and records whether the stored plan should be deleted before deleting temp refs/worktrees/state.
+- Loading a `phase: deleting` state through `continue` or `abort` continues cleanup and then behaves as if no active state exists.
+- Feature-gated final-update test hooks for ref-safety and recovery testing.
 - `git cascade list` for named plans.
 - `git cascade show <name>` for named plans.
 - Apply only supports named plans stored under the repository Git common-dir; exported/path-based plans are intentionally unsupported.
@@ -96,10 +96,10 @@ Current tests include:
 - Real-Git integration tests for `continue` after manual conflict resolution.
 - Real-Git integration tests for `continue` refusing unresolved conflicts.
 - Real-Git integration tests for `continue` without active state.
-- Feature-gated real-Git integration tests for moved replacement tip refs and resumable final update failures.
+- Feature-gated real-Git integration tests for moved replacement tip refs, resumable final update failures, post-final-update recovery, and successful deleting-state recovery.
 - Real-Git integration assertion that conflict state records the plan-id worktree path.
 - Real-Git integration tests for abort tolerating already-deleted worktree files.
-- Real-Git integration tests for `phase: deleting` state cleanup on status.
+- Real-Git integration tests for read-only `phase: deleting` status and explicit deleting-state cleanup.
 - CLI help tests covering commands and apply strategy options.
 - CLI tests for shell completion help and Bash completion generation.
 - CLI invalid-input tests for missing plan name and invalid `--strategy`.
@@ -125,10 +125,9 @@ cargo clippy -p git-cascade --features test-hooks --all-targets --no-deps -- -D 
 
 ## Next Steps
 
-1. Add crash/restart tests for continuing from preserved state.
-2. Harden cleanup behavior when temp refs or worktrees already exist.
-3. Add richer status output for completed mappings/temp refs if needed.
-4. Add tests for continuation that hits a second conflict on a later commit.
+1. Harden cleanup behavior when temp refs or worktrees already exist.
+2. Add richer status output for completed mappings/temp refs if needed.
+3. Add broader crash/restart tests around state-file corruption and process interruption.
 
 ## Recommended Immediate Next Step
 

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use clap::ValueEnum;
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::plan::PlanId;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 
@@ -17,11 +18,11 @@ pub struct ApplyState {
     pub version: u32,
     pub phase: Phase,
     pub plan_name: PlanName,
-    pub plan_id: String,
+    pub plan_id: PlanId,
     pub started_at: String,
     pub updated_at: String,
     pub pid: u32,
-    pub new_tip: NewTipState,
+    pub new_tip: String,
     pub strategy: Strategy,
     pub current: Option<CurrentState>,
     pub worktree: WorktreeState,
@@ -30,6 +31,7 @@ pub struct ApplyState {
     pub extra_commits: BTreeMap<String, Vec<String>>,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
+    pub cleanup: CleanupState,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -56,13 +58,6 @@ impl std::fmt::Display for Phase {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewTipState {
-    pub input: String,
-    pub resolved: String,
-    pub input_was_ref: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
@@ -153,53 +148,77 @@ pub struct PendingState {
     pub branches: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CleanupState {
+    pub delete_plan: bool,
+}
+
 pub struct StateFile {
     path: PathBuf,
-    file: File,
+    lock_file: File,
 }
 
 impl StateFile {
     pub fn create(storage: &Storage, state: &ApplyState) -> Result<Self> {
         storage.ensure_cascade_dir()?;
         let path = storage.state_path();
-        let file = fs::OpenOptions::new()
+        let lock_path = storage.state_lock_path();
+        let lock_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|source| {
-                if source.kind() == std::io::ErrorKind::AlreadyExists {
-                    Error::ActiveOperation { path: path.clone() }
-                } else {
-                    Error::IoWithPath {
-                        path: path.clone(),
-                        source,
-                    }
-                }
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| Error::IoWithPath {
+                path: lock_path.clone(),
+                source,
             })?;
-        file.lock_exclusive()?;
+        lock_file.lock_exclusive()?;
+        if path.exists() {
+            return Err(Error::ActiveOperation { path });
+        }
 
-        let mut state_file = Self { path, file };
+        let mut state_file = Self { path, lock_file };
         state_file.write_state_without_touching_timestamp(state)?;
         Ok(state_file)
     }
 
     pub fn open(storage: &Storage) -> Result<Option<Self>> {
         let path = storage.state_path();
-        let file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let lock_path = storage.state_lock_path();
+        let lock_file = match fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+        {
             Ok(file) => file,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(Error::IoWithPath { path, source }),
+            Err(source) => {
+                return Err(Error::IoWithPath {
+                    path: lock_path,
+                    source,
+                });
+            }
         };
-        file.lock_exclusive()?;
+        lock_file.lock_exclusive()?;
+        if !path.exists() {
+            return Ok(None);
+        }
 
-        Ok(Some(Self { path, file }))
+        Ok(Some(Self { path, lock_file }))
     }
 
     pub fn read_state(&mut self) -> Result<ApplyState> {
-        self.file.seek(SeekFrom::Start(0))?;
-        let mut content = String::new();
-        self.file.read_to_string(&mut content)?;
+        let content = fs::read_to_string(&self.path).map_err(|source| Error::IoWithPath {
+            path: self.path.clone(),
+            source,
+        })?;
         Ok(serde_yaml::from_str(&content)?)
     }
 
@@ -228,10 +247,32 @@ impl StateFile {
 
     fn write_state_without_touching_timestamp(&mut self, state: &ApplyState) -> Result<()> {
         let yaml = serde_yaml::to_string(state)?;
-        self.file.set_len(0)?;
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(yaml.as_bytes())?;
-        self.file.sync_data()?;
+        let temp_path = self
+            .path
+            .with_extension(format!("yaml.{}.tmp", std::process::id()));
+        {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&temp_path)
+                .map_err(|source| Error::IoWithPath {
+                    path: temp_path.clone(),
+                    source,
+                })?;
+            file.write_all(yaml.as_bytes())?;
+            file.sync_data()?;
+        }
+        fs::rename(&temp_path, &self.path).map_err(|source| Error::IoWithPath {
+            path: self.path.clone(),
+            source,
+        })?;
+        if let Some(parent) = self.path.parent()
+            && let Ok(directory) = File::open(parent)
+        {
+            let _ = directory.sync_all();
+        }
+        let _ = self.lock_file.sync_data();
         Ok(())
     }
 }
@@ -259,10 +300,8 @@ pub fn remove_state(storage: &Storage) -> Result<()> {
 
 pub struct ApplyStateInput<'a> {
     pub plan_name: &'a PlanName,
-    pub plan_id: &'a str,
-    pub new_tip_input: &'a str,
-    pub new_tip_resolved: &'a str,
-    pub new_tip_input_was_ref: bool,
+    pub plan_id: &'a PlanId,
+    pub new_tip: &'a str,
     pub strategy: Strategy,
     pub pending_branches: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
@@ -278,15 +317,11 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         version: 1,
         phase: Phase::Replay,
         plan_name: input.plan_name.clone(),
-        plan_id: input.plan_id.to_owned(),
+        plan_id: *input.plan_id,
         started_at: now.clone(),
         updated_at: now,
         pid: std::process::id(),
-        new_tip: NewTipState {
-            input: input.new_tip_input.to_owned(),
-            resolved: input.new_tip_resolved.to_owned(),
-            input_was_ref: input.new_tip_input_was_ref,
-        },
+        new_tip: input.new_tip.to_owned(),
         strategy: input.strategy,
         current: None,
         worktree: input.worktree,
@@ -297,6 +332,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         pending: PendingState {
             branches: input.pending_branches,
         },
+        cleanup: CleanupState::default(),
     })
 }
 

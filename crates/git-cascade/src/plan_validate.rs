@@ -80,8 +80,6 @@ fn validate_shape(plan: &Plan) -> Result<()> {
     if plan.version != 1 {
         return invalid(format!("unsupported plan version `{}`", plan.version));
     }
-    validate_ref_component("plan_id", &plan.plan_id)?;
-
     let node_by_branch = node_by_branch(plan)?;
     if plan.source.name.is_empty() {
         return invalid("source name must not be empty");
@@ -358,23 +356,6 @@ fn dependency_set(plan: &Plan) -> Result<HashSet<(&str, &str)>> {
     Ok(dependencies)
 }
 
-fn validate_ref_component(field: &str, value: &str) -> Result<()> {
-    if value.is_empty() {
-        return invalid(format!("{field} must not be empty"));
-    }
-    if value == "." || value == ".." || value.contains("..") || value.ends_with(".lock") {
-        return invalid(format!("{field} `{value}` is not safe for a ref namespace"));
-    }
-    if !value
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        return invalid(format!("{field} `{value}` is not safe for a ref namespace"));
-    }
-
-    Ok(())
-}
-
 fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error::InvalidPlan(message.into()))
 }
@@ -382,7 +363,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::topological_order;
-    use crate::plan::{Dependency, Node, NodeKind, Plan, Repository, Source};
+    use crate::plan::{Dependency, Node, NodeKind, Plan, PlanId, Repository, Source};
 
     #[test]
     fn topological_order_returns_parents_before_children() {
@@ -418,7 +399,7 @@ mod tests {
 
         Plan {
             version: 1,
-            plan_id: "test-plan".to_owned(),
+            plan_id: PlanId::new(),
             generated_at: "2026-01-01T00:00:00Z".to_owned(),
             repository: Repository {
                 git_dir: ".git".to_owned(),

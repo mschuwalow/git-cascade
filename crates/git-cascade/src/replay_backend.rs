@@ -84,16 +84,11 @@ impl DryRunReplayBackend {
     ) -> Result<Self> {
         let mut output = String::new();
         writeln!(output, "# git-cascade apply --dry-run").unwrap();
-        writeln!(
-            output,
-            "new-tip {} -> {}",
-            state.new_tip.input, state.new_tip.resolved
-        )
-        .unwrap();
+        writeln!(output, "new-tip {}", state.new_tip).unwrap();
         writeln!(output, "strategy {}", state.strategy).unwrap();
         writeln!(output, "worktree-mode {}", state.worktree).unwrap();
         let worktree = if state.worktree.path().is_empty() {
-            storage.worktrees_dir().join(&plan.plan_id)
+            storage.worktrees_dir().join(plan.plan_id.to_string())
         } else {
             std::path::PathBuf::from(state.worktree.path())
         };
@@ -412,8 +407,6 @@ impl ReplayBackend for DryRunReplayBackend {
             &nodes,
             &self.temp_tips,
             &state.branch_tips,
-            None,
-            &state.new_tip.resolved,
         )?);
         writeln!(self.output, "EOF").unwrap();
         Ok(())
@@ -451,15 +444,62 @@ fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()>
         .collect::<HashMap<_, _>>();
     let temp_tips = temp_tips_from_refs(git, &state.completed.temp_refs)?;
     ensure_target_branches_not_checked_out(git, &ordered)?;
+    if final_update_already_applied(git, &ordered, &nodes, &temp_tips, &state.branch_tips)? {
+        return Ok(());
+    }
     test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
         &ordered,
         &nodes,
         &temp_tips,
         &state.branch_tips,
-        None,
-        &state.new_tip.resolved,
     )?)
+}
+
+fn final_update_already_applied(
+    git: &Git,
+    ordered: &[String],
+    nodes: &HashMap<&str, &Node>,
+    temp_tips: &HashMap<String, String>,
+    branch_tips: &BTreeMap<String, String>,
+) -> Result<bool> {
+    let mut saw_updated = false;
+    let mut saw_pending = false;
+    for branch in ordered {
+        let node = nodes
+            .get(branch.as_str())
+            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+        let rewritten_tip = temp_tips.get(&node.branch).ok_or_else(|| {
+            Error::InvalidPlan(format!("branch `{}` has no rewritten tip", node.branch))
+        })?;
+        let expected_tip = branch_tips.get(&node.branch).ok_or_else(|| {
+            Error::InvalidPlan(format!("branch `{}` has no expected tip", node.branch))
+        })?;
+        let current_tip = git.local_branch_tip(&node.branch)?;
+        if &current_tip == expected_tip {
+            if expected_tip != rewritten_tip {
+                saw_pending = true;
+            }
+            continue;
+        }
+        if &current_tip == rewritten_tip {
+            saw_updated = true;
+            continue;
+        }
+
+        return Err(Error::InvalidInvocation(format!(
+            "branch `{}` moved after apply started: expected `{}` or rewritten tip `{}`, found `{current_tip}`",
+            node.branch, expected_tip, rewritten_tip
+        )));
+    }
+
+    if saw_updated && saw_pending {
+        return Err(Error::InvalidInvocation(
+            "final update appears partially applied; refusing to continue automatically".to_owned(),
+        ));
+    }
+
+    Ok(saw_updated && !saw_pending)
 }
 
 fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<String, String>> {
@@ -488,14 +528,9 @@ fn final_ref_transaction(
     nodes: &HashMap<&str, &Node>,
     temp_tips: &HashMap<String, String>,
     branch_tips: &BTreeMap<String, String>,
-    new_tip_ref: Option<&str>,
-    new_tip: &str,
 ) -> Result<String> {
     let mut transaction = String::new();
     writeln!(transaction, "start").unwrap();
-    if let Some(new_tip_ref) = new_tip_ref {
-        writeln!(transaction, "verify {new_tip_ref} {new_tip}").unwrap();
-    }
     for branch in ordered {
         let node = nodes
             .get(branch.as_str())
@@ -542,7 +577,7 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
 
 fn worktree_path(storage: &Storage, state: &ApplyState) -> PathBuf {
     if state.worktree.path().is_empty() {
-        storage.worktrees_dir().join(&state.plan_id)
+        storage.worktrees_dir().join(state.plan_id.to_string())
     } else {
         PathBuf::from(state.worktree.path())
     }

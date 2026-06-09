@@ -98,6 +98,73 @@ fn continue_recovers_final_update_failure() {
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
+#[test]
+fn continue_recovers_after_final_update_committed() {
+    let repo = clean_stack_with_rebased_root();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let hook = write_failing_hook(&repo, "after-final-update-hook.sh");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .env("GIT_CASCADE_TEST_HOOK_AFTER_FINAL_UPDATE", &hook)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "test hook `after-final-update` failed",
+        ));
+
+    let state = read_state(&repo);
+    assert_eq!(state.phase, Phase::FinalUpdate);
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.plan_path("stack").exists());
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn continue_finishes_successful_deleting_state() {
+    let repo = clean_stack_with_rebased_root();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let hook = write_failing_hook(&repo, "after-deleting-state-written-hook.sh");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .env("GIT_CASCADE_TEST_HOOK_AFTER_DELETING_STATE_WRITTEN", &hook)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "test hook `after-deleting-state-written` failed",
+        ));
+
+    let state = read_state(&repo);
+    assert_eq!(state.phase, Phase::Deleting);
+    assert!(state.cleanup.delete_plan);
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.plan_path("stack").exists());
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
 fn write_move_anchor_hook(repo: &TestRepo) -> std::path::PathBuf {
     let path = repo.path().join("move-anchor-hook.sh");
     let mut file = std::fs::File::create(&path).unwrap();
@@ -128,6 +195,39 @@ fn write_move_dependent_hook(repo: &TestRepo) -> std::path::PathBuf {
     permissions.set_mode(0o755);
     std::fs::set_permissions(&path, permissions).unwrap();
     path
+}
+
+fn write_failing_hook(repo: &TestRepo, name: &str) -> std::path::PathBuf {
+    let path = repo.path().join(name);
+    let mut file = std::fs::File::create(&path).unwrap();
+    writeln!(file, "#!/bin/sh").unwrap();
+    writeln!(file, "exit 1").unwrap();
+
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+fn clean_stack_with_rebased_root() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("main");
+    repo.commit_file("main2.txt", "new base\n", "new base");
+    repo.switch("pr-1");
+    repo.git_ok(["rebase", "main"]);
+    repo.switch("main");
+    repo
 }
 
 fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
