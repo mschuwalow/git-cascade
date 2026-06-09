@@ -1,14 +1,12 @@
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::Write;
-
-use time::OffsetDateTime;
-
 use super::validate::validate_plan;
 use super::{Dependency, Node, Plan, PlanId, Repository, Source};
 use crate::git::{Git, LocalBranch};
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::Write;
+use time::OffsetDateTime;
 
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {

@@ -1,15 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Write as _;
-use std::fs;
-use std::path::PathBuf;
-
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
-use crate::plan::{Node, Plan, topological_order};
+use crate::plan::{Node, Plan, branches_in_topological_order};
 use crate::state::{ApplyState, CurrentState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
+use std::fs;
+use std::path::PathBuf;
 
 pub(crate) trait ReplayBackend {
     fn start(&mut self, state: &ApplyState) -> Result<()>;
@@ -392,7 +391,7 @@ impl ReplayBackend for DryRunReplayBackend {
     }
 
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
-        let ordered = topological_order(plan)?;
+        let ordered = branches_in_topological_order(plan)?;
         let nodes = plan
             .nodes
             .iter()
@@ -435,7 +434,7 @@ impl ReplayBackend for DryRunReplayBackend {
 }
 
 fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()> {
-    let ordered = topological_order(plan)?;
+    let ordered = branches_in_topological_order(plan)?;
     let nodes = plan
         .nodes
         .iter()

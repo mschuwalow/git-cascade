@@ -1,8 +1,7 @@
-use std::collections::{HashMap, HashSet};
-
-use super::{Dependency, Node, Plan};
+use super::{Dependency, Node, Plan, branches_in_topological_order};
 use crate::git::Git;
 use crate::{Error, Result};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ValidateOptions {
@@ -33,47 +32,6 @@ pub fn validate_plan_with_options(git: &Git, plan: &Plan, options: ValidateOptio
     }
 
     Ok(())
-}
-
-pub fn topological_order(plan: &Plan) -> Result<Vec<String>> {
-    let node_by_branch = node_by_branch(plan)?;
-    let mut children_by_parent = HashMap::<&str, Vec<&str>>::new();
-    for dependency in &plan.dependencies {
-        children_by_parent
-            .entry(dependency.parent.as_str())
-            .or_default()
-            .push(dependency.child.as_str());
-    }
-    for children in children_by_parent.values_mut() {
-        children.sort_unstable();
-    }
-
-    let mut ordered = Vec::new();
-    let mut visiting = HashSet::new();
-    let mut visited = HashSet::new();
-    let mut roots = plan
-        .nodes
-        .iter()
-        .filter(|node| node.is_root())
-        .map(|node| node.branch.as_str())
-        .collect::<Vec<_>>();
-    roots.sort_unstable();
-    for root in roots {
-        visit(
-            root,
-            &node_by_branch,
-            &children_by_parent,
-            &mut visiting,
-            &mut visited,
-            &mut ordered,
-        )?;
-    }
-
-    if visited.len() != plan.nodes.len() {
-        return invalid("dependency graph does not connect every node to a root");
-    }
-
-    Ok(ordered)
 }
 
 fn validate_shape(plan: &Plan) -> Result<()> {
@@ -134,7 +92,7 @@ fn validate_shape(plan: &Plan) -> Result<()> {
         }
     }
 
-    topological_order(plan)?;
+    branches_in_topological_order(plan)?;
     validate_default_fork_point_mappability(plan, &node_by_branch)?;
 
     Ok(())
@@ -295,46 +253,6 @@ fn validate_dependency<'a>(
     Ok(())
 }
 
-fn visit<'a>(
-    branch: &'a str,
-    node_by_branch: &HashMap<&'a str, &'a Node>,
-    children_by_parent: &HashMap<&'a str, Vec<&'a str>>,
-    visiting: &mut HashSet<&'a str>,
-    visited: &mut HashSet<&'a str>,
-    ordered: &mut Vec<String>,
-) -> Result<()> {
-    if visited.contains(branch) {
-        return Ok(());
-    }
-    if !visiting.insert(branch) {
-        return invalid(format!("dependency graph contains a cycle at `{branch}`"));
-    }
-    if !node_by_branch.contains_key(branch) {
-        return invalid(format!(
-            "dependency graph references unknown node `{branch}`"
-        ));
-    }
-
-    ordered.push(branch.to_owned());
-
-    if let Some(children) = children_by_parent.get(branch) {
-        for child in children {
-            visit(
-                child,
-                node_by_branch,
-                children_by_parent,
-                visiting,
-                visited,
-                ordered,
-            )?;
-        }
-    }
-
-    visiting.remove(branch);
-    visited.insert(branch);
-    Ok(())
-}
-
 fn node_by_branch(plan: &Plan) -> Result<HashMap<&str, &Node>> {
     let mut nodes = HashMap::new();
     for node in &plan.nodes {
@@ -362,71 +280,4 @@ fn dependency_set(plan: &Plan) -> Result<HashSet<(&str, &str)>> {
 
 fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error::InvalidPlan(message.into()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::topological_order;
-    use crate::plan::{Dependency, Node, Plan, PlanId, Repository, Source};
-    use time::OffsetDateTime;
-
-    #[test]
-    fn topological_order_returns_parents_before_children() {
-        let plan = test_plan(vec![
-            node("anchor", None),
-            node("child", Some("anchor")),
-            node("grandchild", Some("child")),
-        ]);
-
-        assert_eq!(
-            topological_order(&plan).unwrap(),
-            ["anchor", "child", "grandchild"]
-        );
-    }
-
-    #[test]
-    fn topological_order_rejects_disconnected_nodes() {
-        let plan = test_plan(vec![node("anchor", None), node("child", Some("missing"))]);
-
-        assert!(topological_order(&plan).is_err());
-    }
-
-    fn test_plan(nodes: Vec<Node>) -> Plan {
-        let dependencies = nodes
-            .iter()
-            .filter_map(|node| {
-                node.parent().map(|parent| Dependency {
-                    parent: parent.to_owned(),
-                    child: node.branch.clone(),
-                })
-            })
-            .collect();
-
-        Plan {
-            version: 1,
-            plan_id: PlanId::new(),
-            generated_at: OffsetDateTime::UNIX_EPOCH,
-            repository: Repository {
-                git_dir: ".git".to_owned(),
-                head_at_generation: "0".repeat(40),
-            },
-            source: Source {
-                name: "anchor".to_owned(),
-                base: "0".repeat(40),
-                tip: "0".repeat(40),
-            },
-            nodes,
-            dependencies,
-        }
-    }
-
-    fn node(branch: &str, parent: Option<&str>) -> Node {
-        Node {
-            branch: branch.to_owned(),
-            tip: "0".repeat(40),
-            base: "0".repeat(40),
-            commits: vec!["0".repeat(40)],
-            parent: parent.map(str::to_owned),
-        }
-    }
 }

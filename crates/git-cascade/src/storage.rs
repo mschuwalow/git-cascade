@@ -1,12 +1,10 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
-
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::{Error, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]

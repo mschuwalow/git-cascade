@@ -1,12 +1,13 @@
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
-use uuid::Uuid;
-
-pub mod generate;
-pub mod validate;
+mod generate;
+mod topological;
+mod validate;
 
 pub use generate::{GenerateOptions, generate_plan, generate_stored_plan};
-pub use validate::{ValidateOptions, topological_order, validate_plan, validate_plan_for_apply};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+pub use topological::branches_in_topological_order;
+use uuid::Uuid;
+pub use validate::{ValidateOptions, validate_plan, validate_plan_for_apply};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {

@@ -1,7 +1,5 @@
-use std::process::ExitCode;
-
-use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::{Shell, generate};
+mod landed;
+mod status;
 
 use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
 use crate::git::Git;
@@ -9,9 +7,9 @@ use crate::plan::{GenerateOptions, generate_plan, generate_stored_plan};
 use crate::state::Strategy;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
-
-mod landed;
-mod status;
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
+use std::process::ExitCode;
 
 #[derive(Debug, Parser)]
 #[command(name = "git-cascade")]

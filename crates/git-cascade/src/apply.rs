@@ -1,8 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
-use std::fs;
-
 use crate::git::Git;
-use crate::plan::{Node, Plan, topological_order, validate_plan_for_apply};
+use crate::plan::{Node, Plan, branches_in_topological_order, validate_plan_for_apply};
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
     ApplyState, ApplyStateInput, CurrentState, Phase, RestoreState, StateFile, Strategy,
@@ -12,6 +9,8 @@ use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::{PlanName, Storage};
 use crate::test_hooks;
 use crate::{Error, Result};
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
 
 #[derive(Debug, Clone)]
 pub struct DryRunOptions {
@@ -58,7 +57,7 @@ pub fn dry_run(
 ) -> Result<String> {
     validate_plan_for_apply(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    let ordered = topological_order(plan)?;
+    let ordered = branches_in_topological_order(plan)?;
     let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
     let worktree = if options.in_place {
         git.worktree_root()?
@@ -105,7 +104,7 @@ pub fn dry_run(
 pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<()> {
     validate_plan_for_apply(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    let ordered = topological_order(plan)?;
+    let ordered = branches_in_topological_order(plan)?;
     let (worktree_state, worktree) = if options.in_place {
         let worktree = git.worktree_root()?;
         git.ensure_clean_worktree()?;
@@ -283,7 +282,7 @@ fn replay_pending_branches(
     let mut temp_refs = state.completed.temp_refs.clone();
     let mut temp_tips = backend.temp_tips(&temp_refs)?;
     let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
-    let total_branches = topological_order(plan)?.len();
+    let total_branches = branches_in_topological_order(plan)?.len();
 
     if total_branches == 0 {
         backend.no_branches()?;

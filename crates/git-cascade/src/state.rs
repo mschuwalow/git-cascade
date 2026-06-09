@@ -1,17 +1,15 @@
+use crate::plan::PlanId;
+use crate::storage::{PlanName, Storage};
+use crate::{Error, Result};
+use clap::ValueEnum;
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
-
-use clap::ValueEnum;
-use fs2::FileExt;
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-
-use crate::plan::PlanId;
-use crate::storage::{PlanName, Storage};
-use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyState {

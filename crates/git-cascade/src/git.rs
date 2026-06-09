@@ -1,9 +1,8 @@
+use crate::{Error, Result};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-
-use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalBranch {

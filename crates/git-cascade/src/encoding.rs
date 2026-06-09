@@ -1,7 +1,6 @@
+use crate::{Error, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-
-use crate::{Error, Result};
 
 pub fn encode_component(input: &str) -> String {
     URL_SAFE_NO_PAD.encode(input.as_bytes())
