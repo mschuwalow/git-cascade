@@ -8,6 +8,44 @@ When the `git-cascade` binary is installed on `PATH`, Git exposes it as:
 git cascade <command>
 ```
 
+## Motivation
+
+Branch stacks are easy to build and awkward to rewrite. For example:
+
+```text
+main -- A
+         \
+pr-1      B -- C
+               \
+pr-2            D -- E
+                    \
+pr-3                 F
+```
+
+If `main` moves, you might manually rebase `pr-1` first:
+
+```text
+main -- A -- G
+              \
+pr-1           B' -- C'
+
+old pr-2/pr-3 still point at D/E/F on the old stack
+```
+
+At that point, Git no longer has enough branch metadata to know how `pr-2` and `pr-3` related to the old `pr-1` commits. `git-cascade` solves this by recording the dependent branch graph before the manual rewrite, then replaying the dependent branches onto the rewritten commits afterwards.
+
+The result is the same stack shape on the new root:
+
+```text
+main -- A -- G
+              \
+pr-1           B' -- C'
+                     \
+pr-2                  D' -- E'
+                           \
+pr-3                        F'
+```
+
 ## Workflow
 
 Create a repository-local plan before rewriting the root range:
@@ -53,6 +91,8 @@ Use the simpler strategy that replays every child onto the parent's rewritten ap
 git cascade apply stack --new-tip pr-1 --strategy move-to-current-tips
 ```
 
+Use `move-to-planned-tips` instead when children should move to each parent's rewritten planned tip, ignoring commits added to the parent after planning.
+
 Replay in the current worktree instead of a temporary worktree:
 
 ```sh
@@ -96,6 +136,8 @@ Abort and clean the active operation:
 git cascade abort
 ```
 
+Abort cleans temporary state and leaves the stored plan intact so it can be retried.
+
 ## Plan Management
 
 List stored plans by name:
@@ -125,18 +167,6 @@ git cascade completions bash
 git cascade completions zsh
 git cascade completions fish
 ```
-
-## Current Limits
-
-- Version 1 updates dependent local branches only.
-- Version 1 supports linear commit ranges only and rejects merge commits.
-- Direct dependents are discovered only inside the explicit old root range selected by `--old-base` and `--old-tip`.
-- Dependent branches may gain new linear commits after planning; apply replays those commits too.
-- Apply rejects dependent branches when the planned commit range is no longer reachable from the current branch tip.
-- Plans are keyed by explicit names and stored under the repository Git common directory.
-- Successful apply removes the stored plan for its anchor.
-- Exported or path-based plans are not supported.
-- Only one active cascade operation is allowed per repository.
 
 ## Verify
 
