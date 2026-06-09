@@ -220,9 +220,7 @@ mod tests {
 
         assert_eq!(
             storage.plan_path(&name),
-            std::path::Path::new(
-                "/repo/.git/cascade/plans/ZmVhdHVyZS9zdGFjayB3aXRoIHNwYWNlcw.yaml"
-            )
+            std::path::Path::new("/repo/.git/cascade/plans/feature%2Fstack%20with%20spaces.yaml")
         );
     }
 
