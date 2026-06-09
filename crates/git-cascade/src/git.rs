@@ -316,6 +316,23 @@ impl Git {
             .collect())
     }
 
+    pub fn rev_list_first_parent_merges(&self, tip: &str) -> Result<Vec<String>> {
+        Ok(self
+            .output(["rev-list", "--first-parent", "--merges", tip])?
+            .lines()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    pub fn commit_parents(&self, commit: &str) -> Result<Vec<String>> {
+        let output = self.output(["rev-list", "--parents", "-n", "1", commit])?;
+        Ok(output
+            .split_whitespace()
+            .skip(1)
+            .map(str::to_owned)
+            .collect())
+    }
+
     pub fn commit_exists(&self, oid: &str) -> Result<bool> {
         self.output_allowing_status(["cat-file", "-e", &format!("{oid}^{{commit}}")], &[1, 128])
             .map(|output| output.is_some())
@@ -346,6 +363,29 @@ impl Git {
         for branch in ["main", "master"] {
             if let Some(tip) = self.try_rev_parse(&format!("refs/heads/{branch}^{{commit}}"))? {
                 return Ok(Some(tip));
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub fn default_branch_ref(&self) -> Result<Option<String>> {
+        if let Some(default_ref) = self.output_allowing_status(
+            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            &[1, 128],
+        )? {
+            let default_ref = default_ref.trim();
+            if !default_ref.is_empty() {
+                return Ok(Some(default_ref.to_owned()));
+            }
+        }
+
+        for branch in ["main", "master"] {
+            if self
+                .try_rev_parse(&format!("refs/heads/{branch}^{{commit}}"))?
+                .is_some()
+            {
+                return Ok(Some(branch.to_owned()));
             }
         }
 

@@ -8,9 +8,9 @@ When the `git-cascade` binary is installed on `PATH`, Git exposes it as:
 git cascade <command>
 ```
 
-## Motivation
+## Common Use Cases
 
-Branch stacks are easy to build and awkward to rewrite. For example:
+`git-cascade` is built for local branch stacks where one branch is the base for another:
 
 ```text
 main -- A
@@ -22,31 +22,125 @@ pr-2             D -- E
 pr-3                    F
 ```
 
-If `main` moves, you might manually rebase `pr-1` first:
+The two common operations are:
+
+- A branch was updated without rewriting its existing commits.
+- A branch landed on `main`, usually as a squash merge or merge commit, and dependent branches need to move to the landed replacement.
+
+### Branch Was Updated
+
+Use `restack` when a parent branch gained commits but its old commits are still present.
+
+For example, `pr-1` gained commit `G`:
 
 ```text
-main -- A -- G
-              \
-pr-1           B' -- C'
-
-old pr-2/pr-3 still point at D/E/F on the old stack
+main -- A
+         \
+pr-1      B -- C -- G
+                \
+pr-2             D -- E
+                       \
+pr-3                    F
 ```
 
-At that point, Git no longer has enough branch metadata to know how `pr-2` and `pr-3` related to the old `pr-1` commits. `git-cascade` solves this by recording the dependent branch graph before the manual rewrite, then replaying the dependent branches onto the rewritten commits afterwards.
+Move `pr-2` to the new tip of `pr-1`, and move `pr-3` to the new tip of `pr-2`:
 
-The result is the same stack shape on the new root:
+```sh
+git cascade restack pr-1
+```
+
+Result:
 
 ```text
-main -- A -- G
+main -- A
+         \
+pr-1      B -- C -- G
+                     \
+pr-2                  D' -- E'
+                             \
+pr-3                          F'
+```
+
+If you are currently on the updated branch, the branch argument can be omitted:
+
+```sh
+git switch pr-1
+git cascade restack
+```
+
+Preview the operation first:
+
+```sh
+git cascade restack pr-1 --dry-run
+```
+
+### Branch Was Landed
+
+Use `landed` when a parent branch was merged into `main` and dependent branches should move to the landed replacement on `main`.
+
+For example, `pr-1` was squash-merged into `main` as commit `S`:
+
+```text
+main -- A -- S
+         \
+pr-1      B -- C
+                \
+pr-2             D -- E
+                       \
+pr-3                    F
+```
+
+Move `pr-2` onto `main`, and move `pr-3` onto the new tip of `pr-2`:
+
+```sh
+git cascade landed pr-1 --onto main
+```
+
+Result:
+
+```text
+main -- A -- S
               \
-pr-1           B' -- C'
+pr-2           D' -- E'
                       \
-pr-2                   D' -- E'
-                              \
-pr-3                           F'
+pr-3                   F'
 ```
 
-## Workflow
+When `--onto` is omitted, `git-cascade` uses the default branch, preferring `origin/HEAD`, then local `main`, then local `master`:
+
+```sh
+git cascade landed pr-1
+```
+
+For a true merge commit, `landed` finds the first-parent merge that introduced the old tip and replays dependents onto that merge commit:
+
+```text
+main -- A -------- M
+         \        /
+pr-1      B -- C
+                \
+pr-2             D -- E
+```
+
+```sh
+git cascade landed pr-1 --onto main
+```
+
+Fast-forward landings do not leave enough graph information to infer the old base after the fact. Pass the previous default-branch tip explicitly:
+
+```sh
+git cascade landed pr-1 --onto main --old-base <previous-main-tip>
+```
+
+Preview the operation first:
+
+```sh
+git cascade landed pr-1 --onto main --dry-run
+```
+
+## Explicit Workflow
+
+The high-level commands above are wrappers around an explicit plan/apply workflow. Use the lower-level commands when you need to inspect, save, or script a plan manually.
 
 Create a repository-local plan before rewriting the root range:
 
@@ -71,6 +165,30 @@ Rewrite the replacement root tip manually:
 ```sh
 git switch pr-1
 git rebase main
+```
+
+After the rewrite, the root branch has moved but the dependents still point at the old commits:
+
+```text
+main -- A -- G
+              \
+pr-1           B' -- C'
+
+old pr-2/pr-3 still point at D/E/F on the old stack
+```
+
+At that point, Git no longer has enough branch metadata to know how `pr-2` and `pr-3` related to the old `pr-1` commits. `git-cascade` solves this by recording the dependent branch graph before the manual rewrite, then replaying the dependent branches onto the rewritten commits afterwards.
+
+The result is the same stack shape on the new root:
+
+```text
+main -- A -- G
+              \
+pr-1           B' -- C'
+                      \
+pr-2                   D' -- E'
+                              \
+pr-3                           F'
 ```
 
 Apply the cascade to dependent branches:

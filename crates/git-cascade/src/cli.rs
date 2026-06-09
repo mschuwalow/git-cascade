@@ -3,12 +3,13 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 
+use crate::Error;
 use crate::Result;
 use crate::apply::{
     ApplyOptions, DryRunOptions, abort as abort_apply, continue_apply, dry_run, execute,
 };
 use crate::git::Git;
-use crate::plan_generate::{GenerateOptions, generate_named_plan};
+use crate::plan_generate::{GenerateOptions, generate_named_plan, generate_plan_excluding};
 use crate::state::Strategy;
 use crate::status;
 use crate::storage::{PlanName, Storage};
@@ -50,6 +51,45 @@ enum Command {
         new_tip: String,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
+        strategy: Strategy,
+        /// Print the Git operations without mutating refs, worktrees, or state.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replay in the current worktree instead of a temporary worktree.
+        #[arg(long)]
+        in_place: bool,
+    },
+    /// Move dependents of a branch that advanced without rewriting old commits.
+    Restack {
+        /// Branch whose dependents should move. Defaults to the current branch.
+        #[arg(value_name = "BRANCH")]
+        branch: Option<String>,
+        /// Replacement ref for the branch tip. Defaults to BRANCH.
+        #[arg(long, value_name = "REF")]
+        onto: Option<String>,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
+        strategy: Strategy,
+        /// Print the Git operations without mutating refs, worktrees, or state.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replay in the current worktree instead of a temporary worktree.
+        #[arg(long)]
+        in_place: bool,
+    },
+    /// Move dependents of a branch that landed on the default branch.
+    Landed {
+        /// Old branch tip or commit that landed.
+        #[arg(value_name = "OLD-TIP")]
+        old_tip: String,
+        /// Branch or commit containing the landing. Defaults to the default branch.
+        #[arg(long, value_name = "REF")]
+        onto: Option<String>,
+        /// Explicit old range base for fast-forward or ambiguous landings.
+        #[arg(long, value_name = "REF")]
+        old_base: Option<String>,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
@@ -111,6 +151,21 @@ where
             dry_run,
             in_place,
         } => apply(name, &new_tip, strategy, dry_run, in_place),
+        Command::Restack {
+            branch,
+            onto,
+            strategy,
+            dry_run,
+            in_place,
+        } => restack(branch, onto, strategy, dry_run, in_place),
+        Command::Landed {
+            old_tip,
+            onto,
+            old_base,
+            strategy,
+            dry_run,
+            in_place,
+        } => landed(&old_tip, onto, old_base, strategy, dry_run, in_place),
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
         Command::Status => status(),
@@ -208,11 +263,252 @@ fn plan(name: PlanName, old_base: Option<&str>, old_tip: &str, replace: bool) ->
             old_base: old_base.map(str::to_owned),
             old_tip: old_tip.to_owned(),
             replace,
+            excluded_branches: Vec::new(),
         },
     )?;
     println!("created plan `{name}`");
 
     Ok(())
+}
+
+fn restack(
+    branch: Option<String>,
+    onto: Option<String>,
+    strategy: Strategy,
+    is_dry_run: bool,
+    in_place: bool,
+) -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    let branch = branch.or(git.current_branch()?).ok_or_else(|| {
+        Error::InvalidInvocation("restack needs a branch when HEAD is detached".to_owned())
+    })?;
+    let new_tip = onto.unwrap_or_else(|| branch.clone());
+    let excluded_branches = excluded_target_branches(&git, &new_tip)?;
+    let plan_name = generated_plan_name("restack", &branch)?;
+
+    generate_and_apply(GeneratedApply {
+        git: &git,
+        storage: &storage,
+        plan_name,
+        old_base: None,
+        old_tip: branch,
+        new_tip,
+        excluded_branches,
+        strategy,
+        is_dry_run,
+        in_place,
+        success_message: "restacked dependent branches",
+    })
+}
+
+fn landed(
+    old_tip: &str,
+    onto: Option<String>,
+    old_base: Option<String>,
+    strategy: Strategy,
+    is_dry_run: bool,
+    in_place: bool,
+) -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    let onto = onto.or(git.default_branch_ref()?).ok_or_else(|| {
+        Error::InvalidInvocation(
+            "landed needs --onto <ref> when no default branch exists".to_owned(),
+        )
+    })?;
+    let inference = infer_landed_range(&git, old_tip, &onto, old_base)?;
+    let excluded_branches = excluded_target_branches(&git, &onto)?;
+    let plan_name = generated_plan_name("landed", old_tip)?;
+
+    generate_and_apply(GeneratedApply {
+        git: &git,
+        storage: &storage,
+        plan_name,
+        old_base: Some(inference.old_base),
+        old_tip: old_tip.to_owned(),
+        new_tip: inference.new_tip,
+        excluded_branches,
+        strategy,
+        is_dry_run,
+        in_place,
+        success_message: "updated dependents of landed branch",
+    })
+}
+
+struct GeneratedApply<'a> {
+    git: &'a Git,
+    storage: &'a Storage,
+    plan_name: PlanName,
+    old_base: Option<String>,
+    old_tip: String,
+    new_tip: String,
+    excluded_branches: Vec<String>,
+    strategy: Strategy,
+    is_dry_run: bool,
+    in_place: bool,
+    success_message: &'static str,
+}
+
+fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
+    if options.is_dry_run {
+        let plan = generate_plan_excluding(
+            options.git,
+            &options.plan_name,
+            options.old_base.as_deref(),
+            &options.old_tip,
+            &options.excluded_branches,
+        )?;
+        print!(
+            "{}",
+            dry_run(
+                options.git,
+                options.storage,
+                &plan,
+                DryRunOptions {
+                    plan_name: options.plan_name,
+                    new_tip_input: options.new_tip,
+                    strategy: options.strategy,
+                    in_place: options.in_place,
+                },
+            )?
+        );
+        return Ok(());
+    }
+
+    let plan = generate_named_plan(
+        options.git,
+        options.storage,
+        GenerateOptions {
+            name: options.plan_name.clone(),
+            old_base: options.old_base,
+            old_tip: options.old_tip,
+            replace: false,
+            excluded_branches: options.excluded_branches,
+        },
+    )?;
+
+    let result = execute(
+        options.git,
+        options.storage,
+        &plan,
+        ApplyOptions {
+            plan_name: options.plan_name.clone(),
+            new_tip_input: options.new_tip,
+            strategy: options.strategy,
+            in_place: options.in_place,
+        },
+    );
+
+    if let Err(error) = result {
+        if !options.storage.state_path().exists() {
+            let _ = options.storage.delete_plan_if_exists(options.plan_name);
+        }
+        return Err(error);
+    }
+
+    println!("{}", options.success_message);
+    Ok(())
+}
+
+struct LandedInference {
+    old_base: String,
+    new_tip: String,
+}
+
+fn infer_landed_range(
+    git: &Git,
+    old_tip: &str,
+    onto: &str,
+    old_base: Option<String>,
+) -> Result<LandedInference> {
+    if let Some(old_base) = old_base {
+        return Ok(LandedInference {
+            old_base,
+            new_tip: onto.to_owned(),
+        });
+    }
+
+    let old_tip_commit = git.resolve_commit(old_tip)?;
+    let onto_commit = git.resolve_commit(onto)?;
+
+    if !git.is_ancestor(&old_tip_commit, &onto_commit)? {
+        return Ok(LandedInference {
+            old_base: onto.to_owned(),
+            new_tip: onto.to_owned(),
+        });
+    }
+
+    if let Some(landing) = find_landing_merge(git, &old_tip_commit, &onto_commit)? {
+        return Ok(LandedInference {
+            old_base: landing.first_parent,
+            new_tip: landing.commit,
+        });
+    }
+
+    Err(Error::InvalidInvocation(format!(
+        "cannot infer old base for landed branch `{old_tip}`; it is already contained in `{onto}`, but no first-parent merge commit landing it was found. This can happen after a fast-forward merge. Pass --old-base <previous-main-tip>."
+    )))
+}
+
+struct LandingMerge {
+    commit: String,
+    first_parent: String,
+}
+
+fn find_landing_merge(git: &Git, old_tip: &str, onto: &str) -> Result<Option<LandingMerge>> {
+    for commit in git.rev_list_first_parent_merges(onto)? {
+        let parents = git.commit_parents(&commit)?;
+        let Some(first_parent) = parents.first() else {
+            continue;
+        };
+        if git.is_ancestor(old_tip, first_parent)? {
+            continue;
+        }
+
+        let mut matching_parents = Vec::new();
+        for parent in parents.iter().skip(1) {
+            if git.is_ancestor(old_tip, parent)? {
+                matching_parents.push(parent);
+            }
+        }
+
+        if matching_parents.len() > 1 {
+            return Err(Error::InvalidInvocation(format!(
+                "cannot infer landed merge commit `{commit}` because multiple non-first parents contain the old tip; pass --old-base <ref>"
+            )));
+        }
+
+        if matching_parents.len() == 1 {
+            return Ok(Some(LandingMerge {
+                commit,
+                first_parent: first_parent.clone(),
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {
+    PlanName::new(format!("generated/{kind}/{label}/{}", uuid::Uuid::new_v4()))
+}
+
+fn excluded_target_branches(git: &Git, target: &str) -> Result<Vec<String>> {
+    let mut branches = Vec::new();
+    if let Some(refname) = git.symbolic_full_name(target)? {
+        if let Some(branch) = refname.strip_prefix("refs/heads/") {
+            branches.push(branch.to_owned());
+        } else if let Some(branch) = refname.strip_prefix("refs/remotes/origin/") {
+            branches.push(branch.to_owned());
+        }
+    } else if let Some(branch) = target.strip_prefix("origin/") {
+        branches.push(branch.to_owned());
+    }
+
+    branches.sort();
+    branches.dedup();
+    Ok(branches)
 }
 
 fn list_plans() -> Result<()> {

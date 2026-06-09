@@ -17,6 +17,7 @@ pub struct GenerateOptions {
     pub old_base: Option<String>,
     pub old_tip: String,
     pub replace: bool,
+    pub excluded_branches: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,11 +29,12 @@ struct Candidate {
 }
 
 pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
-    let plan = generate_plan(
+    let plan = generate_plan_excluding(
         git,
         &options.name,
         options.old_base.as_deref(),
         &options.old_tip,
+        &options.excluded_branches,
     )?;
     validate_plan(git, &plan)?;
     write_named_plan(storage, &options.name, &plan, options.replace)?;
@@ -45,6 +47,16 @@ pub fn generate_plan(
     old_base_ref: Option<&str>,
     old_tip_ref: &str,
 ) -> Result<Plan> {
+    generate_plan_excluding(git, name, old_base_ref, old_tip_ref, &[])
+}
+
+pub fn generate_plan_excluding(
+    git: &Git,
+    name: &PlanName,
+    old_base_ref: Option<&str>,
+    old_tip_ref: &str,
+    excluded_branches: &[String],
+) -> Result<Plan> {
     let old_tip = git.resolve_commit(old_tip_ref)?;
     let old_base = resolve_old_base(git, name.as_str(), old_tip_ref, &old_tip, old_base_ref)?;
 
@@ -54,6 +66,7 @@ pub fn generate_plan(
     if let Some(local_branch) = old_tip_local_branch(git, old_tip_ref)? {
         assigned.insert(local_branch);
     }
+    assigned.extend(excluded_branches.iter().cloned());
     let branches = git.local_branches()?;
 
     while let Some(candidate) =
