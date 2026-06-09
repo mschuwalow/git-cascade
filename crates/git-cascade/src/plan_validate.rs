@@ -368,6 +368,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
 mod tests {
     use super::topological_order;
     use crate::plan::{Dependency, Node, Plan, PlanId, Repository, Source};
+    use time::OffsetDateTime;
 
     #[test]
     fn topological_order_returns_parents_before_children() {
@@ -404,7 +405,7 @@ mod tests {
         Plan {
             version: 1,
             plan_id: PlanId::new(),
-            generated_at: "2026-01-01T00:00:00Z".to_owned(),
+            generated_at: OffsetDateTime::UNIX_EPOCH,
             repository: Repository {
                 git_dir: ".git".to_owned(),
                 head_at_generation: "0".repeat(40),

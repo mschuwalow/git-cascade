@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {
     pub version: u32,
     pub plan_id: PlanId,
-    pub generated_at: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub generated_at: OffsetDateTime,
     pub repository: Repository,
     pub source: Source,
     pub nodes: Vec<Node>,

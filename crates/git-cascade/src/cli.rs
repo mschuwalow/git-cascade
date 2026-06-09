@@ -9,7 +9,7 @@ use crate::apply::{
     ApplyOptions, DryRunOptions, abort as abort_apply, continue_apply, dry_run, execute,
 };
 use crate::git::Git;
-use crate::plan_generate::{GenerateOptions, generate_named_plan, generate_plan_excluding};
+use crate::plan_generate::{GenerateOptions, generate_plan, generate_stored_plan};
 use crate::state::Strategy;
 use crate::status;
 use crate::storage::{PlanName, Storage};
@@ -255,16 +255,16 @@ fn apply(
 fn plan(name: PlanName, old_base: Option<&str>, old_tip: &str, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    generate_named_plan(
+    generate_stored_plan(
         &git,
         &storage,
-        GenerateOptions {
+        &GenerateOptions {
             name: name.clone(),
             old_base: old_base.map(str::to_owned),
             old_tip: old_tip.to_owned(),
-            replace,
             excluded_branches: Vec::new(),
         },
+        replace,
     )?;
     println!("created plan `{name}`");
 
@@ -290,11 +290,13 @@ fn restack(
     generate_and_apply(GeneratedApply {
         git: &git,
         storage: &storage,
-        plan_name,
-        old_base: None,
-        old_tip: branch,
+        generate: GenerateOptions {
+            name: plan_name,
+            old_base: None,
+            old_tip: branch,
+            excluded_branches,
+        },
         new_tip,
-        excluded_branches,
         strategy,
         is_dry_run,
         in_place,
@@ -324,11 +326,13 @@ fn landed(
     generate_and_apply(GeneratedApply {
         git: &git,
         storage: &storage,
-        plan_name,
-        old_base: Some(inference.old_base),
-        old_tip: old_tip.to_owned(),
+        generate: GenerateOptions {
+            name: plan_name,
+            old_base: Some(inference.old_base),
+            old_tip: old_tip.to_owned(),
+            excluded_branches,
+        },
         new_tip: inference.new_tip,
-        excluded_branches,
         strategy,
         is_dry_run,
         in_place,
@@ -339,11 +343,8 @@ fn landed(
 struct GeneratedApply<'a> {
     git: &'a Git,
     storage: &'a Storage,
-    plan_name: PlanName,
-    old_base: Option<String>,
-    old_tip: String,
+    generate: GenerateOptions,
     new_tip: String,
-    excluded_branches: Vec<String>,
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
@@ -352,13 +353,7 @@ struct GeneratedApply<'a> {
 
 fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
     if options.is_dry_run {
-        let plan = generate_plan_excluding(
-            options.git,
-            &options.plan_name,
-            options.old_base.as_deref(),
-            &options.old_tip,
-            &options.excluded_branches,
-        )?;
+        let plan = generate_plan(options.git, &options.generate)?;
         print!(
             "{}",
             dry_run(
@@ -366,7 +361,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                 options.storage,
                 &plan,
                 DryRunOptions {
-                    plan_name: options.plan_name,
+                    plan_name: options.generate.name,
                     new_tip_input: options.new_tip,
                     strategy: options.strategy,
                     in_place: options.in_place,
@@ -376,36 +371,19 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let plan = generate_named_plan(
-        options.git,
-        options.storage,
-        GenerateOptions {
-            name: options.plan_name.clone(),
-            old_base: options.old_base,
-            old_tip: options.old_tip,
-            replace: false,
-            excluded_branches: options.excluded_branches,
-        },
-    )?;
+    let plan = generate_stored_plan(options.git, options.storage, &options.generate, false)?;
 
-    let result = execute(
+    execute(
         options.git,
         options.storage,
         &plan,
         ApplyOptions {
-            plan_name: options.plan_name.clone(),
+            plan_name: options.generate.name.clone(),
             new_tip_input: options.new_tip,
             strategy: options.strategy,
             in_place: options.in_place,
         },
-    );
-
-    if let Err(error) = result {
-        if !options.storage.state_path().exists() {
-            let _ = options.storage.delete_plan_if_exists(options.plan_name);
-        }
-        return Err(error);
-    }
+    )?;
 
     println!("{}", options.success_message);
     Ok(())

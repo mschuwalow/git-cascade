@@ -3,7 +3,6 @@ use std::fs;
 use std::io::Write;
 
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::git::{Git, LocalBranch};
 use crate::plan::{Dependency, Node, Plan, PlanId, Repository, Source};
@@ -16,7 +15,6 @@ pub struct GenerateOptions {
     pub name: PlanName,
     pub old_base: Option<String>,
     pub old_tip: String,
-    pub replace: bool,
     pub excluded_branches: Vec<String>,
 }
 
@@ -28,35 +26,22 @@ struct Candidate {
     commits: Vec<String>,
 }
 
-pub fn generate_named_plan(git: &Git, storage: &Storage, options: GenerateOptions) -> Result<Plan> {
-    let plan = generate_plan_excluding(
-        git,
-        &options.name,
-        options.old_base.as_deref(),
-        &options.old_tip,
-        &options.excluded_branches,
-    )?;
+pub fn generate_stored_plan(
+    git: &Git,
+    storage: &Storage,
+    options: &GenerateOptions,
+    replace: bool,
+) -> Result<Plan> {
+    let plan = generate_plan(git, options)?;
     validate_plan(git, &plan)?;
-    write_named_plan(storage, &options.name, &plan, options.replace)?;
+    write_named_plan(storage, &options.name, &plan, replace)?;
     Ok(plan)
 }
 
-pub fn generate_plan(
-    git: &Git,
-    name: &PlanName,
-    old_base_ref: Option<&str>,
-    old_tip_ref: &str,
-) -> Result<Plan> {
-    generate_plan_excluding(git, name, old_base_ref, old_tip_ref, &[])
-}
-
-pub fn generate_plan_excluding(
-    git: &Git,
-    name: &PlanName,
-    old_base_ref: Option<&str>,
-    old_tip_ref: &str,
-    excluded_branches: &[String],
-) -> Result<Plan> {
+pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
+    let name = &options.name;
+    let old_base_ref = options.old_base.as_deref();
+    let old_tip_ref = options.old_tip.as_str();
     let old_tip = git.resolve_commit(old_tip_ref)?;
     let old_base = resolve_old_base(git, name.as_str(), old_tip_ref, &old_tip, old_base_ref)?;
 
@@ -66,7 +51,7 @@ pub fn generate_plan_excluding(
     if let Some(local_branch) = old_tip_local_branch(git, old_tip_ref)? {
         assigned.insert(local_branch);
     }
-    assigned.extend(excluded_branches.iter().cloned());
+    assigned.extend(options.excluded_branches.iter().cloned());
     let branches = git.local_branches()?;
 
     while let Some(candidate) =
@@ -88,16 +73,12 @@ pub fn generate_plan_excluding(
         });
     }
 
-    let now = OffsetDateTime::now_utc();
-    let generated_at = now.format(&Rfc3339).map_err(|error| {
-        Error::Unsupported(format!("failed to format generation timestamp: {error}"))
-    })?;
     let plan_id = PlanId::new();
 
     Ok(Plan {
         version: 1,
         plan_id,
-        generated_at,
+        generated_at: OffsetDateTime::now_utc(),
         repository: Repository {
             git_dir: git.git_common_dir()?.display().to_string(),
             head_at_generation: git.head_oid()?,

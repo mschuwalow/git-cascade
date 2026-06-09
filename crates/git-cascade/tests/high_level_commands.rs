@@ -3,6 +3,7 @@ mod common;
 use predicates::prelude::*;
 
 use common::repo::TestRepo;
+use git_cascade::state::ApplyState;
 
 #[test]
 fn restack_current_branch_moves_dependents_to_current_parent_tips() {
@@ -54,6 +55,48 @@ fn restack_dry_run_does_not_write_generated_plan_or_move_refs() {
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert!(!repo.common_dir().join("cascade/plans").exists());
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
+fn restack_conflict_keeps_generated_plan_for_continue() {
+    let repo = TestRepo::new();
+    repo.commit_file("conflict.txt", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("conflict.txt", "anchor old\n", "anchor old");
+    repo.switch_new("pr-2");
+    let old_pr2 = repo.commit_file("conflict.txt", "dependent\n", "dependent");
+    repo.switch("pr-1");
+    repo.commit_file("conflict.txt", "anchor new\n", "anchor new");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["restack", "pr-1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "apply stopped while replaying branch `pr-2`",
+        ));
+
+    let state_path = repo.common_dir().join("cascade/state.yaml");
+    let state: ApplyState =
+        serde_yaml::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    let plan_name = state.plan_name.clone();
+    assert!(repo.plan_path(plan_name.as_str()).exists());
+
+    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.show("pr-2:conflict.txt"), "resolved\n");
+    assert!(!state_path.exists());
+    assert!(!repo.plan_path(plan_name.as_str()).exists());
 }
 
 #[test]
