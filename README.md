@@ -16,10 +16,10 @@ Branch stacks are easy to build and awkward to rewrite. For example:
 main -- A
          \
 pr-1      B -- C
-               \
-pr-2            D -- E
-                    \
-pr-3                 F
+                \
+pr-2             D -- E
+                       \
+pr-3                    F
 ```
 
 If `main` moves, you might manually rebase `pr-1` first:
@@ -40,10 +40,10 @@ The result is the same stack shape on the new root:
 main -- A -- G
               \
 pr-1           B' -- C'
-                     \
-pr-2                  D' -- E'
-                           \
-pr-3                        F'
+                      \
+pr-2                   D' -- E'
+                              \
+pr-3                           F'
 ```
 
 ## Workflow
