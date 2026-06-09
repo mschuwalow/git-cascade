@@ -302,6 +302,36 @@ fn continue_after_conflict_finishes_apply() {
 }
 
 #[test]
+fn continue_after_conflict_continues_to_child_branch() {
+    let repo = conflicting_stack_with_child();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+
+    repo.cascade()
+        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure();
+
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    assert_eq!(repo.show("pr-3:conflict.txt"), "resolved\n");
+    assert_eq!(repo.show("pr-3:pr3.txt"), "child\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+}
+
+#[test]
 fn continue_can_stop_again_on_later_conflict() {
     let repo = repeated_conflict_stack();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -336,6 +366,27 @@ fn conflicting_stack() -> TestRepo {
     repo.commit_file("conflict.txt", "anchor old\n", "anchor old");
     repo.switch_new("pr-2");
     repo.commit_file("conflict.txt", "dependent\n", "dependent");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .assert()
+        .success();
+    repo.switch("pr-1");
+    repo.commit_file("conflict.txt", "anchor new\n", "anchor new");
+    repo.switch("main");
+    repo
+}
+
+fn conflicting_stack_with_child() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("conflict.txt", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("conflict.txt", "anchor old\n", "anchor old");
+    repo.switch_new("pr-2");
+    repo.commit_file("conflict.txt", "dependent\n", "dependent");
+    repo.switch_new("pr-3");
+    repo.commit_file("pr3.txt", "child\n", "child");
     repo.switch("main");
 
     repo.cascade()

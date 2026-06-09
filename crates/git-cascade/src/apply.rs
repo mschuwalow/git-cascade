@@ -391,7 +391,7 @@ fn prepare_branch_replay(
             )));
         }
 
-        return replay_commits_from_extra(node, &progress.state.extra_commits)
+        let start_commit_index = replay_commits_from_extra(node, &progress.state.extra_commits)
             .iter()
             .position(|commit| commit == &current.commit)
             .map(|index| index + 1)
@@ -400,7 +400,9 @@ fn prepare_branch_replay(
                     "current commit `{}` is not part of branch `{}`",
                     current.commit, current.branch
                 ))
-            });
+            })?;
+        progress.state.current = None;
+        return Ok(start_commit_index);
     }
 
     let base = actual_replay_base(
