@@ -28,7 +28,7 @@ Implemented so far:
 - Final dependent branch promotion through a single `git update-ref --stdin` transaction.
 - Apply-time snapshots of current dependent branch tips and any linear commits appended after planning.
 - Success cleanup for state file, temporary refs, and either temporary worktree removal or in-place checkout restoration.
-- Durable replay state updates during mutating apply, including current branch/commit, mappings, completed temp refs, and pending branches.
+- Replay details are written to state only at recovery boundaries such as conflicts and final ref update; normal in-process replay progress is not durably resumed.
 - `git cascade status` for reporting active operation state.
 - `git cascade abort` for aborting preserved conflict state, cleaning temp refs/worktrees, and restoring in-place checkouts.
 - `git cascade continue` for completing a resolved cherry-pick conflict and resuming the cascade.

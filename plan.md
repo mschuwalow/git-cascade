@@ -314,7 +314,7 @@ Refused while `state.yaml` exists:
 
 Mutating operations take an exclusive lock on `<git-common-dir>/cascade/state.lock` before reading or writing `state.yaml`. State writes should be atomic replacements of `state.yaml` so a crash does not truncate the last valid recovery state.
 
-The state file should contain enough information to resume, abort, diagnose stale state, and avoid recomputing apply-time choices:
+The state file should contain enough information to abort, diagnose stale state, and resume explicit recovery phases. Normal in-process replay progress is not durably resumed; detailed replay state is written only when apply stops for a conflict or reaches final ref update.
 
 ```yaml
 version: 1

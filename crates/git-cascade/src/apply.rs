@@ -40,7 +40,6 @@ struct ActualReplayContext<'a> {
 }
 
 struct ReplayProgress<'a> {
-    state_writer: &'a mut dyn StateWriter,
     state: &'a mut ApplyState,
     mappings: &'a mut BTreeMap<String, String>,
     selected_bases: &'a mut HashMap<String, String>,
@@ -298,7 +297,6 @@ fn replay_pending_branches(
         let branch_index = temp_refs.len() + 1;
         let was_resuming = state.current.is_some();
         let mut progress = ReplayProgress {
-            state_writer,
             state,
             mappings: &mut mappings,
             selected_bases: &mut selected_bases,
@@ -323,25 +321,23 @@ fn replay_pending_branches(
             was_resuming,
         )?;
         for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
-            state.current = Some(CurrentState {
-                branch: node.branch.clone(),
-                commit: commit.clone(),
-                worktree: state.worktree.path().to_owned(),
-            });
-            state_writer.write_state(state)?;
-
             let rewritten_commit =
                 match backend.cherry_pick(state, node, commit, commit_index, commits.len()) {
                     Ok(rewritten_commit) => rewritten_commit,
                     Err(error) => {
+                        state.current = Some(CurrentState {
+                            branch: node.branch.clone(),
+                            commit: commit.clone(),
+                            worktree: state.worktree.path().to_owned(),
+                        });
+                        state.mappings = mappings.clone();
+                        state.completed.temp_refs = temp_refs.clone();
                         state.phase = Phase::Conflict;
                         state_writer.write_state(state)?;
                         return Err(error);
                     }
                 };
             mappings.insert(commit.clone(), rewritten_commit);
-            state.mappings = mappings.clone();
-            state_writer.write_state(state)?;
         }
 
         let rewritten_tip = if let Some(commit) = commits.last() {
@@ -362,11 +358,12 @@ fn replay_pending_branches(
         if !temp_refs.contains(&temp_ref) {
             temp_refs.push(temp_ref);
         }
-        state.completed.temp_refs = temp_refs.clone();
-        state.current = None;
         remove_pending_branch(state, &branch)?;
-        state_writer.write_state(state)?;
     }
+
+    state.current = None;
+    state.mappings = mappings;
+    state.completed.temp_refs = temp_refs;
 
     Ok(())
 }
@@ -423,9 +420,7 @@ fn prepare_branch_replay(
     progress
         .mappings
         .insert(node.base().to_owned(), base.clone());
-    progress.state.mappings = progress.mappings.clone();
     progress.state.phase = Phase::Replay;
-    progress.state_writer.write_state(progress.state)?;
 
     backend.prepare_branch(progress.state, branch_index, total_branches, node, &base)?;
 
