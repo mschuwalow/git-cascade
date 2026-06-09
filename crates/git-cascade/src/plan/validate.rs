@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use super::{Dependency, Node, Plan};
 use crate::git::Git;
-use crate::plan::{Dependency, Node, Plan};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, Default)]

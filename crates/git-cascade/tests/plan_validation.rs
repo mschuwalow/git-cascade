@@ -2,7 +2,7 @@ mod common;
 
 use git_cascade::git::Git;
 use git_cascade::plan::Plan;
-use git_cascade::plan_validate::{validate_plan, validate_plan_for_apply};
+use git_cascade::plan::{validate_plan, validate_plan_for_apply};
 
 use common::repo::TestRepo;
 

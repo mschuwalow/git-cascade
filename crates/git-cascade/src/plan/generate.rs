@@ -4,9 +4,9 @@ use std::io::Write;
 
 use time::OffsetDateTime;
 
+use super::validate::validate_plan;
+use super::{Dependency, Node, Plan, PlanId, Repository, Source};
 use crate::git::{Git, LocalBranch};
-use crate::plan::{Dependency, Node, Plan, PlanId, Repository, Source};
-use crate::plan_validate::validate_plan;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
 

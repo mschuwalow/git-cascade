@@ -3,16 +3,15 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 
-use crate::Error;
-use crate::Result;
-use crate::apply::{
-    ApplyOptions, DryRunOptions, abort as abort_apply, continue_apply, dry_run, execute,
-};
+use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
 use crate::git::Git;
-use crate::plan_generate::{GenerateOptions, generate_plan, generate_stored_plan};
+use crate::plan::{GenerateOptions, generate_plan, generate_stored_plan};
 use crate::state::Strategy;
-use crate::status;
 use crate::storage::{PlanName, Storage};
+use crate::{Error, Result};
+
+mod landed;
+mod status;
 
 #[derive(Debug, Parser)]
 #[command(name = "git-cascade")]
@@ -168,9 +167,9 @@ where
         } => landed(&old_tip, onto, old_base, strategy, dry_run, in_place),
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
-        Command::Status => status(),
-        Command::Abort => abort(),
-        Command::Continue => continue_operation(),
+        Command::Status => status::status(),
+        Command::Abort => status::abort(),
+        Command::Continue => status::continue_operation(),
         Command::Completions { shell } => completions(shell),
     }
 }
@@ -178,32 +177,6 @@ where
 fn completions(shell: Shell) -> Result<()> {
     let mut command = Cli::command();
     generate(shell, &mut command, "git-cascade", &mut std::io::stdout());
-
-    Ok(())
-}
-
-fn continue_operation() -> Result<()> {
-    let git = Git::current_dir()?;
-    let storage = Storage::discover(&git)?;
-    continue_apply(&git, &storage)?;
-    println!("continued cascade operation");
-
-    Ok(())
-}
-
-fn status() -> Result<()> {
-    let git = Git::current_dir()?;
-    let storage = Storage::discover(&git)?;
-    print!("{}", status::status(&storage)?);
-
-    Ok(())
-}
-
-fn abort() -> Result<()> {
-    let git = Git::current_dir()?;
-    let storage = Storage::discover(&git)?;
-    abort_apply(&git, &storage)?;
-    println!("aborted cascade operation");
 
     Ok(())
 }
@@ -319,7 +292,7 @@ fn landed(
             "landed needs --onto <ref> when no default branch exists".to_owned(),
         )
     })?;
-    let inference = infer_landed_range(&git, old_tip, &onto, old_base)?;
+    let inference = landed::infer_range(&git, old_tip, &onto, old_base)?;
     let excluded_branches = excluded_target_branches(&git, &onto)?;
     let plan_name = generated_plan_name("landed", old_tip)?;
 
@@ -387,85 +360,6 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
 
     println!("{}", options.success_message);
     Ok(())
-}
-
-struct LandedInference {
-    old_base: String,
-    new_tip: String,
-}
-
-fn infer_landed_range(
-    git: &Git,
-    old_tip: &str,
-    onto: &str,
-    old_base: Option<String>,
-) -> Result<LandedInference> {
-    if let Some(old_base) = old_base {
-        return Ok(LandedInference {
-            old_base,
-            new_tip: onto.to_owned(),
-        });
-    }
-
-    let old_tip_commit = git.resolve_commit(old_tip)?;
-    let onto_commit = git.resolve_commit(onto)?;
-
-    if !git.is_ancestor(&old_tip_commit, &onto_commit)? {
-        return Ok(LandedInference {
-            old_base: onto.to_owned(),
-            new_tip: onto.to_owned(),
-        });
-    }
-
-    if let Some(landing) = find_landing_merge(git, &old_tip_commit, &onto_commit)? {
-        return Ok(LandedInference {
-            old_base: landing.first_parent,
-            new_tip: landing.commit,
-        });
-    }
-
-    Err(Error::InvalidInvocation(format!(
-        "cannot infer old base for landed branch `{old_tip}`; it is already contained in `{onto}`, but no first-parent merge commit landing it was found. This can happen after a fast-forward merge. Pass --old-base <previous-main-tip>."
-    )))
-}
-
-struct LandingMerge {
-    commit: String,
-    first_parent: String,
-}
-
-fn find_landing_merge(git: &Git, old_tip: &str, onto: &str) -> Result<Option<LandingMerge>> {
-    for commit in git.rev_list_first_parent_merges(onto)? {
-        let parents = git.commit_parents(&commit)?;
-        let Some(first_parent) = parents.first() else {
-            continue;
-        };
-        if git.is_ancestor(old_tip, first_parent)? {
-            continue;
-        }
-
-        let mut matching_parents = Vec::new();
-        for parent in parents.iter().skip(1) {
-            if git.is_ancestor(old_tip, parent)? {
-                matching_parents.push(parent);
-            }
-        }
-
-        if matching_parents.len() > 1 {
-            return Err(Error::InvalidInvocation(format!(
-                "cannot infer landed merge commit `{commit}` because multiple non-first parents contain the old tip; pass --old-base <ref>"
-            )));
-        }
-
-        if matching_parents.len() == 1 {
-            return Ok(Some(LandingMerge {
-                commit,
-                first_parent: first_parent.clone(),
-            }));
-        }
-    }
-
-    Ok(None)
 }
 
 fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {

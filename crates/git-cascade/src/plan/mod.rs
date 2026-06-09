@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+pub mod generate;
+pub mod validate;
+
+pub use generate::{GenerateOptions, generate_plan, generate_stored_plan};
+pub use validate::{ValidateOptions, topological_order, validate_plan, validate_plan_for_apply};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {
     pub version: u32,

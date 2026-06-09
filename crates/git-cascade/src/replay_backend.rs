@@ -5,8 +5,7 @@ use std::path::PathBuf;
 
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
-use crate::plan::{Node, Plan};
-use crate::plan_validate::topological_order;
+use crate::plan::{Node, Plan, topological_order};
 use crate::state::{ApplyState, CurrentState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;

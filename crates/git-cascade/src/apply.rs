@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 
 use crate::git::Git;
-use crate::plan::{Node, Plan};
-use crate::plan_validate::{topological_order, validate_plan_for_apply};
+use crate::plan::{Node, Plan, topological_order, validate_plan_for_apply};
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
     ApplyState, ApplyStateInput, CurrentState, Phase, RestoreState, StateFile, Strategy,

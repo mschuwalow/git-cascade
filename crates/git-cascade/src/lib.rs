@@ -4,8 +4,6 @@ pub mod encoding;
 pub mod error;
 pub mod git;
 pub mod plan;
-pub mod plan_generate;
-pub mod plan_validate;
 mod replay_backend;
 pub mod state;
 mod state_writer;
