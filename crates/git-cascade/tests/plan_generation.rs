@@ -1,6 +1,6 @@
 mod common;
 
-use git_cascade::plan::{NodeKind, Plan};
+use git_cascade::plan::Plan;
 use predicates::prelude::*;
 
 use common::repo::TestRepo;
@@ -27,21 +27,21 @@ fn plan_creates_named_plan_for_linear_stack() {
     let plan = read_plan(&repo, "stack");
     assert_eq!(plan.version, 1);
     assert_eq!(plan.source.name, "stack");
-    assert_eq!(plan.source.old_base, initial);
-    assert_eq!(plan.source.old_tip, pr1_b);
+    assert_eq!(plan.source.base, initial);
+    assert_eq!(plan.source.tip, pr1_b);
     assert_eq!(plan.nodes.len(), 2);
     assert_eq!(plan.dependencies.len(), 1);
 
     assert_eq!(plan.nodes[0].branch, "pr-2");
-    assert_eq!(plan.nodes[0].old_base(), Some(pr1_b.as_str()));
-    assert_eq!(plan.nodes[0].old_tip, pr2);
+    assert_eq!(plan.nodes[0].base(), pr1_b);
+    assert_eq!(plan.nodes[0].tip, pr2);
     assert_eq!(plan.nodes[0].commits(), std::slice::from_ref(&pr2));
-    assert!(matches!(plan.nodes[0].kind, NodeKind::Root { .. }));
+    assert_eq!(plan.nodes[0].parent(), None);
 
     assert_eq!(plan.nodes[1].branch, "pr-3");
     assert_eq!(plan.nodes[1].parent(), Some("pr-2"));
-    assert_eq!(plan.nodes[1].old_base(), Some(pr2.as_str()));
-    assert_eq!(plan.nodes[1].old_tip, pr3);
+    assert_eq!(plan.nodes[1].base(), pr2);
+    assert_eq!(plan.nodes[1].tip, pr3);
     assert_eq!(plan.nodes[1].commits(), std::slice::from_ref(&pr3));
 
     assert_eq!(plan.dependencies[0].parent, "pr-2");
@@ -72,8 +72,8 @@ fn plan_preserves_intermediate_fork_point() {
         .unwrap();
 
     assert_eq!(child.parent(), None);
-    assert_eq!(child.old_base(), Some(fork_point.as_str()));
-    assert!(matches!(child.kind, NodeKind::Root { .. }));
+    assert_eq!(child.base(), fork_point);
+    assert_eq!(child.parent(), None);
 }
 
 #[test]
@@ -103,7 +103,6 @@ fn plan_keeps_independent_root_siblings_separate() {
             .iter()
             .find(|node| node.branch == branch)
             .unwrap();
-        assert!(matches!(node.kind, NodeKind::Root { .. }));
         assert_eq!(node.parent(), None);
     }
 }
@@ -150,7 +149,7 @@ fn plan_old_base_option_uses_merge_base_with_old_tip() {
         .success();
 
     let plan = read_plan(&repo, "stack");
-    assert_eq!(plan.source.old_base, initial);
+    assert_eq!(plan.source.base, initial);
     assert_eq!(plan.nodes.len(), 1);
 }
 
@@ -171,7 +170,7 @@ fn plan_infers_old_base_from_local_default_branch() {
         .success();
 
     let plan = read_plan(&repo, "stack");
-    assert_eq!(plan.source.old_base, initial);
+    assert_eq!(plan.source.base, initial);
     let branches = plan
         .nodes
         .iter()
@@ -200,7 +199,7 @@ fn plan_inference_ignores_old_tip_branch_upstream() {
         .success();
 
     let plan = read_plan(&repo, "stack");
-    assert_eq!(plan.source.old_base, initial);
+    assert_eq!(plan.source.base, initial);
     let branches = plan
         .nodes
         .iter()
@@ -226,14 +225,14 @@ fn plan_supports_single_commit_root_range() {
         .success();
 
     let plan = read_plan(&repo, "single");
-    assert_eq!(plan.source.old_base, old_base);
-    assert_eq!(plan.source.old_tip, old_commit);
+    assert_eq!(plan.source.base, old_base);
+    assert_eq!(plan.source.tip, old_commit);
     assert_eq!(plan.nodes.len(), 1);
     assert_eq!(plan.nodes[0].branch, "pr-2");
     assert_eq!(plan.nodes[0].parent(), None);
-    assert_eq!(plan.nodes[0].old_base(), Some(old_commit.as_str()));
-    assert_eq!(plan.nodes[0].old_tip, pr2);
-    assert!(matches!(plan.nodes[0].kind, NodeKind::Root { .. }));
+    assert_eq!(plan.nodes[0].base(), old_commit);
+    assert_eq!(plan.nodes[0].tip, pr2);
+    assert_eq!(plan.nodes[0].parent(), None);
 }
 
 #[test]
@@ -261,11 +260,11 @@ fn plan_accepts_tag_anchor() {
 
     let plan = read_plan(&repo, "stack");
     assert_eq!(plan.source.name, "stack");
-    assert_eq!(plan.source.old_tip, anchor_tip);
+    assert_eq!(plan.source.tip, anchor_tip);
     assert_eq!(plan.nodes.len(), 1);
     assert_eq!(plan.nodes[0].branch, "pr-2");
     assert_eq!(plan.nodes[0].parent(), None);
-    assert!(matches!(plan.nodes[0].kind, NodeKind::Root { .. }));
+    assert_eq!(plan.nodes[0].parent(), None);
 }
 
 #[test]
@@ -294,7 +293,7 @@ fn plan_with_full_local_branch_ref_does_not_include_anchor_branch_as_dependent()
     assert_eq!(plan.nodes.len(), 1);
     assert_eq!(plan.nodes[0].branch, "pr-2");
     assert_eq!(plan.nodes[0].parent(), None);
-    assert!(matches!(plan.nodes[0].kind, NodeKind::Root { .. }));
+    assert_eq!(plan.nodes[0].parent(), None);
 }
 
 #[test]

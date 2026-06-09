@@ -84,8 +84,8 @@ fn validate_shape(plan: &Plan) -> Result<()> {
     if plan.source.name.is_empty() {
         return invalid("source name must not be empty");
     }
-    if plan.source.old_base == plan.source.old_tip {
-        return invalid("source old_base must differ from old_tip");
+    if plan.source.base == plan.source.tip {
+        return invalid("source base must differ from tip");
     }
 
     let dependency_set = dependency_set(plan)?;
@@ -96,6 +96,12 @@ fn validate_shape(plan: &Plan) -> Result<()> {
         if node.commits().is_empty() {
             return invalid(format!(
                 "node `{}` must contain at least one commit",
+                node.branch
+            ));
+        }
+        if node.commits().last() != Some(&node.tip) {
+            return invalid(format!(
+                "node `{}` tip must match the last commit",
                 node.branch
             ));
         }
@@ -136,14 +142,12 @@ fn validate_shape(plan: &Plan) -> Result<()> {
 
 fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
     let mut commits = HashSet::<&str>::new();
-    commits.insert(plan.source.old_base.as_str());
-    commits.insert(plan.source.old_tip.as_str());
+    commits.insert(plan.source.base.as_str());
+    commits.insert(plan.source.tip.as_str());
 
     for node in &plan.nodes {
-        commits.insert(node.old_tip.as_str());
-        if let Some(old_base) = node.old_base() {
-            commits.insert(old_base);
-        }
+        commits.insert(node.tip.as_str());
+        commits.insert(node.base());
         for commit in node.commits() {
             commits.insert(commit.as_str());
         }
@@ -160,18 +164,17 @@ fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
 
 fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
-        let Some(old_base) = node.old_base() else {
-            continue;
-        };
-        let commits = git.rev_list_reverse(old_base, &node.old_tip)?;
+        let tip = node.tip.as_str();
+        let base = node.base();
+        let commits = git.rev_list_reverse(base, tip)?;
         if commits != node.commits() {
             return invalid(format!(
                 "commit list for branch `{}` does not match {}..{}",
-                node.branch, old_base, node.old_tip
+                node.branch, base, tip
             ));
         }
 
-        let merges = git.rev_list_merges(old_base, &node.old_tip)?;
+        let merges = git.rev_list_merges(base, tip)?;
         if let Some(merge) = merges.first() {
             return invalid(format!(
                 "branch `{}` contains merge commit `{merge}`; merge replay is not supported yet",
@@ -184,34 +187,35 @@ fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
 }
 
 fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
-    if !git.is_ancestor(&plan.source.old_base, &plan.source.old_tip)? {
+    if !git.is_ancestor(&plan.source.base, &plan.source.tip)? {
         return invalid(format!(
-            "source old_base `{}` is not reachable from old_tip `{}`",
-            plan.source.old_base, plan.source.old_tip
+            "source base `{}` is not reachable from tip `{}`",
+            plan.source.base, plan.source.tip
         ));
     }
 
     let node_by_branch = node_by_branch(plan)?;
     for node in &plan.nodes {
-        let old_base = node.old_base().expect("dependent node has an old base");
+        let base = node.base();
         if node.is_root() {
-            if old_base == plan.source.old_base
-                || !git.is_ancestor(&plan.source.old_base, old_base)?
-                || !git.is_ancestor(old_base, &plan.source.old_tip)?
+            if base == plan.source.base
+                || !git.is_ancestor(&plan.source.base, base)?
+                || !git.is_ancestor(base, &plan.source.tip)?
             {
                 return invalid(format!(
-                    "old_base `{}` for branch `{}` is outside root range {}..{}",
-                    old_base, node.branch, plan.source.old_base, plan.source.old_tip
+                    "base `{}` for branch `{}` is outside source range {}..{}",
+                    base, node.branch, plan.source.base, plan.source.tip
                 ));
             }
             continue;
         }
 
         let parent = node_by_branch[node.parent().expect("dependent node has a parent")];
-        if !git.is_ancestor(old_base, &parent.old_tip)? {
+        let parent_tip = parent.tip.as_str();
+        if !git.is_ancestor(base, parent_tip)? {
             return invalid(format!(
-                "old_base `{}` for branch `{}` is not reachable from parent `{}` old_tip `{}`",
-                old_base, node.branch, parent.branch, parent.old_tip
+                "base `{}` for branch `{}` is not reachable from parent `{}` tip `{}`",
+                base, node.branch, parent.branch, parent_tip
             ));
         }
     }
@@ -221,15 +225,16 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
 
 fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
+        let tip = node.tip.as_str();
         let actual = git.local_branch_tip(&node.branch)?;
-        if !git.is_ancestor(&node.old_tip, &actual)? {
+        if !git.is_ancestor(tip, &actual)? {
             return invalid(format!(
                 "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{actual}`",
-                node.branch, node.old_tip
+                node.branch, tip
             ));
         }
 
-        let merges = git.rev_list_merges(&node.old_tip, &actual)?;
+        let merges = git.rev_list_merges(tip, &actual)?;
         if let Some(merge) = merges.first() {
             return invalid(format!(
                 "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
@@ -251,13 +256,12 @@ fn validate_default_fork_point_mappability(
         }
         let parent_branch = node.parent().expect("dependent node has a parent");
         let parent = node_by_branch[parent_branch];
-        let old_base = node.old_base().expect("dependent node has an old base");
-        let parent_old_base = parent.old_base().expect("dependent parent has an old base");
-        if old_base != parent_old_base && !parent.commits().iter().any(|commit| commit == old_base)
-        {
+        let base = node.base();
+        let parent_base = parent.base();
+        if base != parent_base && !parent.commits().iter().any(|commit| commit == base) {
             return invalid(format!(
-                "old_base `{}` for branch `{}` cannot be mapped through parent `{}`",
-                old_base, node.branch, parent.branch
+                "base `{}` for branch `{}` cannot be mapped through parent `{}`",
+                base, node.branch, parent.branch
             ));
         }
     }
@@ -363,7 +367,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::topological_order;
-    use crate::plan::{Dependency, Node, NodeKind, Plan, PlanId, Repository, Source};
+    use crate::plan::{Dependency, Node, Plan, PlanId, Repository, Source};
 
     #[test]
     fn topological_order_returns_parents_before_children() {
@@ -407,8 +411,8 @@ mod tests {
             },
             source: Source {
                 name: "anchor".to_owned(),
-                old_base: "0".repeat(40),
-                old_tip: "0".repeat(40),
+                base: "0".repeat(40),
+                tip: "0".repeat(40),
             },
             nodes,
             dependencies,
@@ -418,18 +422,10 @@ mod tests {
     fn node(branch: &str, parent: Option<&str>) -> Node {
         Node {
             branch: branch.to_owned(),
-            old_tip: "0".repeat(40),
-            kind: parent.map_or(
-                NodeKind::Root {
-                    old_base: "0".repeat(40),
-                    commits: vec!["0".repeat(40)],
-                },
-                |parent| NodeKind::Dependent {
-                    parent: parent.to_owned(),
-                    old_base: "0".repeat(40),
-                    commits: vec!["0".repeat(40)],
-                },
-            ),
+            tip: "0".repeat(40),
+            base: "0".repeat(40),
+            commits: vec!["0".repeat(40)],
+            parent: parent.map(str::to_owned),
         }
     }
 }

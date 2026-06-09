@@ -85,8 +85,7 @@ pub fn dry_run(
         .iter()
         .map(|(branch, replay)| (branch.clone(), replay.extra_commits.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut mappings = BTreeMap::new();
-    mappings.insert(plan.source.old_tip.clone(), new_tip.clone());
+    let mappings = BTreeMap::new();
     let mut state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
@@ -139,8 +138,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         .iter()
         .map(|(branch, replay)| (branch.clone(), replay.extra_commits.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut mappings = BTreeMap::new();
-    mappings.insert(plan.source.old_tip.clone(), new_tip.clone());
+    let mappings = BTreeMap::new();
     let state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
@@ -422,10 +420,9 @@ fn prepare_branch_replay(
     progress
         .selected_bases
         .insert(node.branch.clone(), base.clone());
-    progress.mappings.insert(
-        node.old_base().expect("node has old base").to_owned(),
-        base.clone(),
-    );
+    progress
+        .mappings
+        .insert(node.base().to_owned(), base.clone());
     progress.state.mappings = progress.mappings.clone();
     progress.state.phase = Phase::Replay;
     progress.state_writer.write_state(progress.state)?;
@@ -459,16 +456,12 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
         .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
 
     if context.strategy == Strategy::MoveToPlannedTips {
-        return context
-            .mappings
-            .get(&parent.old_tip)
-            .cloned()
-            .ok_or_else(|| {
-                Error::InvalidPlan(format!(
-                    "parent `{}` has no rewritten planned tip",
-                    parent.branch
-                ))
-            });
+        return context.mappings.get(&parent.tip).cloned().ok_or_else(|| {
+            Error::InvalidPlan(format!(
+                "parent `{}` has no rewritten planned tip",
+                parent.branch
+            ))
+        });
     }
 
     if context.strategy == Strategy::MoveToCurrentTips {
@@ -481,8 +474,8 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
             });
     }
 
-    let old_base = node.old_base().expect("dependent node has old base");
-    if Some(old_base) == parent.old_base() {
+    let base = node.base();
+    if base == parent.base() {
         return context
             .selected_bases
             .get(&parent.branch)
@@ -492,10 +485,10 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
             });
     }
 
-    context.mappings.get(old_base).cloned().ok_or_else(|| {
+    context.mappings.get(base).cloned().ok_or_else(|| {
         Error::InvalidPlan(format!(
-            "old_base `{}` for branch `{}` was not mapped",
-            old_base, node.branch
+            "base `{}` for branch `{}` was not mapped",
+            base, node.branch
         ))
     })
 }
@@ -546,15 +539,16 @@ fn branch_replays_for_apply(
         let node = nodes
             .get(branch.as_str())
             .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+        let planned_tip = node.tip.as_str();
         let expected_tip = git.local_branch_tip(&node.branch)?;
-        if !git.is_ancestor(&node.old_tip, &expected_tip)? {
+        if !git.is_ancestor(planned_tip, &expected_tip)? {
             return Err(Error::InvalidPlan(format!(
                 "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{expected_tip}`",
-                node.branch, node.old_tip
+                node.branch, planned_tip
             )));
         }
-        let extra_commits = git.rev_list_reverse(&node.old_tip, &expected_tip)?;
-        if let Some(merge) = git.rev_list_merges(&node.old_tip, &expected_tip)?.first() {
+        let extra_commits = git.rev_list_reverse(planned_tip, &expected_tip)?;
+        if let Some(merge) = git.rev_list_merges(planned_tip, &expected_tip)?.first() {
             return Err(Error::InvalidPlan(format!(
                 "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
                 node.branch
@@ -591,7 +585,7 @@ fn selected_bases_from_mappings(
         .iter()
         .filter_map(|node| {
             mappings
-                .get(node.old_base()?)
+                .get(node.base())
                 .map(|base| (node.branch.clone(), base.clone()))
         })
         .collect()

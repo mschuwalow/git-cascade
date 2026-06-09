@@ -35,10 +35,8 @@ fn validation_rejects_tampered_commit_list() {
         .iter_mut()
         .find(|node| node.branch == "pr-3")
         .unwrap();
-    let NodeKind::Dependent { commits, .. } = &mut node.kind else {
-        panic!("pr-3 should be dependent");
-    };
-    commits.push(commits[0].clone());
+    assert_eq!(node.parent(), Some("pr-2"));
+    node.commits.push(node.commits[0].clone());
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
@@ -116,15 +114,13 @@ fn validation_rejects_direct_child_at_anchor_base() {
         .iter_mut()
         .find(|node| node.branch == "pr-2")
         .unwrap();
-    let NodeKind::Root { old_base, commits } = &mut node.kind else {
-        panic!("pr-2 should be root");
-    };
-    *old_base = plan.source.old_base.clone();
-    *commits = repo.rev_list_reverse(&format!("{}..{}", old_base, node.old_tip));
+    assert_eq!(node.parent(), None);
+    node.base = plan.source.base.clone();
+    node.commits = repo.rev_list_reverse(&format!("{}..{}", node.base, node.tip));
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
-    assert!(error.contains("is outside root range"));
+    assert!(error.contains("is outside source range"));
 }
 
 fn linear_stack() -> TestRepo {
@@ -144,4 +140,3 @@ fn read_plan(repo: &TestRepo, name: &str) -> Plan {
     let content = std::fs::read_to_string(repo.plan_path(name)).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }
-use git_cascade::plan::NodeKind;

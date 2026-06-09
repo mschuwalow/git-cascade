@@ -187,17 +187,17 @@ A dependent branch is a branch whose old base was some commit reachable from ano
 
 During apply, its saved commits are replayed onto the selected rewritten base for its parent relationship.
 
-### Old Tip
+### Tip
 
-The old tip is the exact branch tip at plan creation time.
+The persisted `tip` is the exact branch tip at plan creation time.
 
 For dependent branches, this is used as the expected old value during the final ref update. This prevents the tool from overwriting work added after the plan was created.
 
-### Old Base
+### Base
 
-The old base is the exact commit before a branch's owned commits begin.
+The persisted `base` is the exact commit before a branch's owned commits begin.
 
-For a dependent branch, `old_base` must be reachable from the old tip of its declared parent, but it does not need to equal the parent's old tip. This supports branches that were created from an intermediate parent commit.
+For a dependent branch, `base` must be reachable from the tip of its declared parent, but it does not need to equal the parent's tip. This supports branches that were created from an intermediate parent commit.
 
 Version 1 preserves fork points between non-anchor branches by default. If a dependent branch originally forked from an intermediate commit in another dependent branch, the apply phase replays it onto the rewritten equivalent of that intermediate commit.
 
@@ -371,26 +371,24 @@ repository:
 
 source:
   name: "permissions-stack"
-  old_base: "1111111111111111111111111111111111111111"
-  old_tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
+  base: "1111111111111111111111111111111111111111"
+  tip: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
 
 nodes:
   - branch: "agent-permissions-9"
-    old_tip: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
-    kind: root
-    old_base: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
+    tip: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
+    base: "9c501c50a412ee5e28b89f5cb80ff5957b6b4a42"
     commits:
       - "3333333333333333333333333333333333333333"
       - "5b58f121371d5e79ab4c769bbe8c7867958f939a"
 
   - branch: "agent-permissions-10"
-    old_tip: "7777777777777777777777777777777777777777"
-    kind: dependent
-    parent: "agent-permissions-9"
-    old_base: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
+    tip: "7777777777777777777777777777777777777777"
+    base: "5b58f121371d5e79ab4c769bbe8c7867958f939a"
     commits:
       - "5555555555555555555555555555555555555555"
       - "7777777777777777777777777777777777777777"
+    parent: "agent-permissions-9"
 
 dependencies:
   - parent: "agent-permissions-9"
@@ -409,7 +407,7 @@ dependencies:
 
 `source` describes the plan name and old root range.
 
-`nodes` contains the captured branch graph. Every node is a local branch that may be updated by apply. Branches attached directly to the source root range use `kind: root`.
+`nodes` contains the captured branch graph. Every node is a local branch that may be updated by apply. Branches attached directly to the source root range omit `parent`; dependent branches set `parent` to another node branch.
 
 `dependencies` contains explicit parent-child DAG edges.
 
@@ -447,11 +445,11 @@ Generation rules:
 - Resolve the anchor and all saved commits to full object IDs.
 - Resolve the old root base as `merge-base(<old-tip-ref>, <base-ref>)` when `--old-base` is provided.
 - When `--old-base` is omitted, infer the old root base from `origin/HEAD` or the local default branch (`main` then `master`).
-- Direct children of the root must fork after `old_base`; branches whose merge-base with `old_tip` is exactly `old_base` are treated as upstream/sibling branches, not dependents.
+- Direct children of the root must fork after the source `base`; branches whose merge-base with the source `tip` is exactly the source `base` are treated as upstream/sibling branches, not dependents.
 - Reject merge commits unless merge replay is explicitly supported by a later schema version.
-- Reject a dependent branch if its `old_base` is not reachable from the `old_tip` of its declared parent.
-- For a non-anchor parent, prefer the parent that owns the dependent branch's `old_base`, not merely a descendant branch that contains it.
-- For default fork-point preservation, a dependent branch whose parent is non-anchor must have an `old_base` that is either the parent's `old_base` or one of the parent's saved commits.
+- Reject a dependent branch if its `base` is not reachable from the `tip` of its declared parent.
+- For a non-anchor parent, prefer the parent that owns the dependent branch's `base`, not merely a descendant branch that contains it.
+- For default fork-point preservation, a dependent branch whose parent is non-anchor must have a `base` that is either the parent's `base` or one of the parent's saved commits.
 - Store commits in replay order, oldest to newest.
 - Produce the same plan for the same input Git state.
 
@@ -485,7 +483,7 @@ High-level algorithm:
 3. Verify every saved old commit still exists in the object database.
 4. Require `--new-tip` and resolve the replacement root tip once.
 5. Create `<git-common-dir>/cascade/state.yaml` atomically.
-6. Verify dependent branch refs still point at their saved `old_tip` values.
+6. Verify dependent branch refs still contain their saved `tip` values.
 7. Topologically order dependent nodes from parent to child.
 8. Initialize the old-to-new mapping for the anchor boundary.
 9. Select an apply-time base for each dependent node.
@@ -499,17 +497,17 @@ High-level algorithm:
 Replay base rules for the default apply mode:
 
 - A direct child of the root is replayed onto the replacement root tip.
-- A child of another dependent branch is replayed onto the rewritten equivalent of its original `old_base`.
+- A child of another dependent branch is replayed onto the rewritten equivalent of its original `base`.
 - The rewritten equivalent is found from the old-to-new commit map produced while replaying the parent branch.
-- If the child's `old_base` equals the parent's `old_base`, the child is replayed onto the parent's selected apply-time base.
-- If the child's `old_base` is one of the parent's saved commits, the child is replayed onto the rewritten commit produced from that old commit.
+- If the child's `base` equals the parent's `base`, the child is replayed onto the parent's selected apply-time base.
+- If the child's `base` is one of the parent's saved commits, the child is replayed onto the rewritten commit produced from that old commit.
 
 Replay base rules for tip-moving strategies:
 
 - A direct child of the root is replayed onto the replacement root tip.
 - A child of another dependent branch is replayed onto `refs/cascade/tmp/<plan-id>/<parent-branch>`.
 
-The tip-moving strategies ignore the dependent branch's original offset within the parent during apply. The original `old_base` is still required for planning and validation because it defines which commits belong to the dependent branch.
+The tip-moving strategies ignore the dependent branch's original offset within the parent during apply. The original `base` is still required for planning and validation because it defines which commits belong to the dependent branch.
 
 Example:
 
@@ -545,10 +543,10 @@ The default apply mode requires an apply-time map from old commits to rewritten 
 
 The map is built as replay progresses:
 
-- The replacement tip maps from `source.old_tip` to the resolved `--new-tip` commit.
-- For each dependent node, the selected apply-time base maps from `node.old_base` to the commit used as the replay base.
+- The replacement tip maps from `source.tip` to the resolved `--new-tip` commit.
+- For each dependent node, the selected apply-time base maps from `node.base` to the commit used as the replay base.
 - After each saved commit is replayed, the old commit ID maps to the newly created commit ID.
-- Descendant branches use this map to find the rewritten equivalent of their `old_base`.
+- Descendant branches use this map to find the rewritten equivalent of their `base`.
 
 Example mapping for a preserved fork point:
 
@@ -567,7 +565,7 @@ new parent:        A'--B'--C'
 new dependent:          D'--E'
 ```
 
-For a non-anchor parent, default apply must fail before replaying the child if the child's `old_base` cannot be mapped to a rewritten commit. That indicates the plan did not capture enough information to preserve topology exactly.
+For a non-anchor parent, default apply must fail before replaying the child if the child's `base` cannot be mapped to a rewritten commit. That indicates the plan did not capture enough information to preserve topology exactly.
 
 When a tip-moving strategy is used, descendants do not need old fork-point mappings. They use the selected rewritten tip of their parent.
 
@@ -603,7 +601,7 @@ commit
 Requirements:
 
 - All dependent refs are updated in one prepared transaction.
-- Each update includes the expected `old_tip` from the plan.
+- Each update includes the expected apply-time branch tip captured before replay.
 - `--new-tip` is resolved once when apply starts; final update uses the persisted resolved commit even if the input ref later moves.
 - No dependent branch ref is updated if any expected old value does not match.
 
@@ -615,16 +613,16 @@ Before replay:
 - `plan_id` is a UUID and therefore safe for use in a ref namespace.
 - `--new-tip` is present and resolves to a commit.
 - The selected apply strategy is `preserve-fork-points`, `move-to-planned-tips`, or `move-to-current-tips`.
-- All `old_base`, `old_tip`, and `commits` objects exist locally.
+- All `base`, `tip`, and `commits` objects exist locally.
 - The dependency graph is acyclic.
 - Every dependency references known nodes.
-- Every node is either `kind: root` or `kind: dependent`.
-- Every root node has an `old_base` inside `source.old_base..source.old_tip`.
+- Every node either omits `parent` as a root node or has a `parent` branch as a dependent node.
+- Every root node has a `base` inside `source.base..source.tip`.
 - Every dependent node has a parent.
-- Every dependent `old_base` is reachable from its parent `old_tip`.
-- Every node commit list matches `old_base..old_tip`.
-- In the default fork-point-preserving mode, every dependent child `old_base` is mappable through its parent's replay.
-- Every planned branch `old_tip` is still reachable from the branch's current apply-time tip.
+- Every dependent `base` is reachable from its parent `tip`.
+- Every node commit list matches `base..tip`, and `tip` matches the last saved commit.
+- In the default fork-point-preserving mode, every dependent child `base` is mappable through its parent's replay.
+- Every planned branch `tip` is still reachable from the branch's current apply-time tip.
 
 Before final ref update:
 
@@ -641,7 +639,7 @@ Permanent dependent branch refs are not modified until all replay operations hav
 
 ### Compare-And-Swap Updates
 
-Every final branch update must include the `old_tip` captured in the plan. This prevents overwriting user work added to a dependent branch after plan generation.
+Every final branch update must include the apply-time branch tip captured before replay. This prevents overwriting user work added to a dependent branch while apply is running.
 
 ### Limits Of Atomicity
 
@@ -719,7 +717,7 @@ Continue behavior:
 - Validate that the saved conflict state matches the named plan recorded in state.
 - Validate that the saved apply strategy is internally consistent with the recorded operation state.
 - If the operation is in `final_update`, retry the final ref transaction using the persisted resolved replacement tip.
-- Validate that permanent dependent branch refs still point at their saved `old_tip` values.
+- Validate that permanent dependent branch refs still contain their saved `tip` values.
 - Validate that the conflict worktree has no unmerged index entries.
 - Complete the current replayed commit using the user's resolution.
 - Record the old-to-new mapping for the resolved commit.

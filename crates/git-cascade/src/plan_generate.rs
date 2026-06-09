@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::git::{Git, LocalBranch};
-use crate::plan::{Dependency, Node, NodeKind, Plan, PlanId, Repository, Source};
+use crate::plan::{Dependency, Node, Plan, PlanId, Repository, Source};
 use crate::plan_validate::validate_plan;
 use crate::storage::{PlanName, Storage};
 use crate::{Error, Result};
@@ -66,22 +66,12 @@ pub fn generate_plan(
                 child: candidate.branch.name.clone(),
             });
         }
-        let kind = if let Some(parent) = candidate.parent_branch {
-            NodeKind::Dependent {
-                parent,
-                old_base: candidate.old_base,
-                commits: candidate.commits,
-            }
-        } else {
-            NodeKind::Root {
-                old_base: candidate.old_base,
-                commits: candidate.commits,
-            }
-        };
         nodes.push(Node {
             branch: candidate.branch.name,
-            old_tip: candidate.branch.tip,
-            kind,
+            tip: candidate.branch.tip,
+            base: candidate.old_base,
+            commits: candidate.commits,
+            parent: candidate.parent_branch,
         });
     }
 
@@ -101,8 +91,8 @@ pub fn generate_plan(
         },
         source: Source {
             name: name.to_string(),
-            old_base,
-            old_tip,
+            base: old_base,
+            tip: old_tip,
         },
         nodes,
         dependencies,
@@ -226,7 +216,7 @@ fn next_candidate(
         }
 
         for parent in nodes {
-            let Some(base) = git.merge_base(&parent.old_tip, &branch.tip)? else {
+            let Some(base) = git.merge_base(&parent.tip, &branch.tip)? else {
                 continue;
             };
 

@@ -13,7 +13,7 @@ Implemented so far:
 - Repository-local storage path handling via `git rev-parse --path-format=absolute --git-common-dir`.
 - `PlanName` newtype with unpadded base64url filesystem serialization for named plan files.
 - Base64url component encoding for branch-derived ref/file components.
-- Typed YAML plan schema where anchor/dependent data is represented by a `kind` enum.
+- Typed YAML plan schema where dependent nodes record an optional `parent` branch.
 - Standalone plan validation for schema shape, graph consistency, Git object existence, commit ranges, parent reachability, and apply-time branch ref checks.
 - Parent-before-child topological ordering for future apply execution.
 - `git cascade apply <name> --new-tip <ref> --dry-run` command preview.

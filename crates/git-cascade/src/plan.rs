@@ -69,56 +69,35 @@ pub struct Repository {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Source {
     pub name: String,
-    pub old_base: String,
-    pub old_tip: String,
+    pub base: String,
+    pub tip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Node {
     pub branch: String,
-    pub old_tip: String,
-    #[serde(flatten)]
-    pub kind: NodeKind,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum NodeKind {
-    Root {
-        old_base: String,
-        commits: Vec<String>,
-    },
-    Dependent {
-        parent: String,
-        old_base: String,
-        commits: Vec<String>,
-    },
+    pub tip: String,
+    pub base: String,
+    pub commits: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 impl Node {
     pub fn parent(&self) -> Option<&str> {
-        match &self.kind {
-            NodeKind::Root { .. } => None,
-            NodeKind::Dependent { parent, .. } => Some(parent),
-        }
+        self.parent.as_deref()
     }
 
-    pub fn old_base(&self) -> Option<&str> {
-        match &self.kind {
-            NodeKind::Root { old_base, .. } => Some(old_base),
-            NodeKind::Dependent { old_base, .. } => Some(old_base),
-        }
+    pub fn base(&self) -> &str {
+        &self.base
     }
 
     pub fn commits(&self) -> &[String] {
-        match &self.kind {
-            NodeKind::Root { commits, .. } => commits,
-            NodeKind::Dependent { commits, .. } => commits,
-        }
+        &self.commits
     }
 
     pub fn is_root(&self) -> bool {
-        matches!(self.kind, NodeKind::Root { .. })
+        self.parent.is_none()
     }
 }
 

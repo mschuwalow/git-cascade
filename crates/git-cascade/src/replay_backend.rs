@@ -361,7 +361,7 @@ impl ReplayBackend for DryRunReplayBackend {
             state.worktree.path()
         )
         .unwrap();
-        if commit == node.old_tip {
+        if commit == node.tip {
             Ok(format!("<rewritten {} planned tip>", node.branch))
         } else {
             Ok(format!("<rewritten {}:{commit}>", node.branch))
