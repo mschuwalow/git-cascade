@@ -1,9 +1,8 @@
 mod common;
 
-use predicates::prelude::*;
-
 use common::repo::TestRepo;
 use git_cascade::state::{Phase, RestoreState, WorktreeState};
+use predicates::prelude::*;
 
 #[test]
 fn status_reports_no_active_operation() {

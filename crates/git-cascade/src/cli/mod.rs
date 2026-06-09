@@ -1,11 +1,14 @@
 mod landed;
 mod status;
 
-use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
+use crate::apply::{
+    ApplyOptions, DryRunOptions, abort as abort_apply, continue_apply, dry_run, execute,
+};
 use crate::git::Git;
+use crate::plan::PlanName;
 use crate::plan::{GenerateOptions, generate_plan, generate_stored_plan};
 use crate::state::Strategy;
-use crate::storage::{PlanName, Storage};
+use crate::storage::Storage;
 use crate::{Error, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -166,8 +169,8 @@ where
         Command::List => list_plans(),
         Command::Show { name } => show_plan(&name),
         Command::Status => status::status(),
-        Command::Abort => status::abort(),
-        Command::Continue => status::continue_operation(),
+        Command::Abort => abort(),
+        Command::Continue => continue_operation(),
         Command::Completions { shell } => completions(shell),
     }
 }
@@ -175,6 +178,24 @@ where
 fn completions(shell: Shell) -> Result<()> {
     let mut command = Cli::command();
     generate(shell, &mut command, "git-cascade", &mut std::io::stdout());
+
+    Ok(())
+}
+
+fn continue_operation() -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    continue_apply(&git, &storage)?;
+    println!("continued cascade operation");
+
+    Ok(())
+}
+
+fn abort() -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    abort_apply(&git, &storage)?;
+    println!("aborted cascade operation");
 
     Ok(())
 }

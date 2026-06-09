@@ -1,9 +1,8 @@
 mod common;
 
-use predicates::prelude::*;
-
 use common::repo::TestRepo;
 use git_cascade::state::ApplyState;
+use predicates::prelude::*;
 
 #[test]
 fn restack_current_branch_moves_dependents_to_current_parent_tips() {

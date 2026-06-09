@@ -1,9 +1,8 @@
 mod common;
 
-use git_cascade::storage::PlanName;
-use predicates::prelude::*;
-
 use common::repo::TestRepo;
+use git_cascade::plan::PlanName;
+use predicates::prelude::*;
 
 #[test]
 fn list_reads_named_plans_from_git_common_dir() {

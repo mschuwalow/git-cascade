@@ -1,9 +1,8 @@
 mod common;
 
+use common::repo::TestRepo;
 use git_cascade::plan::Plan;
 use predicates::prelude::*;
-
-use common::repo::TestRepo;
 
 #[test]
 fn plan_creates_named_plan_for_linear_stack() {

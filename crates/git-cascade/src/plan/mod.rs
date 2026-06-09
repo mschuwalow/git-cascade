@@ -2,8 +2,11 @@ mod generate;
 mod topological;
 mod validate;
 
+use crate::encoding::{decode_component, encode_component};
+use crate::{Error, Result};
 pub use generate::{GenerateOptions, generate_plan, generate_stored_plan};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use time::OffsetDateTime;
 pub use topological::branches_in_topological_order;
 use uuid::Uuid;
@@ -66,6 +69,64 @@ impl<'de> Deserialize<'de> for PlanId {
     {
         let value = String::deserialize(deserializer)?;
         value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct PlanName(String);
+
+impl PlanName {
+    pub fn new(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(Error::InvalidPlanName {
+                name,
+                reason: "must not be empty".to_owned(),
+            });
+        }
+
+        Ok(Self(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn encoded(&self) -> String {
+        encode_component(&self.0)
+    }
+
+    pub fn from_encoded(encoded: &str) -> Result<Self> {
+        Self::new(decode_component(encoded)?)
+    }
+}
+
+impl FromStr for PlanName {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        Self::new(name)
+    }
+}
+
+impl TryFrom<String> for PlanName {
+    type Error = Error;
+
+    fn try_from(name: String) -> Result<Self> {
+        Self::new(name)
+    }
+}
+
+impl From<PlanName> for String {
+    fn from(name: PlanName) -> Self {
+        name.0
+    }
+}
+
+impl std::fmt::Display for PlanName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 

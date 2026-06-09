@@ -62,49 +62,9 @@ pub(crate) struct GitReplayBackend<'a> {
     storage: &'a Storage,
 }
 
-pub(crate) struct DryRunReplayBackend {
-    output: String,
-    temp_tips: HashMap<String, String>,
-}
-
 impl<'a> GitReplayBackend<'a> {
     pub(crate) fn new(git: &'a Git, storage: &'a Storage) -> Self {
         Self { git, storage }
-    }
-}
-
-impl DryRunReplayBackend {
-    pub(crate) fn new(
-        git: &Git,
-        storage: &Storage,
-        plan: &Plan,
-        state: &ApplyState,
-    ) -> Result<Self> {
-        let mut output = String::new();
-        writeln!(output, "# git-cascade apply --dry-run").unwrap();
-        writeln!(output, "new-tip {}", state.new_tip).unwrap();
-        writeln!(output, "strategy {}", state.strategy).unwrap();
-        writeln!(output, "worktree-mode {}", state.worktree).unwrap();
-        let worktree = if state.worktree.path().is_empty() {
-            storage.worktrees_dir().join(plan.plan_id.to_string())
-        } else {
-            std::path::PathBuf::from(state.worktree.path())
-        };
-        if state.worktree.is_in_place() && state.worktree.path().is_empty() {
-            writeln!(output, "worktree {}", git.worktree_root()?.display()).unwrap();
-        } else {
-            writeln!(output, "worktree {}", worktree.display()).unwrap();
-        }
-        writeln!(output, "temp-refs refs/cascade/tmp/{}", plan.plan_id).unwrap();
-
-        Ok(Self {
-            output,
-            temp_tips: HashMap::new(),
-        })
-    }
-
-    pub(crate) fn finish(self) -> String {
-        self.output
     }
 }
 
@@ -280,6 +240,46 @@ impl ReplayBackend for GitReplayBackend<'_> {
         }
 
         Ok(())
+    }
+}
+
+pub(crate) struct DryRunReplayBackend {
+    output: String,
+    temp_tips: HashMap<String, String>,
+}
+
+impl DryRunReplayBackend {
+    pub(crate) fn new(
+        git: &Git,
+        storage: &Storage,
+        plan: &Plan,
+        state: &ApplyState,
+    ) -> Result<Self> {
+        let mut output = String::new();
+        writeln!(output, "# git-cascade apply --dry-run").unwrap();
+        writeln!(output, "new-tip {}", state.new_tip).unwrap();
+        writeln!(output, "strategy {}", state.strategy).unwrap();
+        writeln!(output, "worktree-mode {}", state.worktree).unwrap();
+        let worktree = if state.worktree.path().is_empty() {
+            storage.worktrees_dir().join(plan.plan_id.to_string())
+        } else {
+            std::path::PathBuf::from(state.worktree.path())
+        };
+        if state.worktree.is_in_place() && state.worktree.path().is_empty() {
+            writeln!(output, "worktree {}", git.worktree_root()?.display()).unwrap();
+        } else {
+            writeln!(output, "worktree {}", worktree.display()).unwrap();
+        }
+        writeln!(output, "temp-refs refs/cascade/tmp/{}", plan.plan_id).unwrap();
+
+        Ok(Self {
+            output,
+            temp_tips: HashMap::new(),
+        })
+    }
+
+    pub(crate) fn finish(self) -> String {
+        self.output
     }
 }
 

@@ -1,5 +1,5 @@
-use crate::plan::PlanId;
-use crate::storage::{PlanName, Storage};
+use crate::plan::{PlanId, PlanName};
+use crate::storage::Storage;
 use crate::{Error, Result};
 use clap::ValueEnum;
 use fs2::FileExt;

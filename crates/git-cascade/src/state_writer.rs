@@ -10,8 +10,6 @@ pub(crate) struct LockedStateWriter {
     state_file: Option<StateFile>,
 }
 
-pub(crate) struct NoopStateWriter;
-
 impl LockedStateWriter {
     pub(crate) fn new(state_file: StateFile) -> Self {
         Self {
@@ -35,6 +33,8 @@ impl StateWriter for LockedStateWriter {
             .remove_if_exists()
     }
 }
+
+pub(crate) struct NoopStateWriter;
 
 impl StateWriter for NoopStateWriter {
     fn write_state(&mut self, _state: &mut ApplyState) -> Result<()> {

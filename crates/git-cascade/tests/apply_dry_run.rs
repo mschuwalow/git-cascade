@@ -1,8 +1,7 @@
 mod common;
 
-use predicates::prelude::*;
-
 use common::repo::TestRepo;
+use predicates::prelude::*;
 
 #[test]
 fn apply_dry_run_linear_stack_prints_commands_without_mutating_refs() {

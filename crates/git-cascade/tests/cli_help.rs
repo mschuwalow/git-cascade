@@ -1,8 +1,7 @@
 mod common;
 
-use predicates::prelude::*;
-
 use common::repo::TestRepo;
+use predicates::prelude::*;
 
 #[test]
 fn cli_help_mentions_commands() {

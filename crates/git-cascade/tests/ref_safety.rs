@@ -1,14 +1,10 @@
-#![cfg(feature = "test-hooks")]
-
 mod common;
-
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-
-use predicates::prelude::*;
 
 use common::repo::TestRepo;
 use git_cascade::state::Phase;
+use predicates::prelude::*;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn apply_uses_persisted_new_tip_if_new_tip_ref_moved() {

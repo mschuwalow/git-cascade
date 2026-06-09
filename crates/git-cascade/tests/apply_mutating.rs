@@ -1,8 +1,7 @@
 mod common;
 
-use predicates::prelude::*;
-
 use common::repo::TestRepo;
+use predicates::prelude::*;
 
 #[test]
 fn apply_linear_stack_updates_dependents_and_cleans_up() {

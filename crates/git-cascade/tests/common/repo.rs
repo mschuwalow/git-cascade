@@ -1,9 +1,8 @@
+use git_cascade::plan::PlanName;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-
-use git_cascade::storage::PlanName;
 use tempfile::TempDir;
 
 pub struct TestRepo {

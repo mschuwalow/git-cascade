@@ -1,12 +1,12 @@
 use crate::git::Git;
-use crate::plan::{Node, Plan, branches_in_topological_order, validate_plan_for_apply};
+use crate::plan::{Node, Plan, PlanName, branches_in_topological_order, validate_plan_for_apply};
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
     ApplyState, ApplyStateInput, CurrentState, Phase, RestoreState, StateFile, Strategy,
     WorktreeState, initial_apply_state,
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
-use crate::storage::{PlanName, Storage};
+use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
 use std::collections::{BTreeMap, HashMap};
