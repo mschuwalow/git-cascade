@@ -8,7 +8,7 @@ When the `git-cascade` binary is installed on `PATH`, Git exposes it as:
 git cascade <command>
 ```
 
-Most users should start with the targeted workflow commands:
+Pick the command based on what changed in your branch stack:
 
 ```sh
 git cascade sync
@@ -16,7 +16,7 @@ git cascade restack [branch]
 git cascade landed <old-tip> [--onto <ref>]
 ```
 
-Use `git cascade replay --old-base <ref> --old-tip <ref> --new-tip <ref>` when none of those workflows fit and you know the exact refs. The lower-level `git cascade plan ...` commands are for power users who need to inspect, save, or apply plans manually.
+Use `git cascade replay --old-base <ref> --old-tip <ref> --new-tip <ref>` when none of those workflows fit and you can name the exact before/after refs. The lower-level `git cascade plan ...` commands are for power users who need to inspect, save, or apply plans manually.
 
 ## Common Use Cases
 
@@ -32,15 +32,15 @@ pr-2             D -- E
 pr-3                    F
 ```
 
-The common operations are:
+The common situations are:
 
-- The default branch advanced and local branch stacks should move onto it.
-- A branch was updated without rewriting its existing commits.
-- A branch landed on `main`, usually as a squash merge or merge commit, and dependent branches need to move to the landed replacement.
+- Your target branch advanced, and local branch stacks should catch up.
+- A parent branch gained commits, and child branches should follow it.
+- A parent branch landed, and child branches should now start from the landed result.
 
-### Default Branch Advanced
+### Target Branch Advanced
 
-Use `sync` after pulling `main` when your local branches should move onto the current default branch.
+Use `sync` after updating your target branch when your local branch stacks should catch up to it.
 
 For example, `main` advanced from `A` to `G` while `pr-1` and `pr-2` still point at the old stack:
 
@@ -68,7 +68,9 @@ pr-1           B' -- C'
 pr-2                   D' -- E'
 ```
 
-By default, `sync` replays onto the current local `main`/`master` if you are on one of those branches, otherwise it uses the default branch. It uses the current `--base` tip as both the old and new root tip, and infers the old base from the oldest local branch fork point.
+By default, `sync` uses the repository default branch, preferring `origin/HEAD`, then local `main`, then local `master`. It does not depend on which branch is currently checked out.
+
+After `sync`, each affected local stack starts from the current tip of the selected target branch. Branches that already start from that target branch are left alone.
 
 If this repository targets a non-default integration branch, pass it explicitly:
 
@@ -76,7 +78,7 @@ If this repository targets a non-default integration branch, pass it explicitly:
 git cascade sync --base develop
 ```
 
-If the inferred fork point is not what you want, use explicit `replay` instead:
+If git-cascade cannot infer the old starting point you want, use explicit `replay` instead:
 
 ```sh
 git cascade replay --old-base <older-main-commit> --old-tip main --new-tip main
@@ -90,7 +92,7 @@ git cascade sync --dry-run
 
 ### Branch Was Updated
 
-Use `restack` when a parent branch gained commits but its old commits are still present.
+Use `restack` when a parent branch gained commits and child branches should follow that parent branch.
 
 For example, `pr-1` gained commit `G`:
 
@@ -104,7 +106,7 @@ pr-2             D -- E
 pr-3                    F
 ```
 
-Move `pr-2` to the new tip of `pr-1`, and move `pr-3` to the new tip of `pr-2`:
+Move `pr-2` so it starts from the new tip of `pr-1`, and move `pr-3` so it starts from the new tip of `pr-2`:
 
 ```sh
 git cascade restack pr-1
@@ -143,7 +145,7 @@ git cascade restack pr-1 --dry-run
 
 ### Branch Was Landed
 
-Use `landed` when a parent branch was merged into `main` and dependent branches should move to the landed replacement on `main`.
+Use `landed` when a parent branch was merged or squashed into a target branch, and child branches should now start from the landed result instead of the old branch.
 
 For example, `pr-1` was squash-merged into `main` as commit `S`:
 
@@ -157,7 +159,7 @@ pr-2             D -- E
 pr-3                    F
 ```
 
-Move `pr-2` onto `main`, and move `pr-3` onto the new tip of `pr-2`:
+Move `pr-2` so it starts from the landed result on `main`, and move `pr-3` so it starts from the new tip of `pr-2`:
 
 ```sh
 git cascade landed pr-1 --onto main
@@ -179,7 +181,7 @@ When `--onto` is omitted, `git-cascade` uses the default branch, preferring `ori
 git cascade landed pr-1
 ```
 
-For a true merge commit, `landed` finds the first-parent merge that introduced the old tip and replays dependents onto that merge commit:
+For a true merge commit, `landed` uses the merge commit that introduced the old tip. That keeps child branches attached to the landing point instead of accidentally including unrelated later target-branch commits:
 
 ```text
 main -- A -------- M
@@ -193,7 +195,7 @@ pr-2             D -- E
 git cascade landed pr-1 --onto main
 ```
 
-Fast-forward landings do not leave enough graph information to infer the old base after the fact. Pass the previous default-branch tip explicitly:
+Fast-forward landings do not leave enough graph information to tell where the target branch was before the landing. Pass that previous target-branch tip explicitly:
 
 ```sh
 git cascade landed pr-1 --onto main --old-base <previous-main-tip>
@@ -207,13 +209,13 @@ git cascade landed pr-1 --onto main --dry-run
 
 ### Explicit Replay
 
-Use `replay` when you know the old root and replacement root exactly, but the situation is not simply "default branch advanced", "same branch advanced", or "branch landed on main":
+Use `replay` when none of the named workflows fit and you can identify the exact old range and replacement tip:
 
 ```sh
 git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1
 ```
 
-`replay` generates and stores a temporary plan, applies it, and deletes the plan on success. If replay stops on a conflict, the generated plan is kept so `git cascade continue` can recover.
+`replay` moves the same kind of dependent branch stack as `sync`, `restack`, and `landed`, but it does not infer the situation for you. You provide the before/after refs directly.
 
 The targeted workflow commands always use `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. `replay` also defaults to `move-to-current-tips`, but it exposes `--strategy` for explicit-control cases.
 

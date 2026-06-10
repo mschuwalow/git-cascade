@@ -269,6 +269,25 @@ fn sync_infers_old_base_from_oldest_local_fork_point() {
 }
 
 #[test]
+fn sync_uses_default_branch_even_when_current_branch_is_master() {
+    let repo = stack_on_non_root_main_tip();
+    let old_pr1 = repo.rev_parse("pr-1");
+    repo.switch("main");
+    repo.commit_file("main-new.txt", "new\n", "new main work");
+    repo.switch_new_at("master", "main~1");
+
+    repo.cascade()
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout("synced dependent branches\n");
+
+    assert_ne!(repo.rev_parse("pr-1"), old_pr1);
+    assert_eq!(repo.merge_base("main", "pr-1"), repo.rev_parse("main"));
+    assert_eq!(repo.rev_parse("master"), repo.rev_parse("main~1"));
+}
+
+#[test]
 fn sync_base_override_syncs_to_non_default_base_branch() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");

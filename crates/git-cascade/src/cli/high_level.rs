@@ -74,14 +74,9 @@ pub(super) fn replay(old_tip: &str, old_base: &str, new_tip: &str, run: RunOptio
 pub(super) fn sync(base: Option<String>, run: RunOptions) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let base = base
-        .or(current_local_default_branch(&git)?)
-        .or(git.default_branch_ref()?)
-        .ok_or_else(|| {
-            Error::InvalidInvocation(
-                "sync needs --base <ref> when no default branch exists".to_owned(),
-            )
-        })?;
+    let base = base.or(git.default_branch_ref()?).ok_or_else(|| {
+        Error::InvalidInvocation("sync needs --base <ref> when no default branch exists".to_owned())
+    })?;
     let old_base = infer_old_base_from_local_fork_points(&git, &base)?;
     let excluded_branches = excluded_target_branches(&git, &base)?;
     let plan_name = generated_plan_name("sync", &base)?;
@@ -163,12 +158,6 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
             "cannot infer old base for sync; oldest fork point `{base}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
         ))
     })
-}
-
-fn current_local_default_branch(git: &Git) -> Result<Option<String>> {
-    Ok(git
-        .current_branch()?
-        .filter(|branch| matches!(branch.as_str(), "main" | "master")))
 }
 
 struct GeneratedApply<'a> {
