@@ -8,6 +8,17 @@ When the `git-cascade` binary is installed on `PATH`, Git exposes it as:
 git cascade <command>
 ```
 
+Most users should start with the high-level commands:
+
+```sh
+git cascade sync
+git cascade restack [branch]
+git cascade landed <old-tip> [--onto <ref>]
+git cascade replay --old-base <ref> --old-tip <ref> --new-tip <ref>
+```
+
+The lower-level `git cascade plan ...` commands are for power users who need to inspect, save, or apply plans manually.
+
 ## Common Use Cases
 
 `git-cascade` is built for local branch stacks where one branch is the base for another:
@@ -22,7 +33,7 @@ pr-2             D -- E
 pr-3                    F
 ```
 
-The two common operations are:
+The common operations are:
 
 - The default branch advanced and local branch stacks should move onto it.
 - A branch was updated without rewriting its existing commits.
@@ -201,86 +212,27 @@ Preview the generic replay first:
 git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1 --dry-run
 ```
 
-## Explicit Workflow
+## Underlying Model
 
-The one-shot commands above are wrappers around an explicit plan/apply workflow. Use the lower-level commands when you need to inspect, save, or script a plan manually, or when you must snapshot topology before a destructive rewrite.
+`git-cascade` works by creating a repository-local plan and then applying it.
 
-Create a repository-local plan before rewriting the root range:
+A plan records:
 
-```sh
-git cascade plan create stack --old-base main --old-tip pr-1
-```
+- the old root range, expressed as `old-base..old-tip`
+- the local branches that depend on commits in that range
+- the parent/child relationships between dependent branches
+- each branch's planned commits and fork point
 
-For a single-commit root rewrite, use that commit's parent as the explicit old base:
+The high-level commands generate plans for you:
 
-```sh
-git cascade plan create stack --old-base '<old-commit>^' --old-tip <old-commit>
-```
+- `sync` creates a generated plan under `generated/sync/...`
+- `restack` creates a generated plan under `generated/restack/...`
+- `landed` creates a generated plan under `generated/landed/...`
+- `replay` creates a generated plan under `generated/replay/...`
 
-Rewrite the replacement root tip manually:
+Generated plans are deleted after a successful apply. If replay stops on a conflict, the generated plan is kept and the active state file points to it, so `git cascade continue` can recover.
 
-```sh
-git switch pr-1
-git rebase main
-```
-
-After the rewrite, the root branch has moved but the dependents still point at the old commits:
-
-```text
-main -- A -- G
-              \
-pr-1           B' -- C'
-
-old pr-2/pr-3 still point at D/E/F on the old stack
-```
-
-At that point, Git no longer has enough branch metadata to know how `pr-2` and `pr-3` related to the old `pr-1` commits. `git-cascade` solves this by recording the dependent branch graph before the manual rewrite, then replaying the dependent branches onto the rewritten commits afterwards.
-
-The result is the same stack shape on the new root:
-
-```text
-main -- A -- G
-              \
-pr-1           B' -- C'
-                      \
-pr-2                   D' -- E'
-                              \
-pr-3                           F'
-```
-
-Apply the cascade to dependent branches:
-
-```sh
-git cascade plan apply stack --new-tip pr-1
-```
-
-Preview the Git commands without mutating refs, worktrees, or state:
-
-```sh
-git cascade plan apply stack --new-tip pr-1 --dry-run
-```
-
-Use the simpler strategy that replays every child onto the parent's rewritten apply-time tip:
-
-```sh
-git cascade plan apply stack --new-tip pr-1 --strategy move-to-current-tips
-```
-
-Use `move-to-planned-tips` instead when children should move to each parent's rewritten planned tip, ignoring commits added to the parent after planning.
-
-Replay in the current worktree instead of a temporary worktree:
-
-```sh
-git cascade plan apply stack --new-tip pr-1 --in-place
-```
-
-`--in-place` requires a clean worktree. If replay conflicts, the conflict is left in the current worktree and `git cascade abort` restores the checkout that was active before apply started.
-
-The default strategy is:
-
-```sh
-git cascade plan apply stack --new-tip pr-1 --strategy preserve-fork-points
-```
+By default, one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` strategy.
 
 ## Conflicts
 
@@ -313,19 +265,62 @@ git cascade abort
 
 Abort cleans temporary state and leaves the stored plan intact so it can be retried.
 
-## Plan Management
+## Power-User Plan Commands
 
-List stored plans by name:
+Use `git cascade plan ...` when you need to snapshot topology before a destructive rewrite, inspect a plan before applying it, or script the lower-level workflow directly.
+
+Create a named repository-local plan:
+
+```sh
+git cascade plan create stack --old-base main --old-tip pr-1
+```
+
+For a single-commit root rewrite, use that commit's parent as the explicit old base:
+
+```sh
+git cascade plan create stack --old-base '<old-commit>^' --old-tip <old-commit>
+```
+
+Inspect stored plans:
 
 ```sh
 git cascade plan list
-```
-
-Show a named plan:
-
-```sh
 git cascade plan show stack
 ```
+
+Apply a stored plan:
+
+```sh
+git cascade plan apply stack --new-tip pr-1
+```
+
+Preview a stored plan apply without mutating refs, worktrees, plans, or state:
+
+```sh
+git cascade plan apply stack --new-tip pr-1 --dry-run
+```
+
+Use `move-to-current-tips` to replay every child onto the parent's rewritten apply-time tip:
+
+```sh
+git cascade plan apply stack --new-tip pr-1 --strategy move-to-current-tips
+```
+
+Use `move-to-planned-tips` when children should move to each parent's rewritten planned tip, ignoring commits added to the parent after planning.
+
+The low-level `plan apply` default strategy is `preserve-fork-points`:
+
+```sh
+git cascade plan apply stack --new-tip pr-1 --strategy preserve-fork-points
+```
+
+Replay in the current worktree instead of a temporary worktree:
+
+```sh
+git cascade plan apply stack --new-tip pr-1 --in-place
+```
+
+`--in-place` requires a clean worktree. If replay conflicts, the conflict is left in the current worktree and `git cascade abort` restores the checkout that was active before apply started.
 
 Replace an existing plan:
 
