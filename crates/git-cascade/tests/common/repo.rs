@@ -1,20 +1,28 @@
 use git_cascade::plan::PlanName;
 use std::ffi::OsStr;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
 pub struct TestRepo {
     root: TempDir,
+    // Canonicalized root path so test assertions match git's canonicalized
+    // output (e.g. /var -> /private/var on macOS).
+    root_path: PathBuf,
     home: TempDir,
 }
 
 impl TestRepo {
     pub fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
         let home = tempfile::tempdir().unwrap();
-        let repo = Self { root, home };
+        let repo = Self {
+            root,
+            root_path,
+            home,
+        };
         repo.git_ok(["init", "-b", "main"]);
         repo.git_ok(["config", "user.name", "Test Author"]);
         repo.git_ok(["config", "user.email", "test@example.com"]);
@@ -24,7 +32,7 @@ impl TestRepo {
     }
 
     pub fn path(&self) -> &Path {
-        self.root.path()
+        &self.root_path
     }
 
     pub fn cascade(&self) -> assert_cmd::Command {
