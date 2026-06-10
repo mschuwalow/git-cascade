@@ -68,20 +68,13 @@ pr-1           B' -- C'
 pr-2                   D' -- E'
 ```
 
-By default, `sync` uses the repository default branch, preferring `origin/HEAD`, then local `main`, then local `master`. It does not depend on which branch is currently checked out.
-
-After `sync`, each affected local stack starts from the current tip of the selected target branch. Branches that already start from that target branch are left alone.
+By default, `sync` uses the repository default branch, preferring `origin/HEAD`, then local `main`, then local `master`.
+After `sync`, each affected local stack starts from the current tip of the selected target branch.
 
 If this repository targets a non-default integration branch, pass it explicitly:
 
 ```sh
 git cascade sync --base develop
-```
-
-If git-cascade cannot infer the old starting point you want, use explicit `replay` instead:
-
-```sh
-git cascade replay --old-base <older-main-commit> --old-tip main --new-tip main
 ```
 
 Preview the operation first:
@@ -177,10 +170,6 @@ pr-3                   F'
 
 When `--onto` is omitted, `git-cascade` uses the default branch, preferring `origin/HEAD`, then local `main`, then local `master`:
 
-```sh
-git cascade landed pr-1
-```
-
 For a true merge commit, `landed` uses the merge commit that introduced the old tip. That keeps child branches attached to the landing point instead of accidentally including unrelated later target-branch commits:
 
 ```text
@@ -189,10 +178,6 @@ main -- A -------- M
 pr-1      B -- C
                 \
 pr-2             D -- E
-```
-
-```sh
-git cascade landed pr-1 --onto main
 ```
 
 Fast-forward landings do not leave enough graph information to tell where the target branch was before the landing. Pass that previous target-branch tip explicitly:
@@ -349,10 +334,4 @@ Generate completion scripts with Clap's built-in shell generators:
 git cascade completions bash
 git cascade completions zsh
 git cascade completions fish
-```
-
-## Verify
-
-```sh
-cargo make ci
 ```
