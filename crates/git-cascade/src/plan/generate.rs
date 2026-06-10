@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
     pub name: PlanName,
-    pub old_base: Option<String>,
+    pub old_base: String,
     pub old_tip: String,
     pub excluded_branches: Vec<String>,
 }
@@ -38,10 +38,16 @@ pub fn generate_stored_plan(
 
 pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
     let name = &options.name;
-    let old_base_ref = options.old_base.as_deref();
     let old_tip_ref = options.old_tip.as_str();
     let old_tip = git.resolve_commit(old_tip_ref)?;
-    let old_base = resolve_old_base(git, name.as_str(), old_tip_ref, &old_tip, old_base_ref)?;
+    let old_base_tip = git.resolve_commit(&options.old_base)?;
+    let old_base = old_range_base(
+        git,
+        name.as_str(),
+        &old_tip,
+        &options.old_base,
+        &old_base_tip,
+    )?;
 
     let mut nodes = Vec::new();
     let mut dependencies = Vec::new();
@@ -88,32 +94,6 @@ pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
         },
         nodes,
         dependencies,
-    })
-}
-
-fn resolve_old_base(
-    git: &Git,
-    name: &str,
-    old_tip_input: &str,
-    old_tip: &str,
-    old_base_ref: Option<&str>,
-) -> Result<String> {
-    if let Some(old_base_ref) = old_base_ref {
-        let old_base_tip = git.resolve_commit(old_base_ref)?;
-        return old_range_base(git, name, old_tip, old_base_ref, &old_base_tip);
-    }
-
-    if let Some(default_tip) = git.origin_default_branch_tip()? {
-        return old_range_base(git, name, old_tip, "origin default branch", &default_tip);
-    }
-
-    if let Some(default_tip) = git.local_default_branch_tip()? {
-        return old_range_base(git, name, old_tip, "local default branch", &default_tip);
-    }
-
-    Err(Error::CannotInferOldBase {
-        name: name.to_owned(),
-        old_tip: old_tip_input.to_owned(),
     })
 }
 

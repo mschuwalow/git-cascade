@@ -31,9 +31,8 @@ enum Command {
         #[arg(value_name = "NAME")]
         name: PlanName,
         /// Ref used with --old-tip to compute the old range base via merge-base.
-        /// Inferred from default branches when omitted.
         #[arg(long, value_name = "REF")]
-        old_base: Option<String>,
+        old_base: String,
         /// Old top of the root range before rewriting.
         #[arg(long, value_name = "REF")]
         old_tip: String,
@@ -83,9 +82,8 @@ enum Command {
         #[arg(long, value_name = "REF")]
         old_tip: String,
         /// Ref used with --old-tip to compute the old range base via merge-base.
-        /// Inferred from default branches when omitted.
         #[arg(long, value_name = "REF")]
-        old_base: Option<String>,
+        old_base: String,
         /// Replacement ref or commit-ish for the old root tip.
         #[arg(long, value_name = "REF")]
         new_tip: String,
@@ -186,7 +184,7 @@ where
             old_base,
             old_tip,
             replace,
-        } => plan(name, old_base.as_deref(), &old_tip, replace),
+        } => plan(name, &old_base, &old_tip, replace),
         Command::Apply {
             name,
             new_tip,
@@ -208,7 +206,7 @@ where
             strategy,
             dry_run,
             in_place,
-        } => replay(&old_tip, old_base, &new_tip, strategy, dry_run, in_place),
+        } => replay(&old_tip, &old_base, &new_tip, strategy, dry_run, in_place),
         Command::Sync {
             onto,
             old_tip,
@@ -303,7 +301,7 @@ fn apply(
     Ok(())
 }
 
-fn plan(name: PlanName, old_base: Option<&str>, old_tip: &str, replace: bool) -> Result<()> {
+fn plan(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     generate_stored_plan(
@@ -311,7 +309,7 @@ fn plan(name: PlanName, old_base: Option<&str>, old_tip: &str, replace: bool) ->
         &storage,
         &GenerateOptions {
             name: name.clone(),
-            old_base: old_base.map(str::to_owned),
+            old_base: old_base.to_owned(),
             old_tip: old_tip.to_owned(),
             excluded_branches: Vec::new(),
         },
@@ -335,6 +333,7 @@ fn restack(
         Error::InvalidInvocation("restack needs a branch when HEAD is detached".to_owned())
     })?;
     let new_tip = onto.unwrap_or_else(|| branch.clone());
+    let old_base = infer_old_base_from_default_branch(&git, "restack", &branch)?;
     let excluded_branches = excluded_target_branches(&git, &new_tip)?;
     let plan_name = generated_plan_name("restack", &branch)?;
 
@@ -343,7 +342,7 @@ fn restack(
         storage: &storage,
         generate: GenerateOptions {
             name: plan_name,
-            old_base: None,
+            old_base,
             old_tip: branch,
             excluded_branches,
         },
@@ -357,7 +356,7 @@ fn restack(
 
 fn replay(
     old_tip: &str,
-    old_base: Option<String>,
+    old_base: &str,
     new_tip: &str,
     strategy: Strategy,
     is_dry_run: bool,
@@ -373,7 +372,7 @@ fn replay(
         storage: &storage,
         generate: GenerateOptions {
             name: plan_name,
-            old_base,
+            old_base: old_base.to_owned(),
             old_tip: old_tip.to_owned(),
             excluded_branches,
         },
@@ -413,7 +412,7 @@ fn sync(
         storage: &storage,
         generate: GenerateOptions {
             name: plan_name,
-            old_base: Some(old_base),
+            old_base,
             old_tip,
             excluded_branches,
         },
@@ -455,7 +454,7 @@ fn landed(
         storage: &storage,
         generate: GenerateOptions {
             name: plan_name,
-            old_base: Some(inference.old_base),
+            old_base: inference.old_base,
             old_tip: old_tip.to_owned(),
             excluded_branches,
         },
@@ -518,6 +517,21 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
 
 fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {
     PlanName::new(format!("generated/{kind}/{label}/{}", uuid::Uuid::new_v4()))
+}
+
+fn infer_old_base_from_default_branch(git: &Git, name: &str, old_tip: &str) -> Result<String> {
+    if let Some(default_tip) = git.origin_default_branch_tip()? {
+        return Ok(default_tip);
+    }
+
+    if let Some(default_tip) = git.local_default_branch_tip()? {
+        return Ok(default_tip);
+    }
+
+    Err(Error::CannotInferOldBase {
+        name: name.to_owned(),
+        old_tip: old_tip.to_owned(),
+    })
 }
 
 fn excluded_target_branches(git: &Git, target: &str) -> Result<Vec<String>> {

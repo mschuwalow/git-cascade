@@ -208,12 +208,6 @@ The one-shot commands above are wrappers around an explicit plan/apply workflow.
 Create a repository-local plan before rewriting the root range:
 
 ```sh
-git cascade plan stack --old-tip pr-1
-```
-
-If inference picks the wrong default/base ref, pass it explicitly:
-
-```sh
 git cascade plan stack --old-base main --old-tip pr-1
 ```
 
@@ -336,7 +330,7 @@ git cascade show stack
 Replace an existing plan:
 
 ```sh
-git cascade plan stack --old-tip pr-1 --replace
+git cascade plan stack --old-base main --old-tip pr-1 --replace
 ```
 
 ## Shell Completions
