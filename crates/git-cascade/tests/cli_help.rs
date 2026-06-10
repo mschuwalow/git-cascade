@@ -12,6 +12,7 @@ fn cli_help_mentions_commands() {
             .and(predicate::str::contains("apply"))
             .and(predicate::str::contains("restack"))
             .and(predicate::str::contains("replay"))
+            .and(predicate::str::contains("sync"))
             .and(predicate::str::contains("landed"))
             .and(predicate::str::contains("list"))
             .and(predicate::str::contains("show"))
@@ -20,6 +21,26 @@ fn cli_help_mentions_commands() {
             .and(predicate::str::contains("continue"))
             .and(predicate::str::contains("completions")),
     );
+}
+
+#[test]
+fn sync_help_mentions_default_branch_options() {
+    let repo = TestRepo::new();
+
+    repo.cascade()
+        .args(["sync", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("default branch advanced")
+                .and(predicate::str::contains("--onto"))
+                .and(predicate::str::contains("--old-tip"))
+                .and(predicate::str::contains("--old-base"))
+                .and(predicate::str::contains("--strategy"))
+                .and(predicate::str::contains("move-to-current-tips"))
+                .and(predicate::str::contains("--dry-run"))
+                .and(predicate::str::contains("--in-place")),
+        );
 }
 
 #[test]

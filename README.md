@@ -24,8 +24,53 @@ pr-3                    F
 
 The two common operations are:
 
+- The default branch advanced and local branch stacks should move onto it.
 - A branch was updated without rewriting its existing commits.
 - A branch landed on `main`, usually as a squash merge or merge commit, and dependent branches need to move to the landed replacement.
+
+### Default Branch Advanced
+
+Use `sync` after pulling `main` when your local branches should move onto the current default branch.
+
+For example, `main` advanced from `A` to `G` while `pr-1` and `pr-2` still point at the old stack:
+
+```text
+main -- A -- G
+         \
+pr-1      B -- C
+                \
+pr-2             D -- E
+```
+
+Run:
+
+```sh
+git cascade sync
+```
+
+Result:
+
+```text
+main -- A -- G
+              \
+pr-1           B' -- C'
+                      \
+pr-2                   D' -- E'
+```
+
+By default, `sync` replays onto the current local `main`/`master` if you are on one of those branches, otherwise it uses the default branch. It uses `<onto>@{1}` as the old default-branch tip, which matches the common "I just pulled main" workflow.
+
+If your branches forked from an older default-branch commit, widen the old range explicitly:
+
+```sh
+git cascade sync --onto main --old-tip 'main@{1}' --old-base <older-main-commit>
+```
+
+Preview the operation first:
+
+```sh
+git cascade sync --dry-run
+```
 
 ### Branch Was Updated
 

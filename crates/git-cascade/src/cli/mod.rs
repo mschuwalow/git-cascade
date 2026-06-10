@@ -99,6 +99,27 @@ enum Command {
         #[arg(long)]
         in_place: bool,
     },
+    /// Update branches after the default branch advanced.
+    Sync {
+        /// Branch or commit to replay onto. Defaults to the current default branch.
+        #[arg(long, value_name = "REF")]
+        onto: Option<String>,
+        /// Previous tip of --onto before it advanced. Defaults to <onto>@{1}.
+        #[arg(long, value_name = "REF")]
+        old_tip: Option<String>,
+        /// Explicit old range base. Defaults to <old-tip>^.
+        #[arg(long, value_name = "REF")]
+        old_base: Option<String>,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
+        strategy: Strategy,
+        /// Print the Git operations without mutating refs, worktrees, or state.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replay in the current worktree instead of a temporary worktree.
+        #[arg(long)]
+        in_place: bool,
+    },
     /// Move dependents of a branch that landed on the default branch.
     Landed {
         /// Old branch tip or commit that landed.
@@ -188,6 +209,14 @@ where
             dry_run,
             in_place,
         } => replay(&old_tip, old_base, &new_tip, strategy, dry_run, in_place),
+        Command::Sync {
+            onto,
+            old_tip,
+            old_base,
+            strategy,
+            dry_run,
+            in_place,
+        } => sync(onto, old_tip, old_base, strategy, dry_run, in_place),
         Command::Landed {
             old_tip,
             onto,
@@ -354,6 +383,52 @@ fn replay(
         in_place,
         success_message: "replayed dependent branches",
     })
+}
+
+fn sync(
+    onto: Option<String>,
+    old_tip: Option<String>,
+    old_base: Option<String>,
+    strategy: Strategy,
+    is_dry_run: bool,
+    in_place: bool,
+) -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    let onto = onto
+        .or(current_local_default_branch(&git)?)
+        .or(git.default_branch_ref()?)
+        .ok_or_else(|| {
+            Error::InvalidInvocation(
+                "sync needs --onto <ref> when no default branch exists".to_owned(),
+            )
+        })?;
+    let old_tip = old_tip.unwrap_or_else(|| format!("{onto}@{{1}}"));
+    let old_base = old_base.unwrap_or_else(|| format!("{old_tip}^"));
+    let excluded_branches = excluded_target_branches(&git, &onto)?;
+    let plan_name = generated_plan_name("sync", &onto)?;
+
+    generate_and_apply(GeneratedApply {
+        git: &git,
+        storage: &storage,
+        generate: GenerateOptions {
+            name: plan_name,
+            old_base: Some(old_base),
+            old_tip,
+            excluded_branches,
+        },
+        new_tip: onto,
+        strategy,
+        is_dry_run,
+        in_place,
+        success_message: "synced dependent branches",
+    })
+}
+
+fn current_local_default_branch(git: &Git) -> Result<Option<String>> {
+    Ok(git
+        .current_branch()?
+        .filter(|branch| matches!(branch.as_str(), "main" | "master")))
 }
 
 fn landed(

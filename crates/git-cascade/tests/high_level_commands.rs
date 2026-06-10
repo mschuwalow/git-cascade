@@ -172,6 +172,54 @@ fn replay_dry_run_does_not_write_generated_plan_or_move_refs() {
 }
 
 #[test]
+fn sync_after_main_advances_moves_branches_to_current_main() {
+    let repo = stack_on_non_root_main_tip();
+    let old_pr1 = repo.rev_parse("pr-1");
+    let old_pr2 = repo.rev_parse("pr-2");
+    repo.switch("main");
+    repo.commit_file("main-new.txt", "new\n", "new main work");
+
+    repo.cascade()
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout("synced dependent branches\n")
+        .stderr(
+            predicate::str::contains("Applying cascade plan `generated/sync/main/")
+                .and(predicate::str::contains("move-to-current-tips")),
+        );
+
+    assert_ne!(repo.rev_parse("pr-1"), old_pr1);
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.merge_base("main", "pr-1"), repo.rev_parse("main"));
+    assert_eq!(repo.merge_base("pr-1", "pr-2"), repo.rev_parse("pr-1"));
+    assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
+    assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn sync_dry_run_does_not_write_generated_plan_or_move_refs() {
+    let repo = stack_on_non_root_main_tip();
+    let old_pr1 = repo.rev_parse("pr-1");
+    repo.switch("main");
+    repo.commit_file("main-new.txt", "new\n", "new main work");
+
+    repo.cascade()
+        .args(["sync", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("# git-cascade apply --dry-run")
+                .and(predicate::str::contains("strategy move-to-current-tips")),
+        );
+
+    assert_eq!(repo.rev_parse("pr-1"), old_pr1);
+    assert!(!repo.common_dir().join("cascade/plans").exists());
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
 fn landed_squash_moves_dependents_onto_main() {
     let repo = linear_stack();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -290,6 +338,18 @@ fn linear_stack() -> TestRepo {
     repo.commit_file("pr2.txt", "b\n", "pr-2");
     repo.switch_new("pr-3");
     repo.commit_file("pr3.txt", "c\n", "pr-3");
+    repo.switch("main");
+    repo
+}
+
+fn stack_on_non_root_main_tip() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.commit_file("main-old.txt", "old\n", "old main work");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
     repo.switch("main");
     repo
 }
