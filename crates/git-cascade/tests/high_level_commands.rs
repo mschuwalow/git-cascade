@@ -57,6 +57,33 @@ fn restack_dry_run_does_not_write_generated_plan_or_move_refs() {
 }
 
 #[test]
+fn restack_base_override_uses_non_default_base_branch() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("develop");
+    repo.commit_file("develop.txt", "develop\n", "develop work");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    let old_pr2 = repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch_new_at("develop-side", "develop");
+    let old_develop_side = repo.commit_file("side.txt", "side\n", "develop-side work");
+    repo.switch("pr-1");
+    repo.commit_file("pr1-new.txt", "new\n", "new pr-1 work");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["restack", "pr-1", "--base", "develop"])
+        .assert()
+        .success()
+        .stdout("restacked dependent branches\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("develop-side"), old_develop_side);
+    assert_eq!(repo.merge_base("pr-1", "pr-2"), repo.rev_parse("pr-1"));
+}
+
+#[test]
 fn restack_conflict_keeps_generated_plan_for_continue() {
     let repo = TestRepo::new();
     repo.commit_file("conflict.txt", "base\n", "initial");
@@ -239,6 +266,32 @@ fn sync_infers_old_base_from_oldest_local_fork_point() {
     assert_eq!(repo.merge_base("main", "pr-1"), repo.rev_parse("main"));
     assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
     assert_eq!(repo.rev_parse("already-current"), already_current);
+}
+
+#[test]
+fn sync_base_override_syncs_to_non_default_base_branch() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("develop");
+    repo.commit_file("develop-old.txt", "old\n", "old develop work");
+    repo.switch_new("pr-1");
+    let old_pr1 = repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch("develop");
+    repo.commit_file("develop-new.txt", "new\n", "new develop work");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["sync", "--base", "develop"])
+        .assert()
+        .success()
+        .stdout("synced dependent branches\n");
+
+    assert_ne!(repo.rev_parse("pr-1"), old_pr1);
+    assert_eq!(
+        repo.merge_base("develop", "pr-1"),
+        repo.rev_parse("develop")
+    );
+    assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
 }
 
 #[test]

@@ -34,6 +34,9 @@ enum Command {
         /// Branch whose dependents should move. Defaults to the current branch.
         #[arg(value_name = "BRANCH")]
         branch: Option<String>,
+        /// Base branch or ref the branch stack forked from. Defaults to the default branch.
+        #[arg(long, value_name = "REF")]
+        base: Option<String>,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -64,9 +67,9 @@ enum Command {
     },
     /// Update branches after the default branch advanced.
     Sync {
-        /// Branch or commit to replay onto. Defaults to the current default branch.
+        /// Base branch or ref to sync stacks onto. Defaults to the current default branch.
         #[arg(long, value_name = "REF")]
-        onto: Option<String>,
+        base: Option<String>,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -127,10 +130,12 @@ where
         Command::Plan { command } => plan::run(command),
         Command::Restack {
             branch,
+            base,
             dry_run,
             in_place,
         } => high_level::restack(
             branch,
+            base,
             high_level::RunOptions::move_to_current_tips(dry_run, in_place),
         ),
         Command::Replay {
@@ -151,11 +156,11 @@ where
             },
         ),
         Command::Sync {
-            onto,
+            base,
             dry_run,
             in_place,
         } => high_level::sync(
-            onto,
+            base,
             high_level::RunOptions::move_to_current_tips(dry_run, in_place),
         ),
         Command::Landed {

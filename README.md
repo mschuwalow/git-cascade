@@ -68,7 +68,13 @@ pr-1           B' -- C'
 pr-2                   D' -- E'
 ```
 
-By default, `sync` replays onto the current local `main`/`master` if you are on one of those branches, otherwise it uses the default branch. It uses the current `--onto` tip as both the old and new root tip, and infers the old base from the oldest local branch fork point.
+By default, `sync` replays onto the current local `main`/`master` if you are on one of those branches, otherwise it uses the default branch. It uses the current `--base` tip as both the old and new root tip, and infers the old base from the oldest local branch fork point.
+
+If this repository targets a non-default integration branch, pass it explicitly:
+
+```sh
+git cascade sync --base develop
+```
 
 If the inferred fork point is not what you want, use explicit `replay` instead:
 
@@ -121,6 +127,12 @@ If you are currently on the updated branch, the branch argument can be omitted:
 ```sh
 git switch pr-1
 git cascade restack
+```
+
+If the stack is based on a non-default integration branch, pass that base explicitly:
+
+```sh
+git cascade restack pr-1 --base develop
 ```
 
 Preview the operation first:

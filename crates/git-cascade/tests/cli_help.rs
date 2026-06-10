@@ -47,9 +47,10 @@ fn sync_help_mentions_default_branch_options() {
         .success()
         .stdout(
             predicate::str::contains("default branch advanced")
-                .and(predicate::str::contains("--onto"))
+                .and(predicate::str::contains("--base"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
+                .and(predicate::str::contains("--onto").not())
                 .and(predicate::str::contains("--old-tip").not())
                 .and(predicate::str::contains("--old-base").not())
                 .and(predicate::str::contains("--strategy").not()),
@@ -87,6 +88,7 @@ fn restack_help_mentions_common_options() {
         .stdout(
             predicate::str::contains("Move dependents of a branch")
                 .and(predicate::str::contains("[BRANCH]"))
+                .and(predicate::str::contains("--base"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
                 .and(predicate::str::contains("--onto").not())

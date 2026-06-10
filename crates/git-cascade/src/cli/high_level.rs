@@ -22,13 +22,16 @@ impl RunOptions {
     }
 }
 
-pub(super) fn restack(branch: Option<String>, run: RunOptions) -> Result<()> {
+pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOptions) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let branch = branch.or(git.current_branch()?).ok_or_else(|| {
         Error::InvalidInvocation("restack needs a branch when HEAD is detached".to_owned())
     })?;
-    let old_base = infer_old_base_from_default_branch(&git, "restack", &branch)?;
+    let old_base = match base {
+        Some(base) => base,
+        None => infer_old_base_from_default_branch(&git, &branch)?,
+    };
     let excluded_branches = excluded_target_branches(&git, &branch)?;
     let plan_name = generated_plan_name("restack", &branch)?;
 
@@ -68,20 +71,20 @@ pub(super) fn replay(old_tip: &str, old_base: &str, new_tip: &str, run: RunOptio
     })
 }
 
-pub(super) fn sync(onto: Option<String>, run: RunOptions) -> Result<()> {
+pub(super) fn sync(base: Option<String>, run: RunOptions) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let onto = onto
+    let base = base
         .or(current_local_default_branch(&git)?)
         .or(git.default_branch_ref()?)
         .ok_or_else(|| {
             Error::InvalidInvocation(
-                "sync needs --onto <ref> when no default branch exists".to_owned(),
+                "sync needs --base <ref> when no default branch exists".to_owned(),
             )
         })?;
-    let old_base = infer_old_base_from_local_fork_points(&git, &onto)?;
-    let excluded_branches = excluded_target_branches(&git, &onto)?;
-    let plan_name = generated_plan_name("sync", &onto)?;
+    let old_base = infer_old_base_from_local_fork_points(&git, &base)?;
+    let excluded_branches = excluded_target_branches(&git, &base)?;
+    let plan_name = generated_plan_name("sync", &base)?;
 
     generate_and_apply(GeneratedApply {
         git: &git,
@@ -89,10 +92,10 @@ pub(super) fn sync(onto: Option<String>, run: RunOptions) -> Result<()> {
         generate: GenerateOptions {
             name: plan_name,
             old_base,
-            old_tip: onto.clone(),
+            old_tip: base.clone(),
             excluded_branches,
         },
-        new_tip: onto,
+        new_tip: base,
         run,
         success_message: "synced dependent branches",
     })
@@ -219,7 +222,7 @@ fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {
     PlanName::new(format!("generated/{kind}/{label}/{}", uuid::Uuid::new_v4()))
 }
 
-fn infer_old_base_from_default_branch(git: &Git, name: &str, old_tip: &str) -> Result<String> {
+fn infer_old_base_from_default_branch(git: &Git, old_tip: &str) -> Result<String> {
     if let Some(default_tip) = git.origin_default_branch_tip()? {
         return Ok(default_tip);
     }
@@ -228,10 +231,9 @@ fn infer_old_base_from_default_branch(git: &Git, name: &str, old_tip: &str) -> R
         return Ok(default_tip);
     }
 
-    Err(Error::CannotInferOldBase {
-        name: name.to_owned(),
-        old_tip: old_tip.to_owned(),
-    })
+    Err(Error::InvalidInvocation(format!(
+        "cannot infer base branch for restack from old tip `{old_tip}`; pass --base <ref>"
+    )))
 }
 
 fn excluded_target_branches(git: &Git, target: &str) -> Result<Vec<String>> {
