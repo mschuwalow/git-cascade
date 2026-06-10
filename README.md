@@ -58,12 +58,12 @@ pr-1           B' -- C'
 pr-2                   D' -- E'
 ```
 
-By default, `sync` replays onto the current local `main`/`master` if you are on one of those branches, otherwise it uses the default branch. It uses `<onto>@{1}` as the old default-branch tip, which matches the common "I just pulled main" workflow.
+By default, `sync` replays onto the current local `main`/`master` if you are on one of those branches, otherwise it uses the default branch. It uses the current `--onto` tip as both the old and new root tip, and infers the old base from the oldest local branch fork point.
 
-If your branches forked from an older default-branch commit, widen the old range explicitly:
+If the inferred fork point is not what you want, pass the old range explicitly:
 
 ```sh
-git cascade sync --onto main --old-tip 'main@{1}' --old-base <older-main-commit>
+git cascade sync --onto main --old-tip main --old-base <older-main-commit>
 ```
 
 Preview the operation first:

@@ -220,6 +220,28 @@ fn sync_dry_run_does_not_write_generated_plan_or_move_refs() {
 }
 
 #[test]
+fn sync_infers_old_base_from_oldest_local_fork_point() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.commit_file("main-1.txt", "main 1\n", "main 1");
+    repo.switch_new("pr-1");
+    let old_pr1 = repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch("main");
+    repo.commit_file("main-2.txt", "main 2\n", "main 2");
+    repo.commit_file("main-3.txt", "main 3\n", "main 3");
+    repo.switch_new("already-current");
+    let already_current = repo.commit_file("current.txt", "current\n", "current work");
+    repo.switch("main");
+
+    repo.cascade().arg("sync").assert().success();
+
+    assert_ne!(repo.rev_parse("pr-1"), old_pr1);
+    assert_eq!(repo.merge_base("main", "pr-1"), repo.rev_parse("main"));
+    assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
+    assert_eq!(repo.rev_parse("already-current"), already_current);
+}
+
+#[test]
 fn landed_squash_moves_dependents_onto_main() {
     let repo = linear_stack();
     let old_pr2 = repo.rev_parse("pr-2");

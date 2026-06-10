@@ -102,10 +102,10 @@ enum Command {
         /// Branch or commit to replay onto. Defaults to the current default branch.
         #[arg(long, value_name = "REF")]
         onto: Option<String>,
-        /// Previous tip of --onto before it advanced. Defaults to <onto>@{1}.
+        /// Old root tip used for discovery. Defaults to the current --onto tip.
         #[arg(long, value_name = "REF")]
         old_tip: Option<String>,
-        /// Explicit old range base. Defaults to <old-tip>^.
+        /// Explicit old range base. Defaults to the parent of the oldest local branch fork point.
         #[arg(long, value_name = "REF")]
         old_base: Option<String>,
         /// Replay strategy for dependent branches.
@@ -402,8 +402,7 @@ fn sync(
                 "sync needs --onto <ref> when no default branch exists".to_owned(),
             )
         })?;
-    let old_tip = old_tip.unwrap_or_else(|| format!("{onto}@{{1}}"));
-    let old_base = old_base.unwrap_or_else(|| format!("{old_tip}^"));
+    let (old_tip, old_base) = sync_range(&git, &onto, old_tip, old_base)?;
     let excluded_branches = excluded_target_branches(&git, &onto)?;
     let plan_name = generated_plan_name("sync", &onto)?;
 
@@ -421,6 +420,57 @@ fn sync(
         is_dry_run,
         in_place,
         success_message: "synced dependent branches",
+    })
+}
+
+fn sync_range(
+    git: &Git,
+    onto: &str,
+    old_tip: Option<String>,
+    old_base: Option<String>,
+) -> Result<(String, String)> {
+    if let Some(old_tip) = old_tip {
+        let old_base = old_base.unwrap_or_else(|| format!("{old_tip}^"));
+        return Ok((old_tip, old_base));
+    }
+
+    let old_base = match old_base {
+        Some(old_base) => old_base,
+        None => infer_old_base_from_local_fork_points(git, onto)?,
+    };
+
+    Ok((onto.to_owned(), old_base))
+}
+
+fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String> {
+    let onto_tip = git.resolve_commit(onto)?;
+    let excluded_branches = excluded_target_branches(git, onto)?;
+    let mut oldest_fork_point = None::<String>;
+
+    for branch in git.local_branches()? {
+        if excluded_branches.contains(&branch.name) || git.is_ancestor(&branch.tip, &onto_tip)? {
+            continue;
+        }
+
+        let Some(fork_point) = git.merge_base(&onto_tip, &branch.tip)? else {
+            continue;
+        };
+        if fork_point == onto_tip {
+            continue;
+        }
+
+        oldest_fork_point = Some(if let Some(current) = oldest_fork_point {
+            git.merge_base(&current, &fork_point)?.unwrap_or(current)
+        } else {
+            fork_point
+        });
+    }
+
+    let base = oldest_fork_point.unwrap_or_else(|| onto_tip.clone());
+    git.commit_parents(&base)?.first().cloned().ok_or_else(|| {
+        Error::InvalidInvocation(format!(
+            "cannot infer old base for sync; oldest fork point `{base}` has no parent. Pass --old-base <ref>."
+        ))
     })
 }
 
