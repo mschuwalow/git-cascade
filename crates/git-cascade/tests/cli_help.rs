@@ -11,6 +11,7 @@ fn cli_help_mentions_commands() {
         predicate::str::contains("plan")
             .and(predicate::str::contains("apply"))
             .and(predicate::str::contains("restack"))
+            .and(predicate::str::contains("replay"))
             .and(predicate::str::contains("landed"))
             .and(predicate::str::contains("list"))
             .and(predicate::str::contains("show"))
@@ -19,6 +20,26 @@ fn cli_help_mentions_commands() {
             .and(predicate::str::contains("continue"))
             .and(predicate::str::contains("completions")),
     );
+}
+
+#[test]
+fn replay_help_mentions_generic_one_shot_options() {
+    let repo = TestRepo::new();
+
+    repo.cascade()
+        .args(["replay", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Replay dependents")
+                .and(predicate::str::contains("--old-tip"))
+                .and(predicate::str::contains("--old-base"))
+                .and(predicate::str::contains("--new-tip"))
+                .and(predicate::str::contains("--strategy"))
+                .and(predicate::str::contains("move-to-current-tips"))
+                .and(predicate::str::contains("--dry-run"))
+                .and(predicate::str::contains("--in-place")),
+        );
 }
 
 #[test]

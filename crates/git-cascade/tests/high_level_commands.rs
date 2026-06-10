@@ -99,6 +99,79 @@ fn restack_conflict_keeps_generated_plan_for_continue() {
 }
 
 #[test]
+fn replay_moves_dependents_between_arbitrary_roots() {
+    let repo = linear_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+    repo.switch("main");
+    repo.commit_file("replacement-base.txt", "base\n", "replacement base");
+    repo.switch_new("replacement-root");
+    repo.commit_file("replacement.txt", "replacement\n", "replacement root");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "replay",
+            "--old-base",
+            "main~1",
+            "--old-tip",
+            "pr-1",
+            "--new-tip",
+            "replacement-root",
+        ])
+        .assert()
+        .success()
+        .stdout("replayed dependent branches\n")
+        .stderr(
+            predicate::str::contains("Applying cascade plan `generated/replay/pr-1/")
+                .and(predicate::str::contains("move-to-current-tips")),
+        );
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    assert_eq!(
+        repo.merge_base("replacement-root", "pr-2"),
+        repo.rev_parse("replacement-root")
+    );
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), repo.rev_parse("pr-2"));
+    assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn replay_dry_run_does_not_write_generated_plan_or_move_refs() {
+    let repo = linear_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    repo.switch("main");
+    repo.commit_file("replacement-base.txt", "base\n", "replacement base");
+    repo.switch_new("replacement-root");
+    repo.commit_file("replacement.txt", "replacement\n", "replacement root");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "replay",
+            "--old-base",
+            "main~1",
+            "--old-tip",
+            "pr-1",
+            "--new-tip",
+            "replacement-root",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("# git-cascade apply --dry-run")
+                .and(predicate::str::contains("strategy move-to-current-tips")),
+        );
+
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(!repo.common_dir().join("cascade/plans").exists());
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
 fn landed_squash_moves_dependents_onto_main() {
     let repo = linear_stack();
     let old_pr2 = repo.rev_parse("pr-2");

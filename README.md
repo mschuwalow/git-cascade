@@ -138,9 +138,27 @@ Preview the operation first:
 git cascade landed pr-1 --onto main --dry-run
 ```
 
+### Generic Replay
+
+Use `replay` when you know the old root and replacement root exactly, but the situation is not simply "same branch advanced" or "branch landed on main":
+
+```sh
+git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1
+```
+
+`replay` generates and stores a temporary plan, applies it, and deletes the plan on success. If replay stops on a conflict, the generated plan is kept so `git cascade continue` can recover.
+
+Like `restack` and `landed`, `replay` defaults to `move-to-current-tips` so each child branch moves to its parent's rewritten apply-time tip.
+
+Preview the generic replay first:
+
+```sh
+git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1 --dry-run
+```
+
 ## Explicit Workflow
 
-The high-level commands above are wrappers around an explicit plan/apply workflow. Use the lower-level commands when you need to inspect, save, or script a plan manually.
+The one-shot commands above are wrappers around an explicit plan/apply workflow. Use the lower-level commands when you need to inspect, save, or script a plan manually, or when you must snapshot topology before a destructive rewrite.
 
 Create a repository-local plan before rewriting the root range:
 

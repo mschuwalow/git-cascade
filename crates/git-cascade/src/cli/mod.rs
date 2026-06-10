@@ -77,6 +77,28 @@ enum Command {
         #[arg(long)]
         in_place: bool,
     },
+    /// Replay dependents from an old root tip onto an arbitrary replacement tip.
+    Replay {
+        /// Old top of the root range before rewriting.
+        #[arg(long, value_name = "REF")]
+        old_tip: String,
+        /// Ref used with --old-tip to compute the old range base via merge-base.
+        /// Inferred from default branches when omitted.
+        #[arg(long, value_name = "REF")]
+        old_base: Option<String>,
+        /// Replacement ref or commit-ish for the old root tip.
+        #[arg(long, value_name = "REF")]
+        new_tip: String,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
+        strategy: Strategy,
+        /// Print the Git operations without mutating refs, worktrees, or state.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replay in the current worktree instead of a temporary worktree.
+        #[arg(long)]
+        in_place: bool,
+    },
     /// Move dependents of a branch that landed on the default branch.
     Landed {
         /// Old branch tip or commit that landed.
@@ -158,6 +180,14 @@ where
             dry_run,
             in_place,
         } => restack(branch, onto, strategy, dry_run, in_place),
+        Command::Replay {
+            old_tip,
+            old_base,
+            new_tip,
+            strategy,
+            dry_run,
+            in_place,
+        } => replay(&old_tip, old_base, &new_tip, strategy, dry_run, in_place),
         Command::Landed {
             old_tip,
             onto,
@@ -293,6 +323,36 @@ fn restack(
         is_dry_run,
         in_place,
         success_message: "restacked dependent branches",
+    })
+}
+
+fn replay(
+    old_tip: &str,
+    old_base: Option<String>,
+    new_tip: &str,
+    strategy: Strategy,
+    is_dry_run: bool,
+    in_place: bool,
+) -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    let excluded_branches = excluded_target_branches(&git, new_tip)?;
+    let plan_name = generated_plan_name("replay", old_tip)?;
+
+    generate_and_apply(GeneratedApply {
+        git: &git,
+        storage: &storage,
+        generate: GenerateOptions {
+            name: plan_name,
+            old_base,
+            old_tip: old_tip.to_owned(),
+            excluded_branches,
+        },
+        new_tip: new_tip.to_owned(),
+        strategy,
+        is_dry_run,
+        in_place,
+        success_message: "replayed dependent branches",
     })
 }
 
