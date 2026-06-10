@@ -141,10 +141,10 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
         strategy: options.strategy,
-        pending_branches: ordered.clone(),
-        branch_tips: branch_tips.clone(),
-        extra_commits: extra_commits.clone(),
-        mappings: mappings.clone(),
+        pending_branches: ordered,
+        branch_tips,
+        extra_commits,
+        mappings,
         worktree: worktree_state.clone(),
     })?;
     let state_file = StateFile::create(storage, &state)?;
@@ -282,7 +282,7 @@ fn replay_pending_branches(
     let mut temp_refs = state.completed.temp_refs.clone();
     let mut temp_tips = backend.temp_tips(&temp_refs)?;
     let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
-    let total_branches = branches_in_topological_order(plan)?.len();
+    let total_branches = plan.nodes.len();
 
     if total_branches == 0 {
         backend.no_branches()?;

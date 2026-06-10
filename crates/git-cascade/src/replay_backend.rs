@@ -1,6 +1,6 @@
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
-use crate::plan::{Node, Plan, branches_in_topological_order};
+use crate::plan::{Node, Plan};
 use crate::state::{ApplyState, CurrentState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;
@@ -391,18 +391,11 @@ impl ReplayBackend for DryRunReplayBackend {
     }
 
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
-        let ordered = branches_in_topological_order(plan)?;
-        let nodes = plan
-            .nodes
-            .iter()
-            .map(|node| (node.branch.as_str(), node))
-            .collect::<HashMap<_, _>>();
         writeln!(self.output).unwrap();
         writeln!(self.output, "# final ref transaction").unwrap();
         writeln!(self.output, "git update-ref --stdin <<'EOF'").unwrap();
         self.output.push_str(&final_ref_transaction(
-            &ordered,
-            &nodes,
+            plan,
             &self.temp_tips,
             &state.branch_tips,
         )?);
@@ -434,21 +427,19 @@ impl ReplayBackend for DryRunReplayBackend {
 }
 
 fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()> {
-    let ordered = branches_in_topological_order(plan)?;
-    let nodes = plan
+    let branches = plan
         .nodes
         .iter()
-        .map(|node| (node.branch.as_str(), node))
-        .collect::<HashMap<_, _>>();
+        .map(|node| node.branch.clone())
+        .collect::<Vec<_>>();
     let temp_tips = temp_tips_from_refs(git, &state.completed.temp_refs)?;
-    ensure_target_branches_not_checked_out(git, &ordered)?;
-    if final_update_already_applied(git, &ordered, &nodes, &temp_tips, &state.branch_tips)? {
+    ensure_target_branches_not_checked_out(git, &branches)?;
+    if final_update_already_applied(git, plan, &temp_tips, &state.branch_tips)? {
         return Ok(());
     }
     test_hooks::run("before-final-update")?;
     git.update_ref_transaction(&final_ref_transaction(
-        &ordered,
-        &nodes,
+        plan,
         &temp_tips,
         &state.branch_tips,
     )?)
@@ -456,17 +447,13 @@ fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()>
 
 fn final_update_already_applied(
     git: &Git,
-    ordered: &[String],
-    nodes: &HashMap<&str, &Node>,
+    plan: &Plan,
     temp_tips: &HashMap<String, String>,
     branch_tips: &BTreeMap<String, String>,
 ) -> Result<bool> {
     let mut saw_updated = false;
     let mut saw_pending = false;
-    for branch in ordered {
-        let node = nodes
-            .get(branch.as_str())
-            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+    for node in &plan.nodes {
         let rewritten_tip = temp_tips.get(&node.branch).ok_or_else(|| {
             Error::InvalidPlan(format!("branch `{}` has no rewritten tip", node.branch))
         })?;
@@ -522,17 +509,13 @@ fn temp_ref(plan: &Plan, branch: &str) -> String {
 }
 
 fn final_ref_transaction(
-    ordered: &[String],
-    nodes: &HashMap<&str, &Node>,
+    plan: &Plan,
     temp_tips: &HashMap<String, String>,
     branch_tips: &BTreeMap<String, String>,
 ) -> Result<String> {
     let mut transaction = String::new();
     writeln!(transaction, "start").unwrap();
-    for branch in ordered {
-        let node = nodes
-            .get(branch.as_str())
-            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
+    for node in &plan.nodes {
         let new_tip = temp_tips.get(&node.branch).ok_or_else(|| {
             Error::InvalidPlan(format!("branch `{}` has no rewritten tip", node.branch))
         })?;
