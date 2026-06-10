@@ -1,4 +1,5 @@
 mod landed;
+mod plan;
 mod status;
 
 use crate::apply::{
@@ -29,7 +30,7 @@ enum Command {
     Plan {
         /// Plan command to run.
         #[command(subcommand)]
-        command: PlanCommand,
+        command: plan::Command,
     },
     /// Move dependents of a branch that advanced without rewriting old commits.
     Restack {
@@ -126,51 +127,6 @@ enum Command {
     },
 }
 
-#[derive(Debug, Subcommand)]
-enum PlanCommand {
-    /// Create a named repository-local cascade plan for an old root range.
-    Create {
-        /// Name to store the plan under.
-        #[arg(value_name = "NAME")]
-        name: PlanName,
-        /// Ref used with --old-tip to compute the old range base via merge-base.
-        #[arg(long, value_name = "REF")]
-        old_base: String,
-        /// Old top of the root range before rewriting.
-        #[arg(long, value_name = "REF")]
-        old_tip: String,
-        /// Overwrite an existing plan with the same name.
-        #[arg(long)]
-        replace: bool,
-    },
-    /// Replay planned dependent branches onto a replacement root tip.
-    Apply {
-        /// Name of the stored plan to apply.
-        #[arg(value_name = "NAME")]
-        name: PlanName,
-        /// Replacement ref or commit-ish for the old root tip.
-        #[arg(long, value_name = "REF")]
-        new_tip: String,
-        /// Replay strategy for dependent branches.
-        #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
-        strategy: Strategy,
-        /// Print the Git operations without mutating refs, worktrees, or state.
-        #[arg(long)]
-        dry_run: bool,
-        /// Replay in the current worktree instead of a temporary worktree.
-        #[arg(long)]
-        in_place: bool,
-    },
-    /// List stored repository-local cascade plans by name.
-    List,
-    /// Print a stored plan by name.
-    Show {
-        /// Name of the stored plan to print.
-        #[arg(value_name = "NAME")]
-        name: PlanName,
-    },
-}
-
 pub fn run() -> ExitCode {
     match run_from(std::env::args_os()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -189,23 +145,7 @@ where
     let cli = Cli::parse_from(args);
 
     match cli.command {
-        Command::Plan { command } => match command {
-            PlanCommand::Create {
-                name,
-                old_base,
-                old_tip,
-                replace,
-            } => plan(name, &old_base, &old_tip, replace),
-            PlanCommand::Apply {
-                name,
-                new_tip,
-                strategy,
-                dry_run,
-                in_place,
-            } => apply(name, &new_tip, strategy, dry_run, in_place),
-            PlanCommand::List => list_plans(),
-            PlanCommand::Show { name } => show_plan(&name),
-        },
+        Command::Plan { command } => plan::run(command),
         Command::Restack {
             branch,
             onto,
@@ -265,69 +205,6 @@ fn abort() -> Result<()> {
     let storage = Storage::discover(&git)?;
     abort_apply(&git, &storage)?;
     println!("aborted cascade operation");
-
-    Ok(())
-}
-
-fn apply(
-    name: PlanName,
-    new_tip: &str,
-    strategy: Strategy,
-    is_dry_run: bool,
-    in_place: bool,
-) -> Result<()> {
-    let git = Git::current_dir()?;
-    let storage = Storage::discover(&git)?;
-    let plan = serde_yaml::from_str(&storage.read_plan(&name)?)?;
-
-    if is_dry_run {
-        print!(
-            "{}",
-            dry_run(
-                &git,
-                &storage,
-                &plan,
-                DryRunOptions {
-                    plan_name: name.clone(),
-                    new_tip_input: new_tip.to_owned(),
-                    strategy,
-                    in_place,
-                },
-            )?
-        );
-    } else {
-        execute(
-            &git,
-            &storage,
-            &plan,
-            ApplyOptions {
-                plan_name: name,
-                new_tip_input: new_tip.to_owned(),
-                strategy,
-                in_place,
-            },
-        )?;
-        println!("applied cascade plan");
-    }
-
-    Ok(())
-}
-
-fn plan(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Result<()> {
-    let git = Git::current_dir()?;
-    let storage = Storage::discover(&git)?;
-    generate_stored_plan(
-        &git,
-        &storage,
-        &GenerateOptions {
-            name: name.clone(),
-            old_base: old_base.to_owned(),
-            old_tip: old_tip.to_owned(),
-            excluded_branches: Vec::new(),
-        },
-        replace,
-    )?;
-    println!("created plan `{name}`");
 
     Ok(())
 }
@@ -611,23 +488,4 @@ fn excluded_target_branches(git: &Git, target: &str) -> Result<Vec<String>> {
     branches.sort();
     branches.dedup();
     Ok(branches)
-}
-
-fn list_plans() -> Result<()> {
-    let git = Git::current_dir()?;
-    let storage = Storage::discover(&git)?;
-
-    for name in storage.list_plan_names()? {
-        println!("{name}");
-    }
-
-    Ok(())
-}
-
-fn show_plan(name: &PlanName) -> Result<()> {
-    let git = Git::current_dir()?;
-    let storage = Storage::discover(&git)?;
-    print!("{}", storage.read_plan(name)?);
-
-    Ok(())
 }
