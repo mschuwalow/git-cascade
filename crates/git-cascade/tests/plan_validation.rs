@@ -10,7 +10,15 @@ use common::repo::TestRepo;
 fn validates_generated_plan() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let plan = read_plan(&repo, "stack");
@@ -24,7 +32,15 @@ fn validates_generated_plan() {
 fn validation_rejects_tampered_commit_list() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let mut plan = read_plan(&repo, "stack");
@@ -47,7 +63,15 @@ fn validation_rejects_tampered_commit_list() {
 fn apply_validation_rejects_dependent_branch_that_moved_after_planning() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let plan = read_plan(&repo, "stack");
@@ -69,7 +93,15 @@ fn apply_validation_rejects_dependent_branch_that_moved_after_planning() {
 fn apply_validation_allows_added_dependent_commits() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let plan = read_plan(&repo, "stack");
@@ -86,7 +118,15 @@ fn apply_validation_allows_added_dependent_commits() {
 fn validation_rejects_dependency_parent_mismatch() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let mut plan = read_plan(&repo, "stack");
@@ -103,7 +143,15 @@ fn validation_rejects_dependency_parent_mismatch() {
 fn validation_rejects_direct_child_at_anchor_base() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let mut plan = read_plan(&repo, "stack");

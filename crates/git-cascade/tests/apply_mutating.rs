@@ -7,7 +7,15 @@ use predicates::prelude::*;
 fn apply_linear_stack_updates_dependents_and_cleans_up() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -15,7 +23,7 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success()
         .stdout("applied cascade plan\n")
@@ -41,13 +49,21 @@ fn apply_linear_stack_updates_dependents_and_cleans_up() {
 fn apply_preserves_intermediate_fork_point() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success();
 
@@ -61,13 +77,22 @@ fn apply_preserves_intermediate_fork_point() {
 fn apply_move_to_current_tips_replays_child_on_parent_tip() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
 
     repo.cascade()
         .args([
+            "plan",
             "apply",
             "stack",
             "--new-tip",
@@ -85,7 +110,15 @@ fn apply_move_to_current_tips_replays_child_on_parent_tip() {
 fn apply_move_to_planned_tips_ignores_parent_commits_added_after_planning() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("pr-2");
@@ -95,6 +128,7 @@ fn apply_move_to_planned_tips_ignores_parent_commits_added_after_planning() {
 
     repo.cascade()
         .args([
+            "plan",
             "apply",
             "stack",
             "--new-tip",
@@ -115,7 +149,15 @@ fn apply_move_to_planned_tips_ignores_parent_commits_added_after_planning() {
 fn apply_move_to_current_tips_uses_parent_commits_added_after_planning() {
     let repo = intermediate_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("pr-2");
@@ -125,6 +167,7 @@ fn apply_move_to_current_tips_uses_parent_commits_added_after_planning() {
 
     repo.cascade()
         .args([
+            "plan",
             "apply",
             "stack",
             "--new-tip",
@@ -143,7 +186,15 @@ fn apply_move_to_current_tips_uses_parent_commits_added_after_planning() {
 fn apply_preserve_fork_points_keeps_added_dependent_commits() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("pr-2");
@@ -152,7 +203,7 @@ fn apply_preserve_fork_points_keeps_added_dependent_commits() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success();
 
@@ -165,7 +216,15 @@ fn apply_preserve_fork_points_keeps_added_dependent_commits() {
 fn apply_move_to_current_tips_keeps_added_dependent_commits() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("pr-2");
@@ -175,6 +234,7 @@ fn apply_move_to_current_tips_keeps_added_dependent_commits() {
 
     repo.cascade()
         .args([
+            "plan",
             "apply",
             "stack",
             "--new-tip",
@@ -194,7 +254,15 @@ fn apply_move_to_current_tips_keeps_added_dependent_commits() {
 fn apply_refuses_when_state_exists() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -204,7 +272,7 @@ fn apply_refuses_when_state_exists() {
     let pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -216,7 +284,15 @@ fn apply_refuses_when_state_exists() {
 fn apply_refuses_when_target_branch_is_checked_out() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -224,7 +300,7 @@ fn apply_refuses_when_target_branch_is_checked_out() {
     repo.switch("pr-2");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(
@@ -240,7 +316,15 @@ fn apply_refuses_when_target_branch_is_checked_out() {
 fn apply_in_place_allows_current_target_branch_and_restores_checkout() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -248,7 +332,7 @@ fn apply_in_place_allows_current_target_branch_and_restores_checkout() {
     repo.switch("pr-2");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1", "--in-place"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--in-place"])
         .assert()
         .success()
         .stdout("applied cascade plan\n")
@@ -268,14 +352,22 @@ fn apply_in_place_allows_current_target_branch_and_restores_checkout() {
 fn apply_in_place_refuses_dirty_worktree() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
     repo.write("dirty.txt", "dirty\n");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1", "--in-place"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--in-place"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("dirty worktree"));
@@ -288,7 +380,15 @@ fn apply_in_place_refuses_dirty_worktree() {
 fn apply_refuses_when_dependent_branch_moved() {
     let repo = linear_stack();
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
@@ -298,7 +398,7 @@ fn apply_refuses_when_dependent_branch_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -317,7 +417,15 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -326,7 +434,7 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(
@@ -353,6 +461,7 @@ fn apply_uses_arbitrary_old_tip_ref() {
     repo.cascade()
         .args([
             "plan",
+            "create",
             "stack",
             "--old-base",
             "main",
@@ -364,7 +473,7 @@ fn apply_uses_arbitrary_old_tip_ref() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .success();
 
@@ -384,13 +493,21 @@ fn apply_single_commit_root_range_updates_dependent() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "single", "--old-base", "pr-1^", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "single",
+            "--old-base",
+            "pr-1^",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["apply", "single", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "single", "--new-tip", "pr-1"])
         .assert()
         .success();
 

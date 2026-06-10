@@ -25,38 +25,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create a named repository-local cascade plan for an old root range.
+    /// Manage stored repository-local cascade plans.
     Plan {
-        /// Name to store the plan under.
-        #[arg(value_name = "NAME")]
-        name: PlanName,
-        /// Ref used with --old-tip to compute the old range base via merge-base.
-        #[arg(long, value_name = "REF")]
-        old_base: String,
-        /// Old top of the root range before rewriting.
-        #[arg(long, value_name = "REF")]
-        old_tip: String,
-        /// Overwrite an existing plan with the same name.
-        #[arg(long)]
-        replace: bool,
-    },
-    /// Replay planned dependent branches onto a replacement root tip.
-    Apply {
-        /// Name of the stored plan to apply.
-        #[arg(value_name = "NAME")]
-        name: PlanName,
-        /// Replacement ref or commit-ish for the old root tip.
-        #[arg(long, value_name = "REF")]
-        new_tip: String,
-        /// Replay strategy for dependent branches.
-        #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
-        strategy: Strategy,
-        /// Print the Git operations without mutating refs, worktrees, or state.
-        #[arg(long)]
-        dry_run: bool,
-        /// Replay in the current worktree instead of a temporary worktree.
-        #[arg(long)]
-        in_place: bool,
+        /// Plan command to run.
+        #[command(subcommand)]
+        command: PlanCommand,
     },
     /// Move dependents of a branch that advanced without rewriting old commits.
     Restack {
@@ -139,14 +112,6 @@ enum Command {
         #[arg(long)]
         in_place: bool,
     },
-    /// List stored repository-local cascade plans by name.
-    List,
-    /// Print a stored plan by name.
-    Show {
-        /// Name of the stored plan to print.
-        #[arg(value_name = "NAME")]
-        name: PlanName,
-    },
     /// Show the active cascade operation, if any.
     Status,
     /// Abort the active cascade operation and clean temporary state.
@@ -158,6 +123,51 @@ enum Command {
         /// Shell to generate completions for.
         #[arg(value_enum)]
         shell: Shell,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PlanCommand {
+    /// Create a named repository-local cascade plan for an old root range.
+    Create {
+        /// Name to store the plan under.
+        #[arg(value_name = "NAME")]
+        name: PlanName,
+        /// Ref used with --old-tip to compute the old range base via merge-base.
+        #[arg(long, value_name = "REF")]
+        old_base: String,
+        /// Old top of the root range before rewriting.
+        #[arg(long, value_name = "REF")]
+        old_tip: String,
+        /// Overwrite an existing plan with the same name.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Replay planned dependent branches onto a replacement root tip.
+    Apply {
+        /// Name of the stored plan to apply.
+        #[arg(value_name = "NAME")]
+        name: PlanName,
+        /// Replacement ref or commit-ish for the old root tip.
+        #[arg(long, value_name = "REF")]
+        new_tip: String,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
+        strategy: Strategy,
+        /// Print the Git operations without mutating refs, worktrees, or state.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replay in the current worktree instead of a temporary worktree.
+        #[arg(long)]
+        in_place: bool,
+    },
+    /// List stored repository-local cascade plans by name.
+    List,
+    /// Print a stored plan by name.
+    Show {
+        /// Name of the stored plan to print.
+        #[arg(value_name = "NAME")]
+        name: PlanName,
     },
 }
 
@@ -179,19 +189,23 @@ where
     let cli = Cli::parse_from(args);
 
     match cli.command {
-        Command::Plan {
-            name,
-            old_base,
-            old_tip,
-            replace,
-        } => plan(name, &old_base, &old_tip, replace),
-        Command::Apply {
-            name,
-            new_tip,
-            strategy,
-            dry_run,
-            in_place,
-        } => apply(name, &new_tip, strategy, dry_run, in_place),
+        Command::Plan { command } => match command {
+            PlanCommand::Create {
+                name,
+                old_base,
+                old_tip,
+                replace,
+            } => plan(name, &old_base, &old_tip, replace),
+            PlanCommand::Apply {
+                name,
+                new_tip,
+                strategy,
+                dry_run,
+                in_place,
+            } => apply(name, &new_tip, strategy, dry_run, in_place),
+            PlanCommand::List => list_plans(),
+            PlanCommand::Show { name } => show_plan(&name),
+        },
         Command::Restack {
             branch,
             onto,
@@ -223,8 +237,6 @@ where
             dry_run,
             in_place,
         } => landed(&old_tip, onto, old_base, strategy, dry_run, in_place),
-        Command::List => list_plans(),
-        Command::Show { name } => show_plan(&name),
         Command::Status => status::status(),
         Command::Abort => abort(),
         Command::Continue => continue_operation(),

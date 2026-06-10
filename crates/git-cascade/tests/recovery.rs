@@ -21,7 +21,7 @@ fn status_reports_conflict_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let state = read_state(&repo);
@@ -55,7 +55,7 @@ fn abort_cleans_conflict_state_without_moving_refs() {
     let old_pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let state = read_state(&repo);
@@ -89,7 +89,7 @@ fn abort_in_place_conflict_restores_original_checkout() {
     let old_pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1", "--in-place"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--in-place"])
         .assert()
         .failure();
     let state = read_state(&repo);
@@ -123,7 +123,7 @@ fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let state = read_state(&repo);
@@ -143,7 +143,7 @@ fn abort_succeeds_when_plan_was_already_deleted() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let mut state = read_state(&repo);
@@ -167,7 +167,7 @@ fn status_reports_deleting_state_without_cleanup() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let mut state = read_state(&repo);
@@ -189,7 +189,7 @@ fn continue_finishes_deleting_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let mut state = read_state(&repo);
@@ -212,7 +212,7 @@ fn abort_finishes_cleanup_for_deleting_state() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let mut state = read_state(&repo);
@@ -260,7 +260,7 @@ fn continue_refuses_unresolved_conflicts() {
     let repo = conflicting_stack();
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
 
@@ -278,7 +278,7 @@ fn continue_after_conflict_finishes_apply() {
     let old_pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
 
@@ -307,7 +307,7 @@ fn continue_after_conflict_continues_to_child_branch() {
     let old_pr3 = repo.rev_parse("pr-3");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
 
@@ -336,7 +336,7 @@ fn continue_can_stop_again_on_later_conflict() {
     let old_pr2 = repo.rev_parse("pr-2");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
         .failure();
     let first_state = read_state(&repo);
@@ -368,7 +368,15 @@ fn conflicting_stack() -> TestRepo {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("pr-1");
@@ -389,7 +397,15 @@ fn conflicting_stack_with_child() -> TestRepo {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("pr-1");
@@ -413,7 +429,15 @@ fn repeated_conflict_stack() -> TestRepo {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("pr-1");

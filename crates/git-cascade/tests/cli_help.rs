@@ -9,18 +9,32 @@ fn cli_help_mentions_commands() {
 
     repo.cascade().arg("--help").assert().success().stdout(
         predicate::str::contains("plan")
-            .and(predicate::str::contains("apply"))
             .and(predicate::str::contains("restack"))
             .and(predicate::str::contains("replay"))
             .and(predicate::str::contains("sync"))
             .and(predicate::str::contains("landed"))
-            .and(predicate::str::contains("list"))
-            .and(predicate::str::contains("show"))
             .and(predicate::str::contains("status"))
             .and(predicate::str::contains("abort"))
             .and(predicate::str::contains("continue"))
             .and(predicate::str::contains("completions")),
     );
+}
+
+#[test]
+fn plan_help_mentions_plan_subcommands() {
+    let repo = TestRepo::new();
+
+    repo.cascade()
+        .args(["plan", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Manage stored")
+                .and(predicate::str::contains("create"))
+                .and(predicate::str::contains("apply"))
+                .and(predicate::str::contains("list"))
+                .and(predicate::str::contains("show")),
+        );
 }
 
 #[test]
@@ -107,7 +121,7 @@ fn apply_help_mentions_strategy_and_dry_run() {
     let repo = TestRepo::new();
 
     repo.cascade()
-        .args(["apply", "--help"])
+        .args(["plan", "apply", "--help"])
         .assert()
         .success()
         .stdout(
@@ -131,7 +145,7 @@ fn plan_help_mentions_name_range_and_replace() {
     let repo = TestRepo::new();
 
     repo.cascade()
-        .args(["plan", "--help"])
+        .args(["plan", "create", "--help"])
         .assert()
         .success()
         .stdout(
@@ -179,7 +193,7 @@ fn apply_requires_plan_name() {
     let repo = TestRepo::new();
 
     repo.cascade()
-        .args(["apply", "--new-tip", "pr-1", "--dry-run"])
+        .args(["plan", "apply", "--new-tip", "pr-1", "--dry-run"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("<NAME>"));
@@ -191,6 +205,7 @@ fn apply_rejects_invalid_strategy() {
 
     repo.cascade()
         .args([
+            "plan",
             "apply",
             "stack",
             "--new-tip",

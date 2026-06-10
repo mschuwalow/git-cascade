@@ -208,13 +208,13 @@ The one-shot commands above are wrappers around an explicit plan/apply workflow.
 Create a repository-local plan before rewriting the root range:
 
 ```sh
-git cascade plan stack --old-base main --old-tip pr-1
+git cascade plan create stack --old-base main --old-tip pr-1
 ```
 
 For a single-commit root rewrite, use that commit's parent as the explicit old base:
 
 ```sh
-git cascade plan stack --old-base '<old-commit>^' --old-tip <old-commit>
+git cascade plan create stack --old-base '<old-commit>^' --old-tip <old-commit>
 ```
 
 Rewrite the replacement root tip manually:
@@ -251,19 +251,19 @@ pr-3                           F'
 Apply the cascade to dependent branches:
 
 ```sh
-git cascade apply stack --new-tip pr-1
+git cascade plan apply stack --new-tip pr-1
 ```
 
 Preview the Git commands without mutating refs, worktrees, or state:
 
 ```sh
-git cascade apply stack --new-tip pr-1 --dry-run
+git cascade plan apply stack --new-tip pr-1 --dry-run
 ```
 
 Use the simpler strategy that replays every child onto the parent's rewritten apply-time tip:
 
 ```sh
-git cascade apply stack --new-tip pr-1 --strategy move-to-current-tips
+git cascade plan apply stack --new-tip pr-1 --strategy move-to-current-tips
 ```
 
 Use `move-to-planned-tips` instead when children should move to each parent's rewritten planned tip, ignoring commits added to the parent after planning.
@@ -271,7 +271,7 @@ Use `move-to-planned-tips` instead when children should move to each parent's re
 Replay in the current worktree instead of a temporary worktree:
 
 ```sh
-git cascade apply stack --new-tip pr-1 --in-place
+git cascade plan apply stack --new-tip pr-1 --in-place
 ```
 
 `--in-place` requires a clean worktree. If replay conflicts, the conflict is left in the current worktree and `git cascade abort` restores the checkout that was active before apply started.
@@ -279,7 +279,7 @@ git cascade apply stack --new-tip pr-1 --in-place
 The default strategy is:
 
 ```sh
-git cascade apply stack --new-tip pr-1 --strategy preserve-fork-points
+git cascade plan apply stack --new-tip pr-1 --strategy preserve-fork-points
 ```
 
 ## Conflicts
@@ -318,19 +318,19 @@ Abort cleans temporary state and leaves the stored plan intact so it can be retr
 List stored plans by name:
 
 ```sh
-git cascade list
+git cascade plan list
 ```
 
 Show a named plan:
 
 ```sh
-git cascade show stack
+git cascade plan show stack
 ```
 
 Replace an existing plan:
 
 ```sh
-git cascade plan stack --old-base main --old-tip pr-1 --replace
+git cascade plan create stack --old-base main --old-tip pr-1 --replace
 ```
 
 ## Shell Completions

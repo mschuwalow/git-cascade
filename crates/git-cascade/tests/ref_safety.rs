@@ -17,7 +17,15 @@ fn apply_uses_persisted_new_tip_if_new_tip_ref_moved() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -30,7 +38,7 @@ fn apply_uses_persisted_new_tip_if_new_tip_ref_moved() {
 
     let hook = write_move_anchor_hook(&repo);
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .env("GIT_CASCADE_TEST_HOOK_BEFORE_FINAL_UPDATE", &hook)
         .env("GIT_CASCADE_TEST_REPO", repo.path())
         .assert()
@@ -57,7 +65,15 @@ fn continue_recovers_final_update_failure() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     let old_pr2 = repo.rev_parse("pr-2");
@@ -69,7 +85,7 @@ fn continue_recovers_final_update_failure() {
 
     let hook = write_move_dependent_hook(&repo);
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .env("GIT_CASCADE_TEST_HOOK_BEFORE_FINAL_UPDATE", &hook)
         .env("GIT_CASCADE_TEST_REPO", repo.path())
         .assert()
@@ -101,7 +117,7 @@ fn continue_recovers_after_final_update_committed() {
     let hook = write_failing_hook(&repo, "after-final-update-hook.sh");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .env("GIT_CASCADE_TEST_HOOK_AFTER_FINAL_UPDATE", &hook)
         .assert()
         .failure()
@@ -134,7 +150,7 @@ fn continue_finishes_successful_deleting_state() {
     let hook = write_failing_hook(&repo, "after-deleting-state-written-hook.sh");
 
     repo.cascade()
-        .args(["apply", "stack", "--new-tip", "pr-1"])
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .env("GIT_CASCADE_TEST_HOOK_AFTER_DELETING_STATE_WRITTEN", &hook)
         .assert()
         .failure()
@@ -215,7 +231,15 @@ fn clean_stack_with_rebased_root() -> TestRepo {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
     repo.switch("main");

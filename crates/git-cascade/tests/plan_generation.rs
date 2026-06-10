@@ -18,7 +18,15 @@ fn plan_creates_named_plan_for_linear_stack() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success()
         .stdout("created plan `stack`\n");
@@ -59,7 +67,15 @@ fn plan_preserves_intermediate_fork_point() {
     repo.commit_file("d.txt", "d\n", "d");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
 
@@ -89,7 +105,15 @@ fn plan_keeps_independent_root_siblings_separate() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
 
@@ -118,7 +142,15 @@ fn plan_does_not_treat_advanced_main_as_dependent() {
     repo.commit_file("main.txt", "new main\n", "advance main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
 
@@ -143,7 +175,15 @@ fn plan_old_base_option_uses_merge_base_with_old_tip() {
     repo.commit_file("main.txt", "new main\n", "advance main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
 
@@ -164,7 +204,7 @@ fn plan_requires_old_base() {
     repo.commit_file("main.txt", "new main\n", "advance main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-tip", "pr-1"])
+        .args(["plan", "create", "stack", "--old-tip", "pr-1"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--old-base"));
@@ -185,7 +225,15 @@ fn plan_uses_explicit_old_base_when_old_tip_branch_has_upstream() {
     repo.commit_file("main.txt", "new main\n", "advance main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
 
@@ -211,7 +259,15 @@ fn plan_supports_single_commit_root_range() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "single", "--old-base", "pr-1^", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "single",
+            "--old-base",
+            "pr-1^",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
 
@@ -240,6 +296,7 @@ fn plan_accepts_tag_anchor() {
     repo.cascade()
         .args([
             "plan",
+            "create",
             "stack",
             "--old-base",
             "main",
@@ -271,6 +328,7 @@ fn plan_with_full_local_branch_ref_does_not_include_anchor_branch_as_dependent()
     repo.cascade()
         .args([
             "plan",
+            "create",
             "stack",
             "--old-base",
             "main",
@@ -295,12 +353,28 @@ fn plan_refuses_to_overwrite_without_replace() {
     repo.commit_file("a.txt", "a\n", "a");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .success();
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already exists"));
@@ -308,6 +382,7 @@ fn plan_refuses_to_overwrite_without_replace() {
     repo.cascade()
         .args([
             "plan",
+            "create",
             "stack",
             "--old-base",
             "main",
@@ -330,7 +405,15 @@ fn plan_refuses_while_state_exists() {
     std::fs::write(&state_path, "version: 1\n").unwrap();
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("state file exists"));
@@ -351,7 +434,15 @@ fn plan_rejects_merge_commits() {
     repo.switch("main");
 
     repo.cascade()
-        .args(["plan", "stack", "--old-base", "main", "--old-tip", "pr-1"])
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("merge replay is not supported"));

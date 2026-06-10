@@ -26,7 +26,7 @@ fn list_reads_named_plans_from_git_common_dir() {
     std::fs::write(plans_dir.join("ignore.txt"), "not a plan\n").unwrap();
 
     repo.cascade()
-        .arg("list")
+        .args(["plan", "list"])
         .assert()
         .success()
         .stdout("alpha\nbeta\n");
@@ -48,7 +48,7 @@ fn show_prints_a_named_plan() {
     .unwrap();
 
     repo.cascade()
-        .args(["show", "stack"])
+        .args(["plan", "show", "stack"])
         .assert()
         .success()
         .stdout("version: 1\nplan_id: test\n");
@@ -60,7 +60,7 @@ fn show_rejects_empty_name() {
     repo.commit_file("README.md", "hello\n", "initial");
 
     repo.cascade()
-        .args(["show", ""])
+        .args(["plan", "show", ""])
         .assert()
         .failure()
         .stderr(predicate::str::contains("invalid plan name"));
@@ -76,6 +76,7 @@ fn plan_names_can_contain_path_separators() {
     repo.cascade()
         .args([
             "plan",
+            "create",
             "feature/stack",
             "--old-base",
             "main",
