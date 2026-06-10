@@ -8,16 +8,15 @@ When the `git-cascade` binary is installed on `PATH`, Git exposes it as:
 git cascade <command>
 ```
 
-Most users should start with the high-level commands:
+Most users should start with the targeted workflow commands:
 
 ```sh
 git cascade sync
 git cascade restack [branch]
 git cascade landed <old-tip> [--onto <ref>]
-git cascade replay --old-base <ref> --old-tip <ref> --new-tip <ref>
 ```
 
-The lower-level `git cascade plan ...` commands are for power users who need to inspect, save, or apply plans manually.
+Use `git cascade replay --old-base <ref> --old-tip <ref> --new-tip <ref>` when none of those workflows fit and you know the exact refs. The lower-level `git cascade plan ...` commands are for power users who need to inspect, save, or apply plans manually.
 
 ## Common Use Cases
 
@@ -71,10 +70,10 @@ pr-2                   D' -- E'
 
 By default, `sync` replays onto the current local `main`/`master` if you are on one of those branches, otherwise it uses the default branch. It uses the current `--onto` tip as both the old and new root tip, and infers the old base from the oldest local branch fork point.
 
-If the inferred fork point is not what you want, pass the old range explicitly:
+If the inferred fork point is not what you want, use explicit `replay` instead:
 
 ```sh
-git cascade sync --onto main --old-tip main --old-base <older-main-commit>
+git cascade replay --old-base <older-main-commit> --old-tip main --new-tip main
 ```
 
 Preview the operation first:
@@ -194,9 +193,9 @@ Preview the operation first:
 git cascade landed pr-1 --onto main --dry-run
 ```
 
-### Generic Replay
+### Explicit Replay
 
-Use `replay` when you know the old root and replacement root exactly, but the situation is not simply "same branch advanced" or "branch landed on main":
+Use `replay` when you know the old root and replacement root exactly, but the situation is not simply "default branch advanced", "same branch advanced", or "branch landed on main":
 
 ```sh
 git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1
@@ -204,7 +203,7 @@ git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1
 
 `replay` generates and stores a temporary plan, applies it, and deletes the plan on success. If replay stops on a conflict, the generated plan is kept so `git cascade continue` can recover.
 
-Like `restack` and `landed`, `replay` defaults to `move-to-current-tips` so each child branch moves to its parent's rewritten apply-time tip.
+The targeted workflow commands always use `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. `replay` also defaults to `move-to-current-tips`, but it exposes `--strategy` for explicit-control cases.
 
 Preview the generic replay first:
 
@@ -223,7 +222,7 @@ A plan records:
 - the parent/child relationships between dependent branches
 - each branch's planned commits and fork point
 
-The high-level commands generate plans for you:
+The targeted workflow commands and explicit replay generate plans for you:
 
 - `sync` creates a generated plan under `generated/sync/...`
 - `restack` creates a generated plan under `generated/restack/...`
@@ -232,7 +231,7 @@ The high-level commands generate plans for you:
 
 Generated plans are deleted after a successful apply. If replay stops on a conflict, the generated plan is kept and the active state file points to it, so `git cascade continue` can recover.
 
-By default, one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` strategy.
+By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` strategy. Use `replay --strategy ...` or `plan apply --strategy ...` when you need a different strategy.
 
 ## Conflicts
 
