@@ -182,7 +182,7 @@ fn generation_skips_branch_with_merged_local_work() {
     repo.switch_new("pr-1");
     repo.commit_file("a.txt", "a\n", "a");
     repo.switch_new("pr-2");
-    let old_pr2_file = repo.commit_file("b.txt", "b\n", "b");
+    repo.commit_file("b.txt", "b\n", "b");
     repo.switch_new_at("side", "main");
     repo.commit_file("side.txt", "side\n", "side");
     repo.switch("pr-2");
@@ -209,7 +209,6 @@ fn generation_skips_branch_with_merged_local_work() {
     let plan_yaml = std::fs::read_to_string(repo.plan_path("stack")).unwrap();
     assert!(!plan_yaml.contains("pr-2"));
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
-    let _ = old_pr2_file;
 }
 
 /// The same merged-local-work branch is rejected when it is part of a stored
@@ -289,7 +288,7 @@ fn apply_flattens_merge_added_after_planning() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--base-strategy",
+            "--strategy",
             "move-to-current-tips",
         ])
         .assert()

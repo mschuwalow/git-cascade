@@ -41,9 +41,7 @@ fn status_reports_conflict_state() {
             .and(predicate::str::contains("phase: conflict"))
             .and(predicate::str::contains("plan: stack"))
             .and(predicate::str::contains("new-tip:"))
-            .and(predicate::str::contains(
-                "base-strategy: preserve-fork-points",
-            ))
+            .and(predicate::str::contains("strategy: preserve-fork-points"))
             .and(predicate::str::contains("current-branch: pr-2"))
             .and(predicate::str::contains("current-commit:"))
             .and(predicate::str::contains("worktree:"))

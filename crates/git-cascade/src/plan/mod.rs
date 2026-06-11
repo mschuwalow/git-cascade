@@ -172,10 +172,6 @@ impl PlanCommit {
     pub fn is_merge(&self) -> bool {
         self.parents.len() > 1
     }
-
-    pub fn first_parent(&self) -> Option<&str> {
-        self.parents.first().map(String::as_str)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

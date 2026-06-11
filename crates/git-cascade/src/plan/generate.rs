@@ -90,22 +90,28 @@ impl<'a> GitQueries<'a> {
             .into_iter()
             .map(|(oid, parents)| PlanCommit::new(oid, parents))
             .collect::<Vec<_>>();
-        let mut result = Some(chain);
-        if let Some(chain) = &result {
-            'outer: for commit in chain {
-                for parent in commit.parents.iter().skip(1) {
-                    if !self.is_ancestor(parent, source_old_tip)? {
-                        eprintln!(
-                            "warning: skipping branch `{branch}`: it merges history that is not part of the old tip; rebase the branch to include it"
-                        );
-                        result = None;
-                        break 'outer;
-                    }
+        let flattenable = self.merge_parents_contained_in(&chain, source_old_tip)?;
+        if !flattenable {
+            eprintln!(
+                "warning: skipping branch `{branch}`: it merges history that is not part of the old tip; rebase the branch to include it"
+            );
+        }
+
+        let result = flattenable.then_some(chain);
+        self.owned_commits.insert(key, result.clone());
+        Ok(result)
+    }
+
+    fn merge_parents_contained_in(&mut self, chain: &[PlanCommit], tip: &str) -> Result<bool> {
+        for commit in chain {
+            for parent in commit.parents.iter().skip(1) {
+                if !self.is_ancestor(parent, tip)? {
+                    return Ok(false);
                 }
             }
         }
-        self.owned_commits.insert(key, result.clone());
-        Ok(result)
+
+        Ok(true)
     }
 }
 

@@ -312,15 +312,6 @@ impl Git {
         unique_merge_base_from(self.merge_bases_all(left, right)?, left, right)
     }
 
-    pub fn rev_list_reverse(&self, base: &str, tip: &str) -> Result<Vec<String>> {
-        let range = format!("{base}..{tip}");
-        Ok(self
-            .output(["rev-list", "--reverse", &range])?
-            .lines()
-            .map(str::to_owned)
-            .collect())
-    }
-
     /// First-parent chain of `base..tip` with each commit's parents,
     /// oldest first.
     pub fn rev_list_first_parent_with_parents(
@@ -345,15 +336,6 @@ impl Git {
             commits.push((oid, parts.collect()));
         }
         Ok(commits)
-    }
-
-    pub fn rev_list_merges(&self, base: &str, tip: &str) -> Result<Vec<String>> {
-        let range = format!("{base}..{tip}");
-        Ok(self
-            .output(["rev-list", "--merges", &range])?
-            .lines()
-            .map(str::to_owned)
-            .collect())
     }
 
     pub fn rev_list_first_parent_merges(&self, tip: &str) -> Result<Vec<String>> {

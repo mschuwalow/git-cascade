@@ -97,7 +97,7 @@ fn apply_move_to_current_tips_replays_child_on_parent_tip() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--base-strategy",
+            "--strategy",
             "move-to-current-tips",
         ])
         .assert()
@@ -133,7 +133,7 @@ fn apply_move_to_planned_tips_ignores_parent_commits_added_after_planning() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--base-strategy",
+            "--strategy",
             "move-to-planned-tips",
         ])
         .assert()
@@ -172,7 +172,7 @@ fn apply_move_to_current_tips_uses_parent_commits_added_after_planning() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--base-strategy",
+            "--strategy",
             "move-to-current-tips",
         ])
         .assert()
@@ -239,7 +239,7 @@ fn apply_move_to_current_tips_keeps_added_dependent_commits() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--base-strategy",
+            "--strategy",
             "move-to-current-tips",
         ])
         .assert()
