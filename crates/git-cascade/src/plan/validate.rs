@@ -28,8 +28,11 @@ pub fn validate_plan_for_apply(git: &Git, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-/// Merge commits are flattened during replay, which is only sound when the
-/// merged-in history is contained in the new tip.
+/// Merge commits are dropped during replay. That is sound when the merged-in
+/// history is upstream work: either part of the old tip (whose rewrite is the
+/// new tip, so the replayed branch catches up by being based on it) or
+/// already contained in the new tip. Foreign merges would silently lose the
+/// merged-in work and are rejected.
 pub fn validate_merge_parents_for_apply(
     git: &Git,
     plan: &Plan,
@@ -43,12 +46,13 @@ pub fn validate_merge_parents_for_apply(
             .unwrap_or_default();
         for commit in node.commits().iter().chain(extras) {
             for parent in commit.parents.iter().skip(1) {
-                if !git.is_ancestor(parent, new_tip)? {
-                    return invalid(format!(
-                        "branch `{}` merges history at `{parent}` that is not contained in the new tip; rebase the branch to linearize it first",
-                        node.branch
-                    ));
+                if git.is_ancestor(parent, &plan.source.tip)? || git.is_ancestor(parent, new_tip)? {
+                    continue;
                 }
+                return invalid(format!(
+                    "branch `{}` merges history at `{parent}` that is part of neither the old nor the new tip; rebase the branch to linearize it first",
+                    node.branch
+                ));
             }
         }
     }

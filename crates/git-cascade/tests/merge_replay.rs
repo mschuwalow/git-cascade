@@ -142,10 +142,11 @@ fn apply_flattens_merges_retained_by_new_tip() {
     repo.git_ok(["merge-base", "--is-ancestor", "pr-1", "pr-2"]);
 }
 
-/// A merge of history not retained by the new tip cannot be flattened and is
-/// rejected at apply time.
+/// A merge of old-range history is a catch-up with upstream. When the new
+/// tip drops that history, the replayed branch tracks the rewrite: the merge
+/// is dropped and only the branch's own commits survive.
 #[test]
-fn apply_rejects_merge_of_history_lost_by_rewrite() {
+fn apply_flattens_merge_of_history_dropped_by_rewrite() {
     let repo = double_merge_stack();
 
     repo.cascade()
@@ -167,10 +168,19 @@ fn apply_rejects_merge_of_history_lost_by_rewrite() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "replacement"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "not contained in the new tip; rebase the branch to linearize it first",
-        ));
+        .success()
+        .stderr(predicate::str::contains("flattened merge"));
+
+    assert!(
+        repo.git_output(["rev-list", "--merges", "replacement..pr-2"])
+            .is_empty()
+    );
+    repo.git_ok(["merge-base", "--is-ancestor", "replacement", "pr-2"]);
+    assert_eq!(repo.show("pr-2:b.txt"), "b\n");
+    // The merged-in a2/a3 were upstream work the rewrite dropped; pr-2
+    // follows the rewrite instead of resurrecting them.
+    repo.git_fails(["cat-file", "-e", "pr-2:a2.txt"]);
+    repo.git_fails(["cat-file", "-e", "pr-2:a3.txt"]);
 }
 
 /// A merge of an unrelated local branch cannot be flattened; the branch is
@@ -211,6 +221,50 @@ fn generation_skips_branch_with_merged_local_work() {
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
 }
 
+/// The squash-land workflow: pr-2 merged pr-1 to catch up, then pr-1 was
+/// squash-merged. The catch-up merge's parent is not an ancestor of the new
+/// tip, but its changes are; the merge flattens and the branch replays
+/// cleanly.
+#[test]
+fn replay_flattens_catch_up_merge_after_squash_land() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    let a1 = repo.commit_file("a1.txt", "a1\n", "a1");
+    repo.commit_file("a2.txt", "a2\n", "a2");
+    // pr-2 forks mid-stack and merges pr-1's tip to catch up.
+    repo.switch_new_at("pr-2", &a1);
+    repo.commit_file("b.txt", "b\n", "b");
+    repo.git_ok(["merge", "--no-ff", "pr-1", "-m", "merge pr-1"]);
+    // pr-1 lands squashed: its changes reach main without its commits.
+    repo.switch("main");
+    repo.git_ok(["merge", "--squash", "pr-1"]);
+    repo.git_ok(["commit", "-m", "pr-1 (squashed)"]);
+
+    repo.cascade()
+        .args([
+            "replay",
+            "--old-base",
+            "main~1",
+            "--old-tip",
+            "pr-1",
+            "--new-tip",
+            "main",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("flattened merge"));
+
+    assert!(
+        repo.git_output(["rev-list", "--merges", "main..pr-2"])
+            .is_empty()
+    );
+    repo.git_ok(["merge-base", "--is-ancestor", "main", "pr-2"]);
+    assert_eq!(repo.show("pr-2:b.txt"), "b\n");
+    assert_eq!(repo.show("pr-2:a1.txt"), "a1\n");
+    assert_eq!(repo.show("pr-2:a2.txt"), "a2\n");
+}
+
 /// The same merged-local-work branch is rejected when it is part of a stored
 /// plan's refs after planning.
 #[test]
@@ -247,7 +301,7 @@ fn apply_rejects_merged_local_work_added_after_planning() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "not contained in the new tip; rebase the branch to linearize it first",
+            "part of neither the old nor the new tip; rebase the branch to linearize it first",
         ));
 }
 
