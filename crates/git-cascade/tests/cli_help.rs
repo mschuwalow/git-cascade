@@ -53,7 +53,7 @@ fn sync_help_mentions_default_branch_options() {
                 .and(predicate::str::contains("--onto").not())
                 .and(predicate::str::contains("--old-tip").not())
                 .and(predicate::str::contains("--old-base").not())
-                .and(predicate::str::contains("--strategy").not()),
+                .and(predicate::str::contains("--base-strategy").not()),
         );
 }
 
@@ -70,7 +70,7 @@ fn replay_help_mentions_generic_one_shot_options() {
                 .and(predicate::str::contains("--old-tip"))
                 .and(predicate::str::contains("--old-base"))
                 .and(predicate::str::contains("--new-tip"))
-                .and(predicate::str::contains("--strategy"))
+                .and(predicate::str::contains("--base-strategy"))
                 .and(predicate::str::contains("move-to-current-tips"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place")),
@@ -92,7 +92,7 @@ fn restack_help_mentions_common_options() {
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
                 .and(predicate::str::contains("--onto").not())
-                .and(predicate::str::contains("--strategy").not()),
+                .and(predicate::str::contains("--base-strategy").not()),
         );
 }
 
@@ -111,7 +111,7 @@ fn landed_help_mentions_landing_options() {
                 .and(predicate::str::contains("--old-base"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--strategy").not()),
+                .and(predicate::str::contains("--base-strategy").not()),
         );
 }
 
@@ -124,7 +124,7 @@ fn apply_help_mentions_strategy_and_dry_run() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("--strategy")
+            predicate::str::contains("--base-strategy")
                 .and(predicate::str::contains("preserve-fork-points"))
                 .and(predicate::str::contains("move-to-planned-tips"))
                 .and(predicate::str::contains("move-to-current-tips"))
@@ -209,7 +209,7 @@ fn apply_rejects_invalid_strategy() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--strategy",
+            "--base-strategy",
             "invalid",
             "--dry-run",
         ])

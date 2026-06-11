@@ -79,8 +79,8 @@ impl<'a> GitReplayBackend<'a> {
 impl ReplayBackend for GitReplayBackend<'_> {
     fn start(&mut self, state: &ApplyState) -> Result<()> {
         eprintln!(
-            "Applying cascade plan `{}` with strategy `{}` in {} worktree mode",
-            state.plan_name, state.strategy, state.worktree
+            "Applying cascade plan `{}` with base strategy `{}` in {} worktree mode",
+            state.plan_name, state.base_strategy, state.worktree
         );
         Ok(())
     }
@@ -304,7 +304,7 @@ impl DryRunReplayBackend {
         let mut output = String::new();
         writeln!(output, "# git-cascade apply --dry-run").unwrap();
         writeln!(output, "new-tip {}", state.new_tip).unwrap();
-        writeln!(output, "strategy {}", state.strategy).unwrap();
+        writeln!(output, "base-strategy {}", state.base_strategy).unwrap();
         writeln!(output, "worktree-mode {}", state.worktree).unwrap();
         let worktree = if state.worktree.path().is_empty() {
             storage.worktrees_dir().join(plan.plan_id.to_string())

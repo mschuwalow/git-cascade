@@ -21,7 +21,8 @@ pub struct ApplyState {
     pub updated_at: String,
     pub pid: u32,
     pub new_tip: String,
-    pub strategy: Strategy,
+    #[serde(alias = "strategy")]
+    pub base_strategy: BaseStrategy,
     pub current: Option<CurrentState>,
     pub worktree: WorktreeState,
     pub completed: CompletedState,
@@ -61,7 +62,7 @@ impl std::fmt::Display for Phase {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
-pub enum Strategy {
+pub enum BaseStrategy {
     /// Preserve old fork points between dependent branches.
     PreserveForkPoints,
     /// Replay each dependent branch onto its parent's rewritten planned tip.
@@ -70,7 +71,7 @@ pub enum Strategy {
     MoveToCurrentTips,
 }
 
-impl Strategy {
+impl BaseStrategy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PreserveForkPoints => "preserve-fork-points",
@@ -80,7 +81,7 @@ impl Strategy {
     }
 }
 
-impl std::fmt::Display for Strategy {
+impl std::fmt::Display for BaseStrategy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -305,7 +306,7 @@ pub struct ApplyStateInput<'a> {
     pub plan_name: &'a PlanName,
     pub plan_id: &'a PlanId,
     pub new_tip: &'a str,
-    pub strategy: Strategy,
+    pub base_strategy: BaseStrategy,
     pub pending_branches: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<String>>,
@@ -325,7 +326,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         updated_at: now,
         pid: std::process::id(),
         new_tip: input.new_tip.to_owned(),
-        strategy: input.strategy,
+        base_strategy: input.base_strategy,
         current: None,
         worktree: input.worktree,
         completed: CompletedState::default(),

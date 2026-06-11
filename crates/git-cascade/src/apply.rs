@@ -5,7 +5,7 @@ use crate::plan::{
 };
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
-    ApplyState, ApplyStateInput, CurrentState, Phase, RestoreState, StateFile, Strategy,
+    ApplyState, ApplyStateInput, BaseStrategy, CurrentState, Phase, RestoreState, StateFile,
     WorktreeState, initial_apply_state,
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
@@ -19,7 +19,7 @@ use std::fs;
 pub struct ApplyOptions {
     pub plan_name: PlanName,
     pub new_tip_input: String,
-    pub strategy: Strategy,
+    pub base_strategy: BaseStrategy,
     pub in_place: bool,
 }
 
@@ -29,7 +29,7 @@ struct ActualReplayContext<'a> {
     temp_tips: &'a HashMap<String, String>,
     mappings: &'a BTreeMap<String, String>,
     new_tip: &'a str,
-    strategy: Strategy,
+    base_strategy: BaseStrategy,
 }
 
 pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<String> {
@@ -58,7 +58,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
-        strategy: options.strategy,
+        base_strategy: options.base_strategy,
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -104,7 +104,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
-        strategy: options.strategy,
+        base_strategy: options.base_strategy,
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -262,7 +262,7 @@ fn replay_pending_branches(
                     temp_tips: &temp_tips,
                     mappings: &mappings,
                     new_tip: &state.new_tip,
-                    strategy: state.strategy,
+                    base_strategy: state.base_strategy,
                 },
             )?;
             selected_bases.insert(node.branch.clone(), base.clone());
@@ -420,7 +420,7 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
         .get(parent_branch)
         .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
 
-    if context.strategy == Strategy::MoveToPlannedTips {
+    if context.base_strategy == BaseStrategy::MoveToPlannedTips {
         return context.mappings.get(&parent.tip).cloned().ok_or_else(|| {
             Error::InvalidPlan(format!(
                 "parent `{}` has no rewritten planned tip",
@@ -429,7 +429,7 @@ fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<S
         });
     }
 
-    if context.strategy == Strategy::MoveToCurrentTips {
+    if context.base_strategy == BaseStrategy::MoveToCurrentTips {
         return context
             .temp_tips
             .get(&parent.branch)

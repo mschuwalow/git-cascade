@@ -6,7 +6,7 @@ mod status;
 use crate::Result;
 use crate::apply::{abort as abort_apply, continue_apply};
 use crate::git::Git;
-use crate::state::Strategy;
+use crate::state::BaseStrategy;
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -55,9 +55,9 @@ enum Command {
         /// Replacement ref or commit-ish for the old root tip.
         #[arg(long, value_name = "REF")]
         new_tip: String,
-        /// Replay strategy for dependent branches.
-        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
-        strategy: Strategy,
+        /// Base selection strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
+        base_strategy: BaseStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -142,7 +142,7 @@ where
             old_tip,
             old_base,
             new_tip,
-            strategy,
+            base_strategy,
             dry_run,
             in_place,
         } => high_level::replay(
@@ -150,7 +150,7 @@ where
             &old_base,
             &new_tip,
             high_level::RunOptions {
-                strategy,
+                base_strategy,
                 is_dry_run: dry_run,
                 in_place,
             },

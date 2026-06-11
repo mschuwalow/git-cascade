@@ -2,7 +2,7 @@ use crate::Result;
 use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_stored_plan};
-use crate::state::{Strategy, read_state};
+use crate::state::{BaseStrategy, read_state};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -31,9 +31,9 @@ pub(super) enum Command {
         /// Replacement ref or commit-ish for the old root tip.
         #[arg(long, value_name = "REF")]
         new_tip: String,
-        /// Replay strategy for dependent branches.
-        #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
-        strategy: Strategy,
+        /// Base selection strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = BaseStrategy::PreserveForkPoints)]
+        base_strategy: BaseStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -68,10 +68,10 @@ pub(super) fn run(command: Command) -> Result<()> {
         Command::Apply {
             name,
             new_tip,
-            strategy,
+            base_strategy,
             dry_run,
             in_place,
-        } => apply(name, &new_tip, strategy, dry_run, in_place),
+        } => apply(name, &new_tip, base_strategy, dry_run, in_place),
         Command::List => list(),
         Command::Show { name } => show(&name),
         Command::Remove { name } => remove(name),
@@ -100,7 +100,7 @@ fn create(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Resul
 fn apply(
     name: PlanName,
     new_tip: &str,
-    strategy: Strategy,
+    base_strategy: BaseStrategy,
     is_dry_run: bool,
     in_place: bool,
 ) -> Result<()> {
@@ -110,7 +110,7 @@ fn apply(
     let options = ApplyOptions {
         plan_name: name,
         new_tip_input: new_tip.to_owned(),
-        strategy,
+        base_strategy,
         in_place,
     };
 

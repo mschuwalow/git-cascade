@@ -202,7 +202,7 @@ git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1
 
 `replay` moves the same kind of dependent branch stack as `sync`, `restack`, and `landed`, but it does not infer the situation for you. You provide the before/after refs directly.
 
-The targeted workflow commands always use `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. `replay` also defaults to `move-to-current-tips`, but it exposes `--strategy` for explicit-control cases.
+The targeted workflow commands always use `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. `replay` also defaults to `move-to-current-tips`, but it exposes `--base-strategy` for explicit-control cases.
 
 Preview the generic replay first:
 
@@ -230,7 +230,7 @@ The targeted workflow commands and explicit replay generate plans for you:
 
 Generated plans are deleted after a successful apply. If replay stops on a conflict, the generated plan is kept and the active state file points to it, so `git cascade continue` can recover.
 
-By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` strategy. Use `replay --strategy ...` or `plan apply --strategy ...` when you need a different strategy.
+By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` base strategy. Use `replay --base-strategy ...` or `plan apply --base-strategy ...` when you need a different strategy.
 
 ## Conflicts
 
@@ -309,15 +309,15 @@ git cascade plan apply stack --new-tip pr-1 --dry-run
 Use `move-to-current-tips` to replay every child onto the parent's rewritten apply-time tip:
 
 ```sh
-git cascade plan apply stack --new-tip pr-1 --strategy move-to-current-tips
+git cascade plan apply stack --new-tip pr-1 --base-strategy move-to-current-tips
 ```
 
 Use `move-to-planned-tips` when children should move to each parent's rewritten planned tip, ignoring commits added to the parent after planning.
 
-The low-level `plan apply` default strategy is `preserve-fork-points`:
+The low-level `plan apply` default base strategy is `preserve-fork-points`:
 
 ```sh
-git cascade plan apply stack --new-tip pr-1 --strategy preserve-fork-points
+git cascade plan apply stack --new-tip pr-1 --base-strategy preserve-fork-points
 ```
 
 Replay in the current worktree instead of a temporary worktree:

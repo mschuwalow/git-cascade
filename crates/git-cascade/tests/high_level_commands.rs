@@ -47,8 +47,9 @@ fn restack_dry_run_does_not_write_generated_plan_or_move_refs() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("# git-cascade apply --dry-run")
-                .and(predicate::str::contains("strategy move-to-current-tips")),
+            predicate::str::contains("# git-cascade apply --dry-run").and(
+                predicate::str::contains("base-strategy move-to-current-tips"),
+            ),
         );
 
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
@@ -189,8 +190,9 @@ fn replay_dry_run_does_not_write_generated_plan_or_move_refs() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("# git-cascade apply --dry-run")
-                .and(predicate::str::contains("strategy move-to-current-tips")),
+            predicate::str::contains("# git-cascade apply --dry-run").and(
+                predicate::str::contains("base-strategy move-to-current-tips"),
+            ),
         );
 
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
@@ -237,8 +239,9 @@ fn sync_dry_run_does_not_write_generated_plan_or_move_refs() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("# git-cascade apply --dry-run")
-                .and(predicate::str::contains("strategy move-to-current-tips")),
+            predicate::str::contains("# git-cascade apply --dry-run").and(
+                predicate::str::contains("base-strategy move-to-current-tips"),
+            ),
         );
 
     assert_eq!(repo.rev_parse("pr-1"), old_pr1);
