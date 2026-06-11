@@ -202,9 +202,9 @@ fn generation_skips_branch_with_merged_local_work() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "skipping branch `pr-2`: it merges history that is not part of the old tip",
-        ));
+        .stderr(predicate::str::contains(format!(
+            "skipping branch `pr-2`: merge commit `{old_pr2}`"
+        )));
 
     let plan_yaml = std::fs::read_to_string(repo.plan_path("stack")).unwrap();
     assert!(!plan_yaml.contains("pr-2"));
@@ -334,6 +334,37 @@ fn apply_dry_run_prints_flattened_merges() {
 
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+/// Criss-cross history with the target makes the fork point ambiguous; the
+/// branch is skipped with a warning instead of aborting the run.
+#[test]
+fn sync_skips_criss_cross_branch() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "m0");
+    repo.commit_file("m1.txt", "m1\n", "m1");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    // Build a criss-cross between main and another branch: each merges the
+    // other's pre-merge tip.
+    repo.switch_new_at("cross", "main~1");
+    repo.commit_file("cross.txt", "x\n", "x1");
+    let cross_tip = repo.rev_parse("cross");
+    let main_tip = repo.rev_parse("main");
+    repo.git_ok(["merge", "--no-ff", &main_tip, "-m", "cross merges main"]);
+    let old_cross = repo.rev_parse("cross");
+    repo.switch("main");
+    repo.git_ok(["merge", "--no-ff", &cross_tip, "-m", "main merges cross"]);
+    repo.commit_file("m2.txt", "m2\n", "m2");
+
+    repo.cascade()
+        .arg("sync")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("skipping branch `cross`"));
+
+    assert_eq!(repo.rev_parse("cross"), old_cross);
+    assert_eq!(repo.merge_base("main", "pr-1"), repo.rev_parse("main"));
 }
 
 /// main -> pr-1 (a1, a2, a3); pr-2 forks at a1, then merges a2 and a3. The

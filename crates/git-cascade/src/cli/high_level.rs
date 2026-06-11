@@ -128,9 +128,13 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
             continue;
         }
 
-        let Some(fork_point) = git.unique_merge_base(&onto_tip, &branch.tip)? else {
+        // Criss-cross branches are skipped here and warned about during
+        // plan generation.
+        let mut bases = git.merge_bases_all(&onto_tip, &branch.tip)?;
+        if bases.len() != 1 {
             continue;
-        };
+        }
+        let fork_point = bases.remove(0);
         if fork_point == onto_tip {
             continue;
         }

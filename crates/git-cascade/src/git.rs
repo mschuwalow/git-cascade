@@ -544,7 +544,7 @@ where
         .collect()
 }
 
-pub fn unique_merge_base_from(
+fn unique_merge_base_from(
     mut bases: Vec<String>,
     left: &str,
     right: &str,

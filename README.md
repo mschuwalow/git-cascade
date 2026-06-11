@@ -236,10 +236,15 @@ By default, generated one-shot commands replay each child branch onto its parent
 
 Dependent branches are replayed along their first-parent chain, producing linear results:
 
-- A merge of target-branch history (typically a previous `git merge main` to catch up) is flattened away: the merged-in commits are already part of the new base, and the branch becomes linear. Conflicts that were resolved in the merge may re-fire during replay and are resolved through the normal conflict flow.
+- A merge of target-branch history (typically a previous `git merge main` to catch up) is flattened away: the merged-in commits are already part of the new base, and the branch becomes linear.
 - A merge of history that the new tip does not contain (an unrelated local branch, or stacked work) cannot be flattened. Such branches are skipped during plan generation with a warning, or rejected at apply time; rebase them to linearize first.
 
-Fork points that are ambiguous because of criss-cross merges require an explicit `--old-base`.
+Two caveats about flattening:
+
+- Conflicts that were resolved in a flattened merge re-fire during replay and are resolved through the normal conflict flow. Edits that were made only in the merge commit itself, to content neither side had touched, are not replayed and disappear with the merge.
+- Branches that already start at their replay base are left untouched, including their merges. Linearization happens when a branch is actually replayed, not on no-op runs.
+
+Fork points that are ambiguous because of criss-cross merges make a branch unplannable; it is skipped with a warning.
 
 ## Conflicts
 

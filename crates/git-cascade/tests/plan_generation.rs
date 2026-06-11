@@ -456,7 +456,7 @@ fn plan_skips_branch_that_merged_sibling_work() {
         .assert()
         .success()
         .stderr(predicate::str::contains(
-            "skipping branch `pr-2`: it merges history that is not part of the old tip",
+            "skipping branch `pr-2`: merge commit `",
         ));
 
     let plan = read_plan(&repo, "stack");
