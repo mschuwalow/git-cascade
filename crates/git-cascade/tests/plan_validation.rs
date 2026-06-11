@@ -114,6 +114,47 @@ fn apply_validation_allows_added_dependent_commits() {
     validate_plan_for_apply(&git, &plan).unwrap();
 }
 
+/// The planned tip being reachable is not enough: if the branch was moved to
+/// a merge that only carries it as a second parent, the "extra" commits are
+/// foreign first-parent history and must not be replayed as the branch's own
+/// work.
+#[test]
+fn apply_validation_rejects_branch_extended_through_second_parent() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    let plan = read_plan(&repo, "stack");
+    let git = Git::new(repo.path());
+
+    // side picks up pr-2 through a merge; pr-2 now points at that merge, so
+    // its planned tip is reachable but only as a second parent.
+    repo.switch_new_at("side", "main");
+    repo.commit_file("side.txt", "side\n", "side work");
+    repo.git_ok(["merge", "--no-ff", "pr-2", "-m", "merge pr-2"]);
+    repo.git_ok(["branch", "-f", "pr-2", "side"]);
+    repo.switch("main");
+
+    validate_plan(&git, &plan).unwrap();
+    let error = validate_plan_for_apply(&git, &plan)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("branch `pr-2` no longer extends planned tip"),
+        "unexpected error: {error}"
+    );
+}
+
 #[test]
 fn validation_rejects_dependency_parent_mismatch() {
     let repo = linear_stack();

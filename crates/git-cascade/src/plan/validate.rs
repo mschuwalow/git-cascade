@@ -76,6 +76,20 @@ pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<String, B
         }
 
         let extra_commits = first_parent_chain(git, tip, &actual)?;
+        // Reachability alone is not enough: the planned tip must sit on the
+        // current tip's first-parent chain, otherwise the "extra" commits are
+        // foreign history that joined through a merge's second parent. The
+        // interior of the chain is contiguous by construction of the
+        // first-parent walk, and its last commit is `actual`, so checking the
+        // oldest commit suffices.
+        if let Some(first) = extra_commits.first()
+            && first.parents.first().map(String::as_str) != Some(tip)
+        {
+            return invalid(format!(
+                "branch `{}` no longer extends planned tip `{}` by first parent: commit `{}` added after plan generation starts elsewhere",
+                node.branch, tip, first.oid
+            ));
+        }
         branch_refs.insert(
             node.branch.clone(),
             BranchRef {
