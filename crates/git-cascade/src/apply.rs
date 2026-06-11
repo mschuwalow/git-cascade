@@ -137,6 +137,9 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     } else {
         let plan_name = state.plan_name.clone();
         let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
+        // Branch refs are not re-checked here: they may legitimately already
+        // point at rewritten tips when resuming a final update.
+        validate_plan(git, &plan)?;
         run_apply_state(&plan, &mut state_writer, &mut backend, &mut state)
     }
 }

@@ -376,6 +376,38 @@ fn continue_resumes_replay_phase_after_crash() {
 }
 
 #[test]
+fn continue_rejects_tampered_plan_but_abort_recovers() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure();
+
+    // Tamper with the stored plan: duplicate a planned commit.
+    let plan_path = repo.plan_path("stack");
+    let mut plan =
+        git_cascade::plan::Plan::from_yaml(&std::fs::read_to_string(&plan_path).unwrap()).unwrap();
+    let commit = plan.nodes[0].commits[0].clone();
+    plan.nodes[0].commits.push(commit);
+    std::fs::write(&plan_path, serde_yaml::to_string(&plan).unwrap()).unwrap();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid plan"));
+    assert!(repo.common_dir().join("cascade/state.yaml").exists());
+
+    repo.cascade()
+        .arg("abort")
+        .assert()
+        .success()
+        .stdout("aborted cascade operation\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
 fn continue_can_stop_again_on_later_conflict() {
     let repo = repeated_conflict_stack();
     let old_pr2 = repo.rev_parse("pr-2");
