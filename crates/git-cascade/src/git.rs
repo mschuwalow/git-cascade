@@ -355,6 +355,12 @@ impl Git {
             .unwrap_or_default())
     }
 
+    /// The unique merge base of two commits, or an error when the history is
+    /// criss-crossed and the fork point is ambiguous.
+    pub fn unique_merge_base(&self, left: &str, right: &str) -> Result<Option<String>> {
+        unique_merge_base_from(self.merge_bases_all(left, right)?, left, right)
+    }
+
     pub fn rev_list_reverse(&self, base: &str, tip: &str) -> Result<Vec<String>> {
         let range = format!("{base}..{tip}");
         Ok(self
@@ -678,6 +684,20 @@ where
     args.into_iter()
         .map(|arg| arg.as_ref().to_owned())
         .collect()
+}
+
+pub fn unique_merge_base_from(
+    mut bases: Vec<String>,
+    left: &str,
+    right: &str,
+) -> Result<Option<String>> {
+    match bases.len() {
+        0 => Ok(None),
+        1 => Ok(Some(bases.remove(0))),
+        _ => Err(Error::InvalidInvocation(format!(
+            "`{left}` and `{right}` have multiple merge bases (criss-cross history); pass an explicit base commit"
+        ))),
+    }
 }
 
 fn display_args(args: &[OsString]) -> String {

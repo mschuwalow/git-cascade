@@ -32,7 +32,7 @@ fn plan_creates_named_plan_for_linear_stack() {
         .stdout("created plan `stack`\n");
 
     let plan = read_plan(&repo, "stack");
-    assert_eq!(plan.version, 2);
+    assert_eq!(plan.version, 1);
     assert_eq!(plan.source.name, "stack");
     assert_eq!(plan.source.base, initial);
     assert_eq!(plan.source.tip, pr1_b);

@@ -37,6 +37,9 @@ enum Command {
         /// Base branch or ref the branch stack forked from. Defaults to the default branch.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// Base selection strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
+        base_strategy: BaseStrategy,
         /// How merge commits in dependent branches are reproduced.
         #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
         merge_strategy: MergeStrategy,
@@ -76,6 +79,9 @@ enum Command {
         /// Base branch or ref to sync stacks onto. Defaults to the current default branch.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// Base selection strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
+        base_strategy: BaseStrategy,
         /// How merge commits in dependent branches are reproduced.
         #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
         merge_strategy: MergeStrategy,
@@ -97,6 +103,9 @@ enum Command {
         /// Explicit old range base for fast-forward or ambiguous landings.
         #[arg(long, value_name = "REF")]
         old_base: Option<String>,
+        /// Base selection strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
+        base_strategy: BaseStrategy,
         /// How merge commits in dependent branches are reproduced.
         #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
         merge_strategy: MergeStrategy,
@@ -143,13 +152,19 @@ where
         Command::Restack {
             branch,
             base,
+            base_strategy,
             merge_strategy,
             dry_run,
             in_place,
         } => high_level::restack(
             branch,
             base,
-            high_level::RunOptions::move_to_current_tips(merge_strategy, dry_run, in_place),
+            high_level::RunOptions {
+                base_strategy,
+                merge_strategy,
+                is_dry_run: dry_run,
+                in_place,
+            },
         ),
         Command::Replay {
             old_tip,
@@ -172,17 +187,24 @@ where
         ),
         Command::Sync {
             base,
+            base_strategy,
             merge_strategy,
             dry_run,
             in_place,
         } => high_level::sync(
             base,
-            high_level::RunOptions::move_to_current_tips(merge_strategy, dry_run, in_place),
+            high_level::RunOptions {
+                base_strategy,
+                merge_strategy,
+                is_dry_run: dry_run,
+                in_place,
+            },
         ),
         Command::Landed {
             old_tip,
             onto,
             old_base,
+            base_strategy,
             merge_strategy,
             dry_run,
             in_place,
@@ -190,7 +212,12 @@ where
             &old_tip,
             onto,
             old_base,
-            high_level::RunOptions::move_to_current_tips(merge_strategy, dry_run, in_place),
+            high_level::RunOptions {
+                base_strategy,
+                merge_strategy,
+                is_dry_run: dry_run,
+                in_place,
+            },
         ),
         Command::Status => status::status(),
         Command::Abort => abort(),

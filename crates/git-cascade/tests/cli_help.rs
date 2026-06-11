@@ -53,7 +53,8 @@ fn sync_help_mentions_default_branch_options() {
                 .and(predicate::str::contains("--onto").not())
                 .and(predicate::str::contains("--old-tip").not())
                 .and(predicate::str::contains("--old-base").not())
-                .and(predicate::str::contains("--base-strategy").not()),
+                .and(predicate::str::contains("--base-strategy"))
+                .and(predicate::str::contains("--merge-strategy")),
         );
 }
 
@@ -92,7 +93,8 @@ fn restack_help_mentions_common_options() {
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
                 .and(predicate::str::contains("--onto").not())
-                .and(predicate::str::contains("--base-strategy").not()),
+                .and(predicate::str::contains("--base-strategy"))
+                .and(predicate::str::contains("--merge-strategy")),
         );
 }
 
@@ -111,7 +113,8 @@ fn landed_help_mentions_landing_options() {
                 .and(predicate::str::contains("--old-base"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--base-strategy").not()),
+                .and(predicate::str::contains("--base-strategy"))
+                .and(predicate::str::contains("--merge-strategy")),
         );
 }
 

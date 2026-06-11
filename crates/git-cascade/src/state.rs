@@ -21,9 +21,7 @@ pub struct ApplyState {
     pub updated_at: String,
     pub pid: u32,
     pub new_tip: String,
-    #[serde(alias = "strategy")]
     pub base_strategy: BaseStrategy,
-    #[serde(default)]
     pub merge_strategy: MergeStrategy,
     pub current: Option<CurrentState>,
     pub worktree: WorktreeState,
@@ -89,13 +87,12 @@ impl std::fmt::Display for BaseStrategy {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
 pub enum MergeStrategy {
     /// Replay each merge commit's original tree resolution onto the rewritten
     /// parents, preserving manual conflict resolutions.
-    #[default]
     ReplayResolution,
     /// Re-run the merge on the rewritten parents, recomputing resolutions.
     ReMerge,
@@ -118,10 +115,9 @@ impl std::fmt::Display for MergeStrategy {
 
 /// The replay operation that was interrupted by a conflict, so `continue`
 /// can resume it correctly.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReplayOp {
-    #[default]
     CherryPick,
     MergeResolution,
     ReMerge,
@@ -148,9 +144,7 @@ pub struct CurrentState {
     pub branch: String,
     pub commit: String,
     pub worktree: String,
-    #[serde(default)]
     pub op: ReplayOp,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mapped_parents: Vec<String>,
 }
 
@@ -379,7 +373,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
     let now = timestamp()?;
 
     Ok(ApplyState {
-        version: 2,
+        version: 1,
         phase: Phase::Replay,
         plan_name: input.plan_name.clone(),
         plan_id: *input.plan_id,

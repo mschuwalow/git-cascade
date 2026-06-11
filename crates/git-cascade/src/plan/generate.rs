@@ -2,7 +2,7 @@ use super::validate::validate_plan;
 use super::{
     Dependency, Node, PLAN_VERSION, Plan, PlanCommit, PlanId, PlanName, Repository, Source,
 };
-use crate::git::{Git, LocalBranch};
+use crate::git::{Git, LocalBranch, unique_merge_base_from};
 use crate::storage::Storage;
 use crate::{Error, Result};
 use std::collections::{HashMap, HashSet};
@@ -45,14 +45,7 @@ impl<'a> GitQueries<'a> {
         }
     }
 
-    /// The unique merge base of two commits, or an error when the history is
-    /// criss-crossed and the fork point is ambiguous.
-    fn unique_merge_base(
-        &mut self,
-        left: &str,
-        right: &str,
-        branch: &str,
-    ) -> Result<Option<String>> {
+    fn unique_merge_base(&mut self, left: &str, right: &str) -> Result<Option<String>> {
         let key = (left.to_owned(), right.to_owned());
         let bases = if let Some(bases) = self.merge_bases.get(&key) {
             bases.clone()
@@ -62,13 +55,7 @@ impl<'a> GitQueries<'a> {
             bases
         };
 
-        match bases.len() {
-            0 => Ok(None),
-            1 => Ok(Some(bases[0].clone())),
-            _ => Err(Error::InvalidInvocation(format!(
-                "branch `{branch}` has multiple merge bases with `{left}` (criss-cross history); pass an explicit base with `plan create --old-base <ref>` or exclude the branch"
-            ))),
-        }
+        unique_merge_base_from(bases, left, right)
     }
 
     fn is_ancestor(&mut self, ancestor: &str, descendant: &str) -> Result<bool> {
@@ -185,16 +172,12 @@ fn old_range_base(
     old_base_input: &str,
     old_base_tip: &str,
 ) -> Result<String> {
-    let mut bases = git.merge_bases_all(old_tip, old_base_tip)?;
-    match bases.len() {
-        0 => Err(Error::InvalidInvocation(format!(
-            "old base `{old_base_input}` has no merge base with old tip for plan `{name}`"
-        ))),
-        1 => Ok(bases.remove(0)),
-        _ => Err(Error::InvalidInvocation(format!(
-            "old base `{old_base_input}` has multiple merge bases with the old tip for plan `{name}` (criss-cross history); pass a concrete fork-point commit as --old-base"
-        ))),
-    }
+    git.unique_merge_base(old_tip, old_base_tip)?
+        .ok_or_else(|| {
+            Error::InvalidInvocation(format!(
+                "old base `{old_base_input}` has no merge base with old tip for plan `{name}`"
+            ))
+        })
 }
 
 fn old_tip_local_branch(git: &Git, old_tip: &str) -> Result<Option<String>> {
@@ -254,14 +237,13 @@ fn next_candidate(
             continue;
         }
 
-        // Branches already contained in the old tip are never candidates;
-        // check this before merge-base uniqueness so merged-away branches
-        // with criss-cross history do not abort generation.
+        // Merged-away branches are never candidates; skip them before the
+        // merge-base uniqueness check.
         if queries.is_ancestor(&branch.tip, source_old_tip)? {
             continue;
         }
 
-        if let Some(base) = queries.unique_merge_base(source_old_tip, &branch.tip, &branch.name)?
+        if let Some(base) = queries.unique_merge_base(source_old_tip, &branch.tip)?
             && base != source_old_base
             && queries.is_ancestor(source_old_base, &base)?
         {
@@ -280,8 +262,7 @@ fn next_candidate(
         }
 
         for parent in nodes {
-            let Some(base) = queries.unique_merge_base(&parent.tip, &branch.tip, &branch.name)?
-            else {
+            let Some(base) = queries.unique_merge_base(&parent.tip, &branch.tip)? else {
                 continue;
             };
 

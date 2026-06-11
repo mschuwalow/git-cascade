@@ -243,8 +243,7 @@ fn replay_pending_branches(
         .map(|node| (node.branch.as_str(), node))
         .collect::<HashMap<_, _>>();
     let mut mappings = state.mappings.clone();
-    // The old root tip maps to its replacement, so merges of the old root
-    // range tip replay onto the new tip.
+    // Merges of the old root tip replay onto its replacement.
     mappings
         .entry(plan.source.tip.clone())
         .or_insert_with(|| state.new_tip.clone());
@@ -288,8 +287,7 @@ fn replay_pending_branches(
             mappings.insert(node.base().to_owned(), base.clone());
 
             if base == node.base() {
-                // The branch already starts at its replay base; keep its
-                // existing commits instead of rewriting them.
+                // Already at its replay base; keep the existing commits.
                 for commit in &commits {
                     mappings.insert(commit.oid.clone(), commit.oid.clone());
                 }
@@ -323,9 +321,7 @@ fn replay_pending_branches(
             start_commit_index,
             was_resuming,
         )?;
-        // The branch's first-parent chain is transplanted onto the selected
-        // replay base, even when the chain root's recorded parent is not the
-        // node base (e.g. the branch merged the target after forking).
+        // Transplant the first-parent chain onto the selected replay base.
         let chain_root = first_parent_chain_root(&commits).map(|commit| commit.oid.clone());
         let selected_base = selected_bases.get(&node.branch).cloned();
         for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
@@ -427,9 +423,8 @@ fn replay_pending_branches(
     Ok(())
 }
 
-/// Maps a commit's parents through the rewrite. Parents without a recorded
-/// mapping are untouched outside history and map to themselves; validation
-/// guarantees no other case reaches apply.
+/// Maps a commit's parents through the rewrite; unmapped parents are
+/// untouched outside history and map to themselves.
 fn mapped_parents(commit: &PlanCommit, mappings: &BTreeMap<String, String>) -> Vec<String> {
     commit
         .parents
@@ -603,17 +598,6 @@ fn replay_commits_from_extra(
     if let Some(extra) = extra_commits.get(&node.branch) {
         commits.extend(extra.iter().cloned());
     }
-
-    // Old state files recorded commits as plain oids of a linear chain;
-    // synthesize parents accordingly.
-    let mut previous = node.base().to_owned();
-    for commit in &mut commits {
-        if commit.parents.is_empty() {
-            commit.parents = vec![previous.clone()];
-        }
-        previous = commit.oid.clone();
-    }
-
     commits
 }
 

@@ -554,8 +554,8 @@ impl ReplayBackend for DryRunReplayBackend {
     }
 
     fn is_redundant_merge(&mut self, _mapped_parents: &[String]) -> Result<bool> {
-        // Redundancy depends on rewritten commits that do not exist during a
-        // dry run; the merge replay is always printed with an annotation.
+        // Rewritten commits do not exist during a dry run; always print the
+        // merge replay with an annotation instead.
         Ok(false)
     }
 
@@ -717,9 +717,8 @@ fn is_empty_cherry_pick(worktree_git: &Git) -> Result<bool> {
         && !worktree_git.has_staged_changes()?)
 }
 
-/// Completes a `replay-resolution` merge: commits the staged result tree with
-/// the mapped parents, preserving the original message and author, and moves
-/// the worktree onto the new merge commit.
+/// Commits the staged merge result with the mapped parents, preserving the
+/// original message and author.
 fn finish_merge_resolution(
     worktree_git: &Git,
     mapped_parents: &[String],

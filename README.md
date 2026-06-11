@@ -202,7 +202,7 @@ git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1
 
 `replay` moves the same kind of dependent branch stack as `sync`, `restack`, and `landed`, but it does not infer the situation for you. You provide the before/after refs directly.
 
-The targeted workflow commands always use `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. `replay` also defaults to `move-to-current-tips`, but it exposes `--base-strategy` for explicit-control cases.
+The targeted workflow commands and `replay` default to `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. All of them expose `--base-strategy` for explicit-control cases.
 
 Preview the generic replay first:
 
@@ -230,7 +230,7 @@ The targeted workflow commands and explicit replay generate plans for you:
 
 Generated plans are deleted after a successful apply. If replay stops on a conflict, the generated plan is kept and the active state file points to it, so `git cascade continue` can recover.
 
-By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` base strategy. Use `replay --base-strategy ...` or `plan apply --base-strategy ...` when you need a different strategy.
+By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` base strategy. Pass `--base-strategy ...` when you need a different strategy.
 
 ## Merge Commits
 

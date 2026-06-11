@@ -29,11 +29,8 @@ pub fn validate_plan_for_apply(git: &Git, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-/// Apply-time mappability of parents that have no structural mapping: they
-/// are kept identically, which is only sound when the rewritten result still
-/// reaches them. A parent strictly inside the rewritten root range is invalid
-/// unless the new tip retains it (e.g. `sync`, where the range is not
-/// actually rewritten).
+/// Structurally unmapped parents are kept identically, which is only sound
+/// when the new tip still reaches them.
 pub fn validate_unmapped_parents_for_apply(
     git: &Git,
     plan: &Plan,
@@ -44,8 +41,7 @@ pub fn validate_unmapped_parents_for_apply(
 
     for node in &plan.nodes {
         let mut mappable = chain_mappable_oids(plan, node, &node_by_branch);
-        // The first-parent chain root's parent is substituted with the
-        // selected replay base at apply time; it never maps by identity.
+        // The chain root's parent is substituted with the replay base.
         if let Some(chain_root) = super::first_parent_chain_root(node.commits())
             && let Some(fork_parent) = chain_root.first_parent()
         {
@@ -297,11 +293,8 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-/// §5 well-definedness, structural part: merge parents may only reference
-/// commits with a known mapping (own chain, ancestor nodes, the source tip)
-/// or history outside every node. Whether unmapped parents are actually
-/// retained by the rewrite is checked at apply time by
-/// [`validate_unmapped_parents_for_apply`].
+/// Merge parents may only reference commits with a known mapping (own chain,
+/// ancestor nodes, the source tip) or history outside every node.
 fn validate_commit_parent_mappability(plan: &Plan) -> Result<()> {
     let node_by_branch = node_by_branch(plan)?;
     let all_node_commits = all_node_commit_oids(plan);

@@ -15,14 +15,12 @@ pub use validate::{
     validate_unmapped_parents_for_apply,
 };
 
-/// Current plan schema version. Version 1 (linear commit lists) is still
-/// accepted on read; see [`Plan::from_yaml`].
-pub const PLAN_VERSION: u32 = 2;
+pub const PLAN_VERSION: u32 = 1;
 
 /// The first commit on the tip's first-parent chain whose own first parent
-/// lies outside `commits`. Its first parent is the branch's effective fork
-/// point; apply substitutes it with the selected replay base so the chain is
-/// transplanted even when it does not start at the node base.
+/// lies outside `commits`. Apply substitutes that parent with the selected
+/// replay base so the chain is transplanted even when it does not start at
+/// the node base.
 pub fn first_parent_chain_root(commits: &[PlanCommit]) -> Option<&PlanCommit> {
     let by_oid = commits
         .iter()
@@ -51,26 +49,8 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Deserializes a stored plan and normalizes it to the current schema.
-    ///
-    /// Version 1 plans recorded commits as plain oid strings of a linear
-    /// range; parents are synthesized accordingly.
     pub fn from_yaml(yaml: &str) -> Result<Self> {
-        let mut plan: Self = serde_yaml::from_str(yaml)?;
-        plan.normalize_commit_parents();
-        Ok(plan)
-    }
-
-    fn normalize_commit_parents(&mut self) {
-        for node in &mut self.nodes {
-            let mut previous = node.base.clone();
-            for commit in &mut node.commits {
-                if commit.parents.is_empty() {
-                    commit.parents = vec![previous.clone()];
-                }
-                previous = commit.oid.clone();
-            }
-        }
+        Ok(serde_yaml::from_str(yaml)?)
     }
 }
 
@@ -194,10 +174,7 @@ pub struct Source {
 }
 
 /// A commit to replay, with its recorded parents.
-///
-/// Deserializes from either a plain oid string (version 1 plans; parents are
-/// synthesized by [`Plan::from_yaml`]) or a structured `{oid, parents}` map.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlanCommit {
     pub oid: String,
     pub parents: Vec<String>,
@@ -217,32 +194,6 @@ impl PlanCommit {
 
     pub fn first_parent(&self) -> Option<&str> {
         self.parents.first().map(String::as_str)
-    }
-}
-
-impl<'de> Deserialize<'de> for PlanCommit {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Plain(String),
-            Structured {
-                oid: String,
-                #[serde(default)]
-                parents: Vec<String>,
-            },
-        }
-
-        Ok(match Repr::deserialize(deserializer)? {
-            Repr::Plain(oid) => Self {
-                oid,
-                parents: Vec::new(),
-            },
-            Repr::Structured { oid, parents } => Self { oid, parents },
-        })
     }
 }
 

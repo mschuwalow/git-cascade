@@ -13,21 +13,6 @@ pub(super) struct RunOptions {
     pub(super) in_place: bool,
 }
 
-impl RunOptions {
-    pub(super) fn move_to_current_tips(
-        merge_strategy: MergeStrategy,
-        is_dry_run: bool,
-        in_place: bool,
-    ) -> Self {
-        Self {
-            base_strategy: BaseStrategy::MoveToCurrentTips,
-            merge_strategy,
-            is_dry_run,
-            in_place,
-        }
-    }
-}
-
 pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOptions) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
@@ -144,8 +129,7 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
             continue;
         }
 
-        let Some(fork_point) = unique_merge_base(git, &onto_tip, &branch.tip, &branch.name, onto)?
-        else {
+        let Some(fork_point) = git.unique_merge_base(&onto_tip, &branch.tip)? else {
             continue;
         };
         if fork_point == onto_tip {
@@ -153,7 +137,8 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
         }
 
         oldest_fork_point = Some(if let Some(current) = oldest_fork_point {
-            unique_merge_base(git, &current, &fork_point, &branch.name, onto)?.unwrap_or(current)
+            git.unique_merge_base(&current, &fork_point)?
+                .unwrap_or(current)
         } else {
             fork_point
         });
@@ -165,23 +150,6 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
             "cannot infer old base for sync; oldest fork point `{base}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
         ))
     })
-}
-
-fn unique_merge_base(
-    git: &Git,
-    left: &str,
-    right: &str,
-    branch: &str,
-    onto: &str,
-) -> Result<Option<String>> {
-    let mut bases = git.merge_bases_all(left, right)?;
-    match bases.len() {
-        0 => Ok(None),
-        1 => Ok(Some(bases.remove(0))),
-        _ => Err(Error::InvalidInvocation(format!(
-            "branch `{branch}` has multiple merge bases with `{onto}` (criss-cross history); use `git cascade replay --old-base <ref> ...` with an explicit base"
-        ))),
-    }
 }
 
 struct GeneratedApply<'a> {
