@@ -27,6 +27,7 @@ fn apply_dry_run_linear_stack_prints_commands_without_mutating_refs() {
         ])
         .assert()
         .success();
+    rewrite_anchor(&repo);
     let pr2_tip = repo.rev_parse("pr-2");
     let pr3_tip = repo.rev_parse("pr-3");
 
@@ -88,6 +89,7 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
         ])
         .assert()
         .success();
+    rewrite_anchor(&repo);
 
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--dry-run"])
@@ -190,6 +192,7 @@ fn apply_dry_run_includes_added_dependent_commits() {
         ])
         .assert()
         .success();
+    rewrite_anchor(&repo);
     repo.switch("pr-2");
     let late_commit = repo.commit_file("late.txt", "late\n", "late");
     repo.switch("main");
@@ -225,6 +228,8 @@ fn apply_dry_run_in_place_includes_restore_checkout() {
         ])
         .assert()
         .success();
+    repo.switch("main");
+    repo.commit_file("main2.txt", "new base\n", "new base");
     repo.switch("pr-1");
     repo.git_ok(["rebase", "main"]);
     repo.switch("pr-2");
@@ -286,4 +291,52 @@ fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
         .assert()
         .success()
         .stdout("applied cascade plan\n");
+}
+
+#[test]
+fn apply_dry_run_skips_branches_already_at_replay_base() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    let pr2_tip = repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(format!(
+                "already starts at its replay base; keeping {pr2_tip}"
+            ))
+            .and(predicate::str::contains("cherry-pick").not())
+            .and(predicate::str::contains(format!(
+                "update refs/heads/pr-2 {pr2_tip} {pr2_tip}"
+            ))),
+        );
+
+    assert_eq!(repo.rev_parse("pr-2"), pr2_tip);
+}
+
+fn rewrite_anchor(repo: &TestRepo) {
+    repo.switch("main");
+    repo.commit_file("main2.txt", "new base\n", "new base");
+    repo.switch("pr-1");
+    repo.git_ok(["rebase", "main"]);
+    repo.switch("main");
 }

@@ -1,37 +1,66 @@
 use super::{Dependency, Node, Plan, branches_in_topological_order};
 use crate::git::Git;
 use crate::{Error, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ValidateOptions {
-    pub check_branch_refs: bool,
+/// Current state of a planned branch ref, as observed by [`validate_branch_refs`].
+#[derive(Debug, Clone)]
+pub struct BranchRef {
+    /// The branch's current tip commit.
+    pub expected_tip: String,
+    /// Commits added to the branch after plan generation, oldest first.
+    pub extra_commits: Vec<String>,
 }
 
 pub fn validate_plan(git: &Git, plan: &Plan) -> Result<()> {
-    validate_plan_with_options(git, plan, ValidateOptions::default())
-}
-
-pub fn validate_plan_for_apply(git: &Git, plan: &Plan) -> Result<()> {
-    validate_plan_with_options(
-        git,
-        plan,
-        ValidateOptions {
-            check_branch_refs: true,
-        },
-    )
-}
-
-pub fn validate_plan_with_options(git: &Git, plan: &Plan, options: ValidateOptions) -> Result<()> {
     validate_shape(plan)?;
     validate_git_objects(git, plan)?;
     validate_git_ranges(git, plan)?;
     validate_parent_reachability(git, plan)?;
-    if options.check_branch_refs {
-        validate_branch_refs(git, plan)?;
-    }
 
     Ok(())
+}
+
+pub fn validate_plan_for_apply(git: &Git, plan: &Plan) -> Result<()> {
+    validate_plan(git, plan)?;
+    validate_branch_refs(git, plan)?;
+
+    Ok(())
+}
+
+/// Checks that planned branches were not rewritten since plan generation and
+/// returns each branch's current tip plus any commits added after planning.
+pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<String, BranchRef>> {
+    let mut branch_refs = BTreeMap::new();
+    for node in &plan.nodes {
+        let tip = node.tip.as_str();
+        let actual = git.local_branch_tip(&node.branch)?;
+        if !git.is_ancestor(tip, &actual)? {
+            return invalid(format!(
+                "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{actual}`",
+                node.branch, tip
+            ));
+        }
+
+        let merges = git.rev_list_merges(tip, &actual)?;
+        if let Some(merge) = merges.first() {
+            return invalid(format!(
+                "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
+                node.branch
+            ));
+        }
+
+        let extra_commits = git.rev_list_reverse(tip, &actual)?;
+        branch_refs.insert(
+            node.branch.clone(),
+            BranchRef {
+                expected_tip: actual,
+                extra_commits,
+            },
+        );
+    }
+
+    Ok(branch_refs)
 }
 
 fn validate_shape(plan: &Plan) -> Result<()> {
@@ -174,29 +203,6 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
             return invalid(format!(
                 "base `{}` for branch `{}` is not reachable from parent `{}` tip `{}`",
                 base, node.branch, parent.branch, parent_tip
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<()> {
-    for node in &plan.nodes {
-        let tip = node.tip.as_str();
-        let actual = git.local_branch_tip(&node.branch)?;
-        if !git.is_ancestor(tip, &actual)? {
-            return invalid(format!(
-                "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{actual}`",
-                node.branch, tip
-            ));
-        }
-
-        let merges = git.rev_list_merges(tip, &actual)?;
-        if let Some(merge) = merges.first() {
-            return invalid(format!(
-                "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
-                node.branch
             ));
         }
     }

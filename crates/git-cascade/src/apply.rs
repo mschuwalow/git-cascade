@@ -1,5 +1,8 @@
 use crate::git::Git;
-use crate::plan::{Node, Plan, PlanName, branches_in_topological_order, validate_plan_for_apply};
+use crate::plan::{
+    BranchRef, Node, Plan, PlanName, branches_in_topological_order, validate_branch_refs,
+    validate_plan,
+};
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
     ApplyState, ApplyStateInput, CurrentState, Phase, RestoreState, StateFile, Strategy,
@@ -11,14 +14,6 @@ use crate::test_hooks;
 use crate::{Error, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-
-#[derive(Debug, Clone)]
-pub struct DryRunOptions {
-    pub plan_name: PlanName,
-    pub new_tip_input: String,
-    pub strategy: Strategy,
-    pub in_place: bool,
-}
 
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
@@ -37,28 +32,11 @@ struct ActualReplayContext<'a> {
     strategy: Strategy,
 }
 
-struct ReplayProgress<'a> {
-    state: &'a mut ApplyState,
-    mappings: &'a mut BTreeMap<String, String>,
-    selected_bases: &'a mut HashMap<String, String>,
-}
-
-#[derive(Debug, Clone)]
-struct BranchReplay {
-    expected_tip: String,
-    extra_commits: Vec<String>,
-}
-
-pub fn dry_run(
-    git: &Git,
-    storage: &Storage,
-    plan: &Plan,
-    options: DryRunOptions,
-) -> Result<String> {
-    validate_plan_for_apply(git, plan)?;
+pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<String> {
+    validate_plan(git, plan)?;
+    let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     let ordered = branches_in_topological_order(plan)?;
-    let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
     let worktree = if options.in_place {
         git.worktree_root()?
     } else {
@@ -74,14 +52,7 @@ pub fn dry_run(
             path: worktree.display().to_string(),
         }
     };
-    let branch_tips = branch_replays
-        .iter()
-        .map(|(branch, replay)| (branch.clone(), replay.expected_tip.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let extra_commits = branch_replays
-        .iter()
-        .map(|(branch, replay)| (branch.clone(), replay.extra_commits.clone()))
-        .collect::<BTreeMap<_, _>>();
+    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
     let mappings = BTreeMap::new();
     let mut state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
@@ -102,7 +73,8 @@ pub fn dry_run(
 }
 
 pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<()> {
-    validate_plan_for_apply(git, plan)?;
+    validate_plan(git, plan)?;
+    let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     let ordered = branches_in_topological_order(plan)?;
     let (worktree_state, worktree) = if options.in_place {
@@ -126,15 +98,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
             worktree,
         )
     };
-    let branch_replays = branch_replays_for_apply(git, plan, &ordered)?;
-    let branch_tips = branch_replays
-        .iter()
-        .map(|(branch, replay)| (branch.clone(), replay.expected_tip.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let extra_commits = branch_replays
-        .iter()
-        .map(|(branch, replay)| (branch.clone(), replay.extra_commits.clone()))
-        .collect::<BTreeMap<_, _>>();
+    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
     let mappings = BTreeMap::new();
     let state = initial_apply_state(ApplyStateInput {
         plan_name: &options.plan_name,
@@ -163,15 +127,6 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
     let mut state = state_file.read_state()?;
-    if !matches!(
-        state.phase,
-        Phase::Conflict | Phase::FinalUpdate | Phase::Deleting
-    ) {
-        return Err(Error::InvalidInvocation(format!(
-            "cannot continue cascade operation in phase `{}`",
-            state.phase
-        )));
-    }
 
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
@@ -293,23 +248,50 @@ fn replay_pending_branches(
             .get(branch.as_str())
             .ok_or_else(|| Error::InvalidPlan(format!("unknown pending branch `{branch}`")))?;
         let branch_index = temp_refs.len() + 1;
-        let was_resuming = state.current.is_some();
-        let mut progress = ReplayProgress {
-            state,
-            mappings: &mut mappings,
-            selected_bases: &mut selected_bases,
-        };
-        let start_commit_index = prepare_branch_replay(
-            node,
-            &nodes,
-            &temp_tips,
-            branch_index,
-            total_branches,
-            backend,
-            &mut progress,
-        )?;
-
         let commits = replay_commits_from_extra(node, &state.extra_commits);
+        let was_resuming = state.current.is_some();
+
+        let start_commit_index = if was_resuming {
+            resume_start_commit_index(node, state, &mappings, &commits)?
+        } else {
+            let base = actual_replay_base(
+                node,
+                ActualReplayContext {
+                    nodes: &nodes,
+                    selected_bases: &selected_bases,
+                    temp_tips: &temp_tips,
+                    mappings: &mappings,
+                    new_tip: &state.new_tip,
+                    strategy: state.strategy,
+                },
+            )?;
+            selected_bases.insert(node.branch.clone(), base.clone());
+            mappings.insert(node.base().to_owned(), base.clone());
+
+            if base == node.base() {
+                // The branch already starts at its replay base; keep its
+                // existing commits instead of rewriting them.
+                for commit in &commits {
+                    mappings.insert(commit.clone(), commit.clone());
+                }
+                let current_tip = commits.last().cloned().ok_or_else(|| {
+                    Error::InvalidPlan(format!("branch `{}` has no commits", node.branch))
+                })?;
+                let (temp_ref, branch_tip) =
+                    backend.skip_replay(plan, node, branch_index, total_branches, &current_tip)?;
+                temp_tips.insert(node.branch.clone(), branch_tip);
+                if !temp_refs.contains(&temp_ref) {
+                    temp_refs.push(temp_ref);
+                }
+                remove_pending_branch(state, &branch)?;
+                checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs)?;
+                continue;
+            }
+
+            backend.prepare_branch(state, branch_index, total_branches, node, &base)?;
+            0
+        };
+
         backend.start_replay(
             branch_index,
             total_branches,
@@ -357,6 +339,7 @@ fn replay_pending_branches(
             temp_refs.push(temp_ref);
         }
         remove_pending_branch(state, &branch)?;
+        checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs)?;
     }
 
     state.current = None;
@@ -366,65 +349,52 @@ fn replay_pending_branches(
     Ok(())
 }
 
-fn prepare_branch_replay(
-    node: &Node,
-    nodes: &HashMap<&str, &Node>,
-    temp_tips: &HashMap<String, String>,
-    branch_index: usize,
-    total_branches: usize,
-    backend: &mut dyn ReplayBackend,
-    progress: &mut ReplayProgress<'_>,
-) -> Result<usize> {
-    if let Some(current) = &progress.state.current {
-        if current.branch != node.branch {
-            return Err(Error::InvalidPlan(format!(
-                "current branch `{}` is not the next pending branch `{}`",
-                current.branch, node.branch
-            )));
-        }
-        if !progress.mappings.contains_key(&current.commit) {
-            return Err(Error::InvalidPlan(format!(
-                "current commit `{}` for branch `{}` has no rewritten mapping",
-                current.commit, current.branch
-            )));
-        }
+/// Persists progress after a branch finished so a crashed apply can resume
+/// from the next pending branch.
+fn checkpoint_completed_branch(
+    state: &mut ApplyState,
+    state_writer: &mut dyn StateWriter,
+    mappings: &BTreeMap<String, String>,
+    temp_refs: &[String],
+) -> Result<()> {
+    state.current = None;
+    state.mappings = mappings.clone();
+    state.completed.temp_refs = temp_refs.to_vec();
+    state_writer.write_state(state)
+}
 
-        let start_commit_index = replay_commits_from_extra(node, &progress.state.extra_commits)
-            .iter()
-            .position(|commit| commit == &current.commit)
-            .map(|index| index + 1)
-            .ok_or_else(|| {
-                Error::InvalidPlan(format!(
-                    "current commit `{}` is not part of branch `{}`",
-                    current.commit, current.branch
-                ))
-            })?;
-        progress.state.current = None;
-        return Ok(start_commit_index);
+fn resume_start_commit_index(
+    node: &Node,
+    state: &mut ApplyState,
+    mappings: &BTreeMap<String, String>,
+    commits: &[String],
+) -> Result<usize> {
+    let current = state.current.as_ref().expect("resume requires current");
+    if current.branch != node.branch {
+        return Err(Error::InvalidPlan(format!(
+            "current branch `{}` is not the next pending branch `{}`",
+            current.branch, node.branch
+        )));
+    }
+    if !mappings.contains_key(&current.commit) {
+        return Err(Error::InvalidPlan(format!(
+            "current commit `{}` for branch `{}` has no rewritten mapping",
+            current.commit, current.branch
+        )));
     }
 
-    let base = actual_replay_base(
-        node,
-        ActualReplayContext {
-            nodes,
-            selected_bases: progress.selected_bases,
-            temp_tips,
-            mappings: progress.mappings,
-            new_tip: &progress.state.new_tip,
-            strategy: progress.state.strategy,
-        },
-    )?;
-    progress
-        .selected_bases
-        .insert(node.branch.clone(), base.clone());
-    progress
-        .mappings
-        .insert(node.base().to_owned(), base.clone());
-    progress.state.phase = Phase::Replay;
-
-    backend.prepare_branch(progress.state, branch_index, total_branches, node, &base)?;
-
-    Ok(0)
+    let start_commit_index = commits
+        .iter()
+        .position(|commit| commit == &current.commit)
+        .map(|index| index + 1)
+        .ok_or_else(|| {
+            Error::InvalidPlan(format!(
+                "current commit `{}` is not part of branch `{}`",
+                current.commit, current.branch
+            ))
+        })?;
+    state.current = None;
+    Ok(start_commit_index)
 }
 
 fn remove_pending_branch(state: &mut ApplyState, branch: &str) -> Result<()> {
@@ -518,47 +488,17 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
     )))
 }
 
-fn branch_replays_for_apply(
-    git: &Git,
-    plan: &Plan,
-    ordered: &[String],
-) -> Result<BTreeMap<String, BranchReplay>> {
-    let nodes = plan
-        .nodes
-        .iter()
-        .map(|node| (node.branch.as_str(), node))
-        .collect::<HashMap<_, _>>();
-    let mut replays = BTreeMap::new();
-
-    for branch in ordered {
-        let node = nodes
-            .get(branch.as_str())
-            .ok_or_else(|| Error::InvalidPlan(format!("unknown node `{branch}` in order")))?;
-        let planned_tip = node.tip.as_str();
-        let expected_tip = git.local_branch_tip(&node.branch)?;
-        if !git.is_ancestor(planned_tip, &expected_tip)? {
-            return Err(Error::InvalidPlan(format!(
-                "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{expected_tip}`",
-                node.branch, planned_tip
-            )));
-        }
-        let extra_commits = git.rev_list_reverse(planned_tip, &expected_tip)?;
-        if let Some(merge) = git.rev_list_merges(planned_tip, &expected_tip)?.first() {
-            return Err(Error::InvalidPlan(format!(
-                "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
-                node.branch
-            )));
-        }
-        replays.insert(
-            node.branch.clone(),
-            BranchReplay {
-                expected_tip,
-                extra_commits,
-            },
-        );
+fn branch_tips_and_extra_commits(
+    branch_refs: BTreeMap<String, BranchRef>,
+) -> (BTreeMap<String, String>, BTreeMap<String, Vec<String>>) {
+    let mut branch_tips = BTreeMap::new();
+    let mut extra_commits = BTreeMap::new();
+    for (branch, branch_ref) in branch_refs {
+        branch_tips.insert(branch.clone(), branch_ref.expected_tip);
+        extra_commits.insert(branch, branch_ref.extra_commits);
     }
 
-    Ok(replays)
+    (branch_tips, extra_commits)
 }
 
 fn replay_commits_from_extra(

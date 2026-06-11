@@ -1,5 +1,5 @@
 use super::landed as landed_inference;
-use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
+use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
 use crate::state::Strategy;
@@ -178,7 +178,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                 options.git,
                 options.storage,
                 &plan,
-                DryRunOptions {
+                ApplyOptions {
                     plan_name: options.generate.name,
                     new_tip_input: options.new_tip,
                     strategy: options.run.strategy,

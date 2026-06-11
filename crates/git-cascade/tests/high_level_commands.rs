@@ -269,6 +269,32 @@ fn sync_infers_old_base_from_oldest_local_fork_point() {
 }
 
 #[test]
+fn sync_is_idempotent_for_already_synced_stacks() {
+    let repo = stack_on_non_root_main_tip();
+    repo.switch("main");
+    repo.commit_file("main-new.txt", "new\n", "new main work");
+
+    repo.cascade().arg("sync").assert().success();
+    let synced_pr1 = repo.rev_parse("pr-1");
+    let synced_pr2 = repo.rev_parse("pr-2");
+
+    // A different committer date would change cherry-picked commit ids, so
+    // unchanged refs prove the second sync kept the branches instead of
+    // rewriting them.
+    repo.cascade()
+        .arg("sync")
+        .env("GIT_COMMITTER_DATE", "2026-02-02T00:00:00Z")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "already starts at its replay base",
+        ));
+
+    assert_eq!(repo.rev_parse("pr-1"), synced_pr1);
+    assert_eq!(repo.rev_parse("pr-2"), synced_pr2);
+}
+
+#[test]
 fn sync_uses_default_branch_even_when_current_branch_is_master() {
     let repo = stack_on_non_root_main_tip();
     let old_pr1 = repo.rev_parse("pr-1");

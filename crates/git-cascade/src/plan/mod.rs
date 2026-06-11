@@ -10,7 +10,7 @@ use std::str::FromStr;
 use time::OffsetDateTime;
 pub use topological::branches_in_topological_order;
 use uuid::Uuid;
-pub use validate::{ValidateOptions, validate_plan, validate_plan_for_apply};
+pub use validate::{BranchRef, validate_branch_refs, validate_plan, validate_plan_for_apply};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {

@@ -432,6 +432,20 @@ impl Git {
         self.run(["cherry-pick", "--continue"])
     }
 
+    pub fn cherry_pick_skip(&self) -> Result<()> {
+        self.run(["cherry-pick", "--skip"])
+    }
+
+    pub fn cherry_pick_in_progress(&self) -> Result<bool> {
+        Ok(self.try_rev_parse("CHERRY_PICK_HEAD")?.is_some())
+    }
+
+    /// Reports whether the index differs from HEAD.
+    pub fn has_staged_changes(&self) -> Result<bool> {
+        self.output_allowing_status(["diff", "--cached", "--quiet"], &[1])
+            .map(|output| output.is_none())
+    }
+
     pub fn try_cherry_pick_abort(&self) -> Result<()> {
         self.output_allowing_status(["cherry-pick", "--abort"], &[1, 128])
             .map(|_| ())

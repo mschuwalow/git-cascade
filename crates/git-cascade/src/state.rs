@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -156,6 +156,21 @@ pub struct StateFile {
     lock_file: File,
 }
 
+fn acquire_lock(lock_file: &File, lock_path: &Path) -> Result<()> {
+    lock_file.try_lock_exclusive().map_err(|source| {
+        if source.kind() == fs2::lock_contended_error().kind() {
+            Error::InvalidInvocation(
+                "another git-cascade command is currently running in this repository".to_owned(),
+            )
+        } else {
+            Error::IoWithPath {
+                path: lock_path.to_owned(),
+                source,
+            }
+        }
+    })
+}
+
 impl StateFile {
     pub fn create(storage: &Storage, state: &ApplyState) -> Result<Self> {
         storage.ensure_cascade_dir()?;
@@ -171,7 +186,7 @@ impl StateFile {
                 path: lock_path.clone(),
                 source,
             })?;
-        lock_file.lock_exclusive()?;
+        acquire_lock(&lock_file, &lock_path)?;
         if path.exists() {
             return Err(Error::ActiveOperation { path });
         }
@@ -204,7 +219,7 @@ impl StateFile {
                 });
             }
         };
-        lock_file.lock_exclusive()?;
+        acquire_lock(&lock_file, &lock_path)?;
         if !path.exists() {
             return Ok(None);
         }
@@ -284,16 +299,6 @@ pub fn read_state(storage: &Storage) -> Result<Option<ApplyState>> {
     };
 
     Ok(Some(serde_yaml::from_str(&content)?))
-}
-
-pub fn require_state(storage: &Storage) -> Result<ApplyState> {
-    read_state(storage)?
-        .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))
-}
-
-pub fn remove_state(storage: &Storage) -> Result<()> {
-    let path = storage.state_path();
-    fs::remove_file(&path).map_err(|source| Error::IoWithPath { path, source })
 }
 
 pub struct ApplyStateInput<'a> {

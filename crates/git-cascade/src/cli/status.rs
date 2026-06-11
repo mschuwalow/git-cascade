@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::git::Git;
-use crate::state::StateFile;
+use crate::state::read_state;
 use crate::storage::Storage;
 
 pub(super) fn status() -> Result<()> {
@@ -12,10 +12,9 @@ pub(super) fn status() -> Result<()> {
 }
 
 fn status_output(storage: &Storage) -> Result<String> {
-    let Some(mut state_file) = StateFile::open(storage)? else {
+    let Some(state) = read_state(storage)? else {
         return Ok("No active cascade operation.\n".to_owned());
     };
-    let state = state_file.read_state()?;
 
     let mut output = String::new();
     output.push_str("Active cascade operation:\n");

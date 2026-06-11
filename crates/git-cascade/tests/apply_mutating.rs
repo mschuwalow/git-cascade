@@ -516,6 +516,83 @@ fn apply_single_commit_root_range_updates_dependent() {
     assert_eq!(repo.show("pr-2:pr2.txt"), "dependent\n");
 }
 
+#[test]
+fn apply_keeps_branches_already_at_replay_base() {
+    let repo = linear_stack();
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+
+    // A different committer date would change cherry-picked commit ids, so
+    // unchanged refs prove the branches were kept instead of re-created.
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .env("GIT_COMMITTER_DATE", "2026-02-02T00:00:00Z")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "already starts at its replay base",
+        ));
+
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn apply_auto_skips_cherry_pick_that_became_empty() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2 change");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    // Rewrite pr-1 and absorb pr-2's change into it, so replaying pr-2's
+    // commit becomes empty.
+    rewrite_anchor(&repo);
+    repo.switch("pr-1");
+    repo.git_ok(["cherry-pick", "pr-2"]);
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .success()
+        .stdout("applied cascade plan\n")
+        .stderr(predicate::str::contains("skipped empty commit"));
+
+    assert_eq!(repo.rev_parse("pr-2"), repo.rev_parse("pr-1"));
+    assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
 fn linear_stack() -> TestRepo {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");

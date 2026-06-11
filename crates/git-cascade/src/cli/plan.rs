@@ -1,8 +1,8 @@
 use crate::Result;
-use crate::apply::{ApplyOptions, DryRunOptions, dry_run, execute};
+use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_stored_plan};
-use crate::state::Strategy;
+use crate::state::{Strategy, read_state};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -49,6 +49,12 @@ pub(super) enum Command {
         #[arg(value_name = "NAME")]
         name: PlanName,
     },
+    /// Delete a stored plan by name.
+    Remove {
+        /// Name of the stored plan to delete.
+        #[arg(value_name = "NAME")]
+        name: PlanName,
+    },
 }
 
 pub(super) fn run(command: Command) -> Result<()> {
@@ -68,6 +74,7 @@ pub(super) fn run(command: Command) -> Result<()> {
         } => apply(name, &new_tip, strategy, dry_run, in_place),
         Command::List => list(),
         Command::Show { name } => show(&name),
+        Command::Remove { name } => remove(name),
     }
 }
 
@@ -100,34 +107,17 @@ fn apply(
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let plan = serde_yaml::from_str(&storage.read_plan(&name)?)?;
+    let options = ApplyOptions {
+        plan_name: name,
+        new_tip_input: new_tip.to_owned(),
+        strategy,
+        in_place,
+    };
 
     if is_dry_run {
-        print!(
-            "{}",
-            dry_run(
-                &git,
-                &storage,
-                &plan,
-                DryRunOptions {
-                    plan_name: name.clone(),
-                    new_tip_input: new_tip.to_owned(),
-                    strategy,
-                    in_place,
-                },
-            )?
-        );
+        print!("{}", dry_run(&git, &storage, &plan, options)?);
     } else {
-        execute(
-            &git,
-            &storage,
-            &plan,
-            ApplyOptions {
-                plan_name: name,
-                new_tip_input: new_tip.to_owned(),
-                strategy,
-                in_place,
-            },
-        )?;
+        execute(&git, &storage, &plan, options)?;
         println!("applied cascade plan");
     }
 
@@ -149,6 +139,25 @@ fn show(name: &PlanName) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     print!("{}", storage.read_plan(name)?);
+
+    Ok(())
+}
+
+fn remove(name: PlanName) -> Result<()> {
+    let git = Git::current_dir()?;
+    let storage = Storage::discover(&git)?;
+    if let Some(state) = read_state(&storage)?
+        && state.plan_name == name
+    {
+        return Err(crate::Error::InvalidInvocation(format!(
+            "plan `{name}` is referenced by the active cascade operation; run `git cascade continue` or `git cascade abort` first"
+        )));
+    }
+
+    // Surface a clear error when the plan does not exist.
+    storage.read_plan(&name)?;
+    storage.delete_plan(name.clone())?;
+    println!("removed plan `{name}`");
 
     Ok(())
 }

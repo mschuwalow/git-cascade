@@ -88,3 +88,93 @@ fn plan_names_can_contain_path_separators() {
 
     assert!(repo.plan_path("feature/stack").exists());
 }
+
+#[test]
+fn remove_deletes_a_named_plan() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    assert!(repo.plan_path("stack").exists());
+
+    repo.cascade()
+        .args(["plan", "remove", "stack"])
+        .assert()
+        .success()
+        .stdout("removed plan `stack`\n");
+
+    assert!(!repo.plan_path("stack").exists());
+    repo.cascade()
+        .args(["plan", "list"])
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn remove_unknown_plan_fails_clearly() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+
+    repo.cascade()
+        .args(["plan", "remove", "missing"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("plan `missing` does not exist"));
+}
+
+#[test]
+fn remove_refuses_plan_referenced_by_active_operation() {
+    let repo = TestRepo::new();
+    repo.commit_file("conflict.txt", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("conflict.txt", "anchor old\n", "anchor old");
+    repo.switch_new("pr-2");
+    repo.commit_file("conflict.txt", "dependent\n", "dependent");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    repo.switch("pr-1");
+    repo.commit_file("conflict.txt", "anchor new\n", "anchor new");
+    repo.switch("main");
+
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure();
+
+    repo.cascade()
+        .args(["plan", "remove", "stack"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "referenced by the active cascade operation",
+        ));
+
+    assert!(repo.plan_path("stack").exists());
+}

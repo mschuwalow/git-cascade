@@ -331,6 +331,51 @@ fn continue_after_conflict_continues_to_child_branch() {
 }
 
 #[test]
+fn continue_resumes_replay_phase_after_crash() {
+    let repo = conflicting_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure();
+
+    // Simulate a crash mid-replay: the persisted phase is `replay` with no
+    // current commit, and the worktree still has a cherry-pick in progress.
+    let mut state = read_state(&repo);
+    state.phase = Phase::Replay;
+    state.current = None;
+    state.mappings.clear();
+    write_state(&repo, &state);
+
+    // Continue restarts the branch from scratch and stops on the same
+    // conflict again.
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "apply stopped while replaying branch `pr-2`",
+        ));
+
+    let state = read_state(&repo);
+    assert_eq!(state.phase, Phase::Conflict);
+    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.show("pr-2:conflict.txt"), "resolved\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
 fn continue_can_stop_again_on_later_conflict() {
     let repo = repeated_conflict_stack();
     let old_pr2 = repo.rev_parse("pr-2");

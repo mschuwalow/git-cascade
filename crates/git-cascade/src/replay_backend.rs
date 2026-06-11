@@ -44,6 +44,14 @@ pub(crate) trait ReplayBackend {
         state: &ApplyState,
         current: &CurrentState,
     ) -> Result<String>;
+    fn skip_replay(
+        &mut self,
+        plan: &Plan,
+        node: &Node,
+        branch_index: usize,
+        total_branches: usize,
+        current_tip: &str,
+    ) -> Result<(String, String)>;
     fn write_temp_ref(
         &mut self,
         plan: &Plan,
@@ -101,8 +109,11 @@ impl ReplayBackend for GitReplayBackend<'_> {
         let worktree = std::path::PathBuf::from(state.worktree.path());
         let worktree_git = Git::new(&worktree);
         if state.worktree.is_in_place() && state.completed.temp_refs.is_empty() {
+            // A stale cherry-pick can linger after a crashed replay.
+            let _ = worktree_git.try_cherry_pick_abort();
             worktree_git.switch_detached(base)
         } else if worktree.exists() {
+            let _ = worktree_git.try_cherry_pick_abort();
             worktree_git.reset_hard(base)
         } else {
             self.git.worktree_add_detached(&worktree, base)
@@ -150,6 +161,14 @@ impl ReplayBackend for GitReplayBackend<'_> {
         let worktree = std::path::PathBuf::from(state.worktree.path());
         let worktree_git = Git::new(&worktree);
         if let Err(error) = worktree_git.cherry_pick(commit) {
+            if is_empty_cherry_pick(&worktree_git)? {
+                worktree_git.cherry_pick_skip()?;
+                eprintln!(
+                    "  skipped empty commit {}; its changes are already applied",
+                    short_oid(commit)
+                );
+                return worktree_git.head_oid();
+            }
             return Err(Error::ApplyStopped {
                 branch: node.branch.clone(),
                 commit: commit.to_owned(),
@@ -158,6 +177,24 @@ impl ReplayBackend for GitReplayBackend<'_> {
             });
         }
         worktree_git.head_oid()
+    }
+
+    fn skip_replay(
+        &mut self,
+        plan: &Plan,
+        node: &Node,
+        branch_index: usize,
+        total_branches: usize,
+        current_tip: &str,
+    ) -> Result<(String, String)> {
+        let temp_ref = temp_ref(plan, &node.branch);
+        self.git.update_ref(&temp_ref, current_tip)?;
+        eprintln!(
+            "Branch {branch_index}/{total_branches} `{}` already starts at its replay base; keeping {}",
+            node.branch,
+            short_oid(current_tip)
+        );
+        Ok((temp_ref, current_tip.to_owned()))
     }
 
     fn write_temp_ref(
@@ -190,6 +227,15 @@ impl ReplayBackend for GitReplayBackend<'_> {
                 "worktree {} still has unresolved conflicts; resolve them and git add the files before continuing",
                 worktree.display()
             )));
+        }
+
+        if is_empty_cherry_pick(&worktree_git)? {
+            worktree_git.cherry_pick_skip()?;
+            eprintln!(
+                "  skipped empty commit {}; the resolution matches the current tree",
+                short_oid(&current.commit)
+            );
+            return worktree_git.head_oid();
         }
 
         worktree_git.cherry_pick_continue()?;
@@ -366,6 +412,28 @@ impl ReplayBackend for DryRunReplayBackend {
         }
     }
 
+    fn skip_replay(
+        &mut self,
+        plan: &Plan,
+        node: &Node,
+        _branch_index: usize,
+        _total_branches: usize,
+        current_tip: &str,
+    ) -> Result<(String, String)> {
+        let temp_ref = temp_ref(plan, &node.branch);
+        writeln!(self.output).unwrap();
+        writeln!(self.output, "# branch {}", node.branch).unwrap();
+        writeln!(
+            self.output,
+            "already starts at its replay base; keeping {current_tip}"
+        )
+        .unwrap();
+        writeln!(self.output, "git update-ref {temp_ref} {current_tip}").unwrap();
+        self.temp_tips
+            .insert(node.branch.clone(), current_tip.to_owned());
+        Ok((temp_ref, current_tip.to_owned()))
+    }
+
     fn write_temp_ref(
         &mut self,
         plan: &Plan,
@@ -424,6 +492,14 @@ impl ReplayBackend for DryRunReplayBackend {
         }
         Ok(())
     }
+}
+
+/// Detects a cherry-pick that stopped because it became empty: the pick is
+/// still in progress, but there is nothing to resolve and nothing staged.
+fn is_empty_cherry_pick(worktree_git: &Git) -> Result<bool> {
+    Ok(worktree_git.cherry_pick_in_progress()?
+        && worktree_git.unmerged_entries()?.is_empty()
+        && !worktree_git.has_staged_changes()?)
 }
 
 fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()> {

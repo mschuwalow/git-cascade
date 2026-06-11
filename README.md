@@ -255,6 +255,8 @@ Continue after resolving:
 git cascade continue
 ```
 
+`continue` also resumes an operation that was interrupted mid-replay, for example by a crash or Ctrl-C; already-finished branches are not replayed again.
+
 Abort and clean the active operation:
 
 ```sh
@@ -284,6 +286,12 @@ Inspect stored plans:
 ```sh
 git cascade plan list
 git cascade plan show stack
+```
+
+Delete a stored plan:
+
+```sh
+git cascade plan remove stack
 ```
 
 Apply a stored plan:

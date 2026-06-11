@@ -24,6 +24,66 @@ struct Candidate {
     commits: Vec<String>,
 }
 
+/// Memoizes the pairwise git queries used during candidate discovery, which
+/// would otherwise be repeated for every candidate selection round.
+struct GitQueries<'a> {
+    git: &'a Git,
+    merge_bases: HashMap<(String, String), Option<String>>,
+    ancestors: HashMap<(String, String), bool>,
+    owned_commits: HashMap<(String, String), Vec<String>>,
+}
+
+impl<'a> GitQueries<'a> {
+    fn new(git: &'a Git) -> Self {
+        Self {
+            git,
+            merge_bases: HashMap::new(),
+            ancestors: HashMap::new(),
+            owned_commits: HashMap::new(),
+        }
+    }
+
+    fn merge_base(&mut self, left: &str, right: &str) -> Result<Option<String>> {
+        let key = (left.to_owned(), right.to_owned());
+        if let Some(result) = self.merge_bases.get(&key) {
+            return Ok(result.clone());
+        }
+
+        let result = self.git.merge_base(left, right)?;
+        self.merge_bases.insert(key, result.clone());
+        Ok(result)
+    }
+
+    fn is_ancestor(&mut self, ancestor: &str, descendant: &str) -> Result<bool> {
+        let key = (ancestor.to_owned(), descendant.to_owned());
+        if let Some(result) = self.ancestors.get(&key) {
+            return Ok(*result);
+        }
+
+        let result = self.git.is_ancestor(ancestor, descendant)?;
+        self.ancestors.insert(key, result);
+        Ok(result)
+    }
+
+    fn owned_commits(&mut self, base: &str, tip: &str, branch: &str) -> Result<Vec<String>> {
+        let key = (base.to_owned(), tip.to_owned());
+        if let Some(result) = self.owned_commits.get(&key) {
+            return Ok(result.clone());
+        }
+
+        let merges = self.git.rev_list_merges(base, tip)?;
+        if let Some(merge) = merges.first() {
+            return Err(Error::Unsupported(format!(
+                "branch `{branch}` contains merge commit `{merge}`; merge replay is not supported yet"
+            )));
+        }
+
+        let result = self.git.rev_list_reverse(base, tip)?;
+        self.owned_commits.insert(key, result.clone());
+        Ok(result)
+    }
+}
+
 pub fn generate_stored_plan(
     git: &Git,
     storage: &Storage,
@@ -57,10 +117,16 @@ pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
     }
     assigned.extend(options.excluded_branches.iter().cloned());
     let branches = git.local_branches()?;
+    let mut queries = GitQueries::new(git);
 
-    while let Some(candidate) =
-        next_candidate(git, &branches, &nodes, &assigned, &old_base, &old_tip)?
-    {
+    while let Some(candidate) = next_candidate(
+        &mut queries,
+        &branches,
+        &nodes,
+        &assigned,
+        &old_base,
+        &old_tip,
+    )? {
         assigned.insert(candidate.branch.name.clone());
         if let Some(parent_branch) = &candidate.parent_branch {
             dependencies.push(Dependency {
@@ -150,7 +216,7 @@ fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bo
 }
 
 fn next_candidate(
-    git: &Git,
+    queries: &mut GitQueries<'_>,
     branches: &[LocalBranch],
     nodes: &[Node],
     assigned: &HashSet<String>,
@@ -168,12 +234,12 @@ fn next_candidate(
             continue;
         }
 
-        if let Some(base) = git.merge_base(source_old_tip, &branch.tip)?
-            && !git.is_ancestor(&branch.tip, source_old_tip)?
+        if let Some(base) = queries.merge_base(source_old_tip, &branch.tip)?
+            && !queries.is_ancestor(&branch.tip, source_old_tip)?
             && base != source_old_base
-            && git.is_ancestor(source_old_base, &base)?
+            && queries.is_ancestor(source_old_base, &base)?
         {
-            let commits = owned_commits(git, &base, &branch.tip, &branch.name)?;
+            let commits = queries.owned_commits(&base, &branch.tip, &branch.name)?;
             if !commits.is_empty() {
                 let candidate = Candidate {
                     branch: branch.clone(),
@@ -188,7 +254,7 @@ fn next_candidate(
         }
 
         for parent in nodes {
-            let Some(base) = git.merge_base(&parent.tip, &branch.tip)? else {
+            let Some(base) = queries.merge_base(&parent.tip, &branch.tip)? else {
                 continue;
             };
 
@@ -196,7 +262,7 @@ fn next_candidate(
                 continue;
             }
 
-            let commits = owned_commits(git, &base, &branch.tip, &branch.name)?;
+            let commits = queries.owned_commits(&base, &branch.tip, &branch.name)?;
             if commits.is_empty() {
                 continue;
             }
@@ -252,15 +318,4 @@ fn parent_depth(branch: &str, node_by_branch: &HashMap<&str, &Node>) -> usize {
         current = node_by_branch.get(parent).copied();
     }
     depth
-}
-
-fn owned_commits(git: &Git, base: &str, tip: &str, branch: &str) -> Result<Vec<String>> {
-    let merges = git.rev_list_merges(base, tip)?;
-    if let Some(merge) = merges.first() {
-        return Err(Error::Unsupported(format!(
-            "branch `{branch}` contains merge commit `{merge}`; merge replay is not supported yet"
-        )));
-    }
-
-    git.rev_list_reverse(base, tip)
 }
