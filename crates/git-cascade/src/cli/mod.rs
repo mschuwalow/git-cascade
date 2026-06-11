@@ -37,6 +37,9 @@ enum Command {
         /// Base branch or ref the branch stack forked from. Defaults to the default branch.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
+        strategy: Strategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -70,6 +73,9 @@ enum Command {
         /// Base branch or ref to sync stacks onto. Defaults to the current default branch.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
+        strategy: Strategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -88,6 +94,9 @@ enum Command {
         /// Explicit old range base for fast-forward or ambiguous landings.
         #[arg(long, value_name = "REF")]
         old_base: Option<String>,
+        /// Replay strategy for dependent branches.
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
+        strategy: Strategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -131,12 +140,17 @@ where
         Command::Restack {
             branch,
             base,
+            strategy,
             dry_run,
             in_place,
         } => high_level::restack(
             branch,
             base,
-            high_level::RunOptions::move_to_current_tips(dry_run, in_place),
+            high_level::RunOptions {
+                strategy,
+                is_dry_run: dry_run,
+                in_place,
+            },
         ),
         Command::Replay {
             old_tip,
@@ -157,23 +171,33 @@ where
         ),
         Command::Sync {
             base,
+            strategy,
             dry_run,
             in_place,
         } => high_level::sync(
             base,
-            high_level::RunOptions::move_to_current_tips(dry_run, in_place),
+            high_level::RunOptions {
+                strategy,
+                is_dry_run: dry_run,
+                in_place,
+            },
         ),
         Command::Landed {
             old_tip,
             onto,
             old_base,
+            strategy,
             dry_run,
             in_place,
         } => high_level::landed(
             &old_tip,
             onto,
             old_base,
-            high_level::RunOptions::move_to_current_tips(dry_run, in_place),
+            high_level::RunOptions {
+                strategy,
+                is_dry_run: dry_run,
+                in_place,
+            },
         ),
         Command::Status => status::status(),
         Command::Abort => abort(),

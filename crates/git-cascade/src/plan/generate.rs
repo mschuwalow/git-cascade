@@ -1,5 +1,7 @@
 use super::validate::validate_plan;
-use super::{Dependency, Node, Plan, PlanId, PlanName, Repository, Source};
+use super::{
+    Dependency, Node, PLAN_VERSION, Plan, PlanCommit, PlanId, PlanName, Repository, Source,
+};
 use crate::git::{Git, LocalBranch};
 use crate::storage::Storage;
 use crate::{Error, Result};
@@ -21,16 +23,17 @@ struct Candidate {
     branch: LocalBranch,
     parent_branch: Option<String>,
     old_base: String,
-    commits: Vec<String>,
+    commits: Vec<PlanCommit>,
 }
 
 /// Memoizes the pairwise git queries used during candidate discovery, which
 /// would otherwise be repeated for every candidate selection round.
 struct GitQueries<'a> {
     git: &'a Git,
-    merge_bases: HashMap<(String, String), Option<String>>,
+    merge_bases: HashMap<(String, String), Vec<String>>,
     ancestors: HashMap<(String, String), bool>,
-    owned_commits: HashMap<(String, String), Vec<String>>,
+    owned_commits: HashMap<(String, String), Option<Vec<PlanCommit>>>,
+    warned_branches: HashSet<String>,
 }
 
 impl<'a> GitQueries<'a> {
@@ -40,18 +43,40 @@ impl<'a> GitQueries<'a> {
             merge_bases: HashMap::new(),
             ancestors: HashMap::new(),
             owned_commits: HashMap::new(),
+            warned_branches: HashSet::new(),
         }
     }
 
-    fn merge_base(&mut self, left: &str, right: &str) -> Result<Option<String>> {
+    /// The unique merge base of two commits. Branches with multiple merge
+    /// bases (criss-cross history) are skipped with a warning.
+    fn unique_merge_base(
+        &mut self,
+        left: &str,
+        right: &str,
+        branch: &str,
+    ) -> Result<Option<String>> {
         let key = (left.to_owned(), right.to_owned());
-        if let Some(result) = self.merge_bases.get(&key) {
-            return Ok(result.clone());
-        }
+        let bases = if let Some(bases) = self.merge_bases.get(&key) {
+            bases.clone()
+        } else {
+            let bases = self.git.merge_bases_all(left, right)?;
+            self.merge_bases.insert(key, bases.clone());
+            bases
+        };
 
-        let result = self.git.merge_base(left, right)?;
-        self.merge_bases.insert(key, result.clone());
-        Ok(result)
+        match bases.len() {
+            0 => Ok(None),
+            1 => Ok(Some(bases[0].clone())),
+            _ => {
+                self.warn_skipped_branch(
+                    branch,
+                    &format!(
+                        "it has multiple merge bases with `{left}` (criss-cross history); rebase the branch to linearize it first"
+                    ),
+                );
+                Ok(None)
+            }
+        }
     }
 
     fn is_ancestor(&mut self, ancestor: &str, descendant: &str) -> Result<bool> {
@@ -65,22 +90,65 @@ impl<'a> GitQueries<'a> {
         Ok(result)
     }
 
-    fn owned_commits(&mut self, base: &str, tip: &str, branch: &str) -> Result<Vec<String>> {
+    /// The first-parent chain of `base..tip`, or `None` (with a warning)
+    /// when the branch merges history that is not part of the old tip and
+    /// therefore cannot be flattened.
+    fn owned_commits(
+        &mut self,
+        base: &str,
+        tip: &str,
+        branch: &str,
+        source_old_tip: &str,
+    ) -> Result<Option<Vec<PlanCommit>>> {
         let key = (base.to_owned(), tip.to_owned());
         if let Some(result) = self.owned_commits.get(&key) {
             return Ok(result.clone());
         }
 
-        let merges = self.git.rev_list_merges(base, tip)?;
-        if let Some(merge) = merges.first() {
-            return Err(Error::Unsupported(format!(
-                "branch `{branch}` contains merge commit `{merge}`; merge replay is not supported yet"
-            )));
-        }
-
-        let result = self.git.rev_list_reverse(base, tip)?;
+        let chain = self
+            .git
+            .rev_list_first_parent_with_parents(base, tip)?
+            .into_iter()
+            .map(|(oid, parents)| PlanCommit::new(oid, parents))
+            .collect::<Vec<_>>();
+        let result = match self.first_foreign_merge_parent(&chain, source_old_tip)? {
+            Some((merge, parent)) => {
+                self.warn_skipped_branch(
+                    branch,
+                    &format!(
+                        "merge commit `{merge}` in its history merges `{parent}`, which is not part of the old tip; rebase the branch to linearize it first"
+                    ),
+                );
+                None
+            }
+            None => Some(chain),
+        };
         self.owned_commits.insert(key, result.clone());
         Ok(result)
+    }
+
+    /// The first merge in `chain` whose merged-in side is not contained in
+    /// `tip`, as `(merge commit, foreign parent)`.
+    fn first_foreign_merge_parent(
+        &mut self,
+        chain: &[PlanCommit],
+        tip: &str,
+    ) -> Result<Option<(String, String)>> {
+        for commit in chain {
+            for parent in commit.parents.iter().skip(1) {
+                if !self.is_ancestor(parent, tip)? {
+                    return Ok(Some((commit.oid.clone(), parent.clone())));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn warn_skipped_branch(&mut self, branch: &str, reason: &str) {
+        if self.warned_branches.insert(branch.to_owned()) {
+            eprintln!("warning: skipping branch `{branch}`: {reason}");
+        }
     }
 }
 
@@ -146,7 +214,7 @@ pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
     let plan_id = PlanId::new();
 
     Ok(Plan {
-        version: 1,
+        version: PLAN_VERSION,
         plan_id,
         generated_at: OffsetDateTime::now_utc(),
         repository: Repository {
@@ -170,11 +238,12 @@ fn old_range_base(
     old_base_input: &str,
     old_base_tip: &str,
 ) -> Result<String> {
-    git.merge_base(old_tip, old_base_tip)?.ok_or_else(|| {
-        Error::InvalidInvocation(format!(
-            "old base `{old_base_input}` has no merge base with old tip for plan `{name}`"
-        ))
-    })
+    git.unique_merge_base(old_tip, old_base_tip)?
+        .ok_or_else(|| {
+            Error::InvalidInvocation(format!(
+                "old base `{old_base_input}` has no merge base with old tip for plan `{name}`"
+            ))
+        })
 }
 
 fn old_tip_local_branch(git: &Git, old_tip: &str) -> Result<Option<String>> {
@@ -234,35 +303,45 @@ fn next_candidate(
             continue;
         }
 
-        if let Some(base) = queries.merge_base(source_old_tip, &branch.tip)?
-            && !queries.is_ancestor(&branch.tip, source_old_tip)?
+        // Merged-away branches are never candidates; skip them before the
+        // merge-base uniqueness check.
+        if queries.is_ancestor(&branch.tip, source_old_tip)? {
+            continue;
+        }
+
+        if let Some(base) = queries.unique_merge_base(source_old_tip, &branch.tip, &branch.name)?
             && base != source_old_base
             && queries.is_ancestor(source_old_base, &base)?
+            && let Some(commits) =
+                queries.owned_commits(&base, &branch.tip, &branch.name, source_old_tip)?
+            && !commits.is_empty()
         {
-            let commits = queries.owned_commits(&base, &branch.tip, &branch.name)?;
-            if !commits.is_empty() {
-                let candidate = Candidate {
-                    branch: branch.clone(),
-                    parent_branch: None,
-                    old_base: base,
-                    commits,
-                };
-                if is_better_candidate(&candidate, best.as_ref(), &node_by_branch) {
-                    best = Some(candidate);
-                }
+            let candidate = Candidate {
+                branch: branch.clone(),
+                parent_branch: None,
+                old_base: base,
+                commits,
+            };
+            if is_better_candidate(&candidate, best.as_ref(), &node_by_branch) {
+                best = Some(candidate);
             }
         }
 
         for parent in nodes {
-            let Some(base) = queries.merge_base(&parent.tip, &branch.tip)? else {
+            let Some(base) = queries.unique_merge_base(&parent.tip, &branch.tip, &branch.name)?
+            else {
                 continue;
             };
 
-            if !parent.commits().contains(&base) {
+            if !parent.contains_commit(&base) {
                 continue;
             }
 
-            let commits = queries.owned_commits(&base, &branch.tip, &branch.name)?;
+            let Some(commits) =
+                queries.owned_commits(&base, &branch.tip, &branch.name, source_old_tip)?
+            else {
+                continue;
+            };
             if commits.is_empty() {
                 continue;
             }

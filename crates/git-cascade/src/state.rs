@@ -1,4 +1,4 @@
-use crate::plan::{PlanId, PlanName};
+use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
 use crate::{Error, Result};
 use clap::ValueEnum;
@@ -26,7 +26,7 @@ pub struct ApplyState {
     pub worktree: WorktreeState,
     pub completed: CompletedState,
     pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<String>>,
+    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
     pub cleanup: CleanupState,
@@ -308,7 +308,7 @@ pub struct ApplyStateInput<'a> {
     pub strategy: Strategy,
     pub pending_branches: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<String>>,
+    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
     pub mappings: BTreeMap<String, String>,
     pub worktree: WorktreeState,
 }

@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
-use crate::plan::{GenerateOptions, PlanName, generate_stored_plan};
+use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::state::{Strategy, read_state};
 use crate::storage::Storage;
 use clap::Subcommand;
@@ -106,7 +106,7 @@ fn apply(
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let plan = serde_yaml::from_str(&storage.read_plan(&name)?)?;
+    let plan = Plan::from_yaml(&storage.read_plan(&name)?)?;
     let options = ApplyOptions {
         plan_name: name,
         new_tip_input: new_tip.to_owned(),

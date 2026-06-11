@@ -297,22 +297,45 @@ impl Git {
             .filter(|output| !output.is_empty()))
     }
 
-    pub fn rev_list_reverse(&self, base: &str, tip: &str) -> Result<Vec<String>> {
-        let range = format!("{base}..{tip}");
+    /// All merge bases between two commits. More than one entry indicates a
+    /// criss-cross history where the fork point is ambiguous.
+    pub fn merge_bases_all(&self, left: &str, right: &str) -> Result<Vec<String>> {
         Ok(self
-            .output(["rev-list", "--reverse", &range])?
-            .lines()
-            .map(str::to_owned)
-            .collect())
+            .output_allowing_status(["merge-base", "--all", left, right], &[1])?
+            .map(|output| output.lines().map(str::to_owned).collect())
+            .unwrap_or_default())
     }
 
-    pub fn rev_list_merges(&self, base: &str, tip: &str) -> Result<Vec<String>> {
+    /// The unique merge base of two commits, or an error when the history is
+    /// criss-crossed and the fork point is ambiguous.
+    pub fn unique_merge_base(&self, left: &str, right: &str) -> Result<Option<String>> {
+        unique_merge_base_from(self.merge_bases_all(left, right)?, left, right)
+    }
+
+    /// First-parent chain of `base..tip` with each commit's parents,
+    /// oldest first.
+    pub fn rev_list_first_parent_with_parents(
+        &self,
+        base: &str,
+        tip: &str,
+    ) -> Result<Vec<(String, Vec<String>)>> {
         let range = format!("{base}..{tip}");
-        Ok(self
-            .output(["rev-list", "--merges", &range])?
-            .lines()
-            .map(str::to_owned)
-            .collect())
+        let output = self.output([
+            "rev-list",
+            "--first-parent",
+            "--reverse",
+            "--parents",
+            &range,
+        ])?;
+        let mut commits = Vec::new();
+        for line in output.lines() {
+            let mut parts = line.split_whitespace().map(str::to_owned);
+            let Some(oid) = parts.next() else {
+                continue;
+            };
+            commits.push((oid, parts.collect()));
+        }
+        Ok(commits)
     }
 
     pub fn rev_list_first_parent_merges(&self, tip: &str) -> Result<Vec<String>> {
@@ -519,6 +542,20 @@ where
     args.into_iter()
         .map(|arg| arg.as_ref().to_owned())
         .collect()
+}
+
+fn unique_merge_base_from(
+    mut bases: Vec<String>,
+    left: &str,
+    right: &str,
+) -> Result<Option<String>> {
+    match bases.len() {
+        0 => Ok(None),
+        1 => Ok(Some(bases.remove(0))),
+        _ => Err(Error::InvalidInvocation(format!(
+            "`{left}` and `{right}` have multiple merge bases (criss-cross history); pass an explicit base commit"
+        ))),
+    }
 }
 
 fn display_args(args: &[OsString]) -> String {

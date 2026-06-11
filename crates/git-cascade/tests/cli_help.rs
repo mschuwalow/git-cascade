@@ -53,7 +53,7 @@ fn sync_help_mentions_default_branch_options() {
                 .and(predicate::str::contains("--onto").not())
                 .and(predicate::str::contains("--old-tip").not())
                 .and(predicate::str::contains("--old-base").not())
-                .and(predicate::str::contains("--strategy").not()),
+                .and(predicate::str::contains("--strategy")),
         );
 }
 
@@ -92,7 +92,7 @@ fn restack_help_mentions_common_options() {
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
                 .and(predicate::str::contains("--onto").not())
-                .and(predicate::str::contains("--strategy").not()),
+                .and(predicate::str::contains("--strategy")),
         );
 }
 
@@ -111,7 +111,7 @@ fn landed_help_mentions_landing_options() {
                 .and(predicate::str::contains("--old-base"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--strategy").not()),
+                .and(predicate::str::contains("--strategy")),
         );
 }
 

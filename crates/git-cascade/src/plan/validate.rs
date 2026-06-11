@@ -1,4 +1,4 @@
-use super::{Dependency, Node, Plan, branches_in_topological_order};
+use super::{Dependency, Node, PLAN_VERSION, Plan, PlanCommit, branches_in_topological_order};
 use crate::git::Git;
 use crate::{Error, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -9,7 +9,7 @@ pub struct BranchRef {
     /// The branch's current tip commit.
     pub expected_tip: String,
     /// Commits added to the branch after plan generation, oldest first.
-    pub extra_commits: Vec<String>,
+    pub extra_commits: Vec<PlanCommit>,
 }
 
 pub fn validate_plan(git: &Git, plan: &Plan) -> Result<()> {
@@ -28,10 +28,43 @@ pub fn validate_plan_for_apply(git: &Git, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
+/// Merge commits are dropped during replay. That is sound when the merged-in
+/// history is upstream work: either part of the old tip (whose rewrite is the
+/// new tip, so the replayed branch catches up by being based on it) or
+/// already contained in the new tip. Foreign merges would silently lose the
+/// merged-in work and are rejected.
+pub fn validate_merge_parents_for_apply(
+    git: &Git,
+    plan: &Plan,
+    branch_refs: &BTreeMap<String, BranchRef>,
+    new_tip: &str,
+) -> Result<()> {
+    for node in &plan.nodes {
+        let extras = branch_refs
+            .get(&node.branch)
+            .map(|branch_ref| branch_ref.extra_commits.as_slice())
+            .unwrap_or_default();
+        for commit in node.commits().iter().chain(extras) {
+            for parent in commit.parents.iter().skip(1) {
+                if git.is_ancestor(parent, &plan.source.tip)? || git.is_ancestor(parent, new_tip)? {
+                    continue;
+                }
+                return invalid(format!(
+                    "branch `{}` merges history at `{parent}` that is part of neither the old nor the new tip; rebase the branch to linearize it first",
+                    node.branch
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Checks that planned branches were not rewritten since plan generation and
 /// returns each branch's current tip plus any commits added after planning.
 pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<String, BranchRef>> {
     let mut branch_refs = BTreeMap::new();
+
     for node in &plan.nodes {
         let tip = node.tip.as_str();
         let actual = git.local_branch_tip(&node.branch)?;
@@ -42,15 +75,21 @@ pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<String, B
             ));
         }
 
-        let merges = git.rev_list_merges(tip, &actual)?;
-        if let Some(merge) = merges.first() {
+        let extra_commits = first_parent_chain(git, tip, &actual)?;
+        // Reachability alone is not enough: the planned tip must sit on the
+        // current tip's first-parent chain, otherwise the "extra" commits are
+        // foreign history that joined through a merge's second parent. The
+        // interior of the chain is contiguous by construction of the
+        // first-parent walk, and its last commit is `actual`, so checking the
+        // oldest commit suffices.
+        if let Some(first) = extra_commits.first()
+            && first.parents.first().map(String::as_str) != Some(tip)
+        {
             return invalid(format!(
-                "branch `{}` added merge commit `{merge}` after plan generation; merge replay is not supported yet",
-                node.branch
+                "branch `{}` no longer extends planned tip `{}` by first parent: commit `{}` added after plan generation starts elsewhere",
+                node.branch, tip, first.oid
             ));
         }
-
-        let extra_commits = git.rev_list_reverse(tip, &actual)?;
         branch_refs.insert(
             node.branch.clone(),
             BranchRef {
@@ -64,7 +103,7 @@ pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<String, B
 }
 
 fn validate_shape(plan: &Plan) -> Result<()> {
-    if plan.version != 1 {
+    if plan.version != PLAN_VERSION {
         return invalid(format!("unsupported plan version `{}`", plan.version));
     }
     let node_by_branch = node_by_branch(plan)?;
@@ -86,11 +125,19 @@ fn validate_shape(plan: &Plan) -> Result<()> {
                 node.branch
             ));
         }
-        if node.commits().last() != Some(&node.tip) {
+        if node.commits().last().map(|commit| commit.oid.as_str()) != Some(node.tip.as_str()) {
             return invalid(format!(
                 "node `{}` tip must match the last commit",
                 node.branch
             ));
+        }
+        for commit in node.commits() {
+            if commit.parents.is_empty() {
+                return invalid(format!(
+                    "commit `{}` for branch `{}` has no recorded parents",
+                    commit.oid, node.branch
+                ));
+            }
         }
 
         let Some(parent) = node.parent() else {
@@ -136,7 +183,7 @@ fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
         commits.insert(node.tip.as_str());
         commits.insert(node.base());
         for commit in node.commits() {
-            commits.insert(commit.as_str());
+            commits.insert(commit.oid.as_str());
         }
     }
 
@@ -153,24 +200,26 @@ fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
         let tip = node.tip.as_str();
         let base = node.base();
-        let commits = git.rev_list_reverse(base, tip)?;
-        if commits != node.commits() {
+        let actual = first_parent_chain(git, base, tip)?;
+        if actual != node.commits() {
             return invalid(format!(
                 "commit list for branch `{}` does not match {}..{}",
                 node.branch, base, tip
             ));
         }
-
-        let merges = git.rev_list_merges(base, tip)?;
-        if let Some(merge) = merges.first() {
-            return invalid(format!(
-                "branch `{}` contains merge commit `{merge}`; merge replay is not supported yet",
-                node.branch
-            ));
-        }
     }
 
     Ok(())
+}
+
+/// The first-parent chain of `base..tip`. Commits off the chain are reached
+/// through merge second parents and are never replayed.
+fn first_parent_chain(git: &Git, base: &str, tip: &str) -> Result<Vec<PlanCommit>> {
+    Ok(git
+        .rev_list_first_parent_with_parents(base, tip)?
+        .into_iter()
+        .map(|(oid, parents)| PlanCommit::new(oid, parents))
+        .collect())
 }
 
 fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
@@ -222,7 +271,7 @@ fn validate_default_fork_point_mappability(
         let parent = node_by_branch[parent_branch];
         let base = node.base();
         let parent_base = parent.base();
-        if base != parent_base && !parent.commits().iter().any(|commit| commit == base) {
+        if base != parent_base && !parent.contains_commit(base) {
             return invalid(format!(
                 "base `{}` for branch `{}` cannot be mapped through parent `{}`",
                 base, node.branch, parent.branch

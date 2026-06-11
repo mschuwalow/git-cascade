@@ -10,7 +10,12 @@ use std::str::FromStr;
 use time::OffsetDateTime;
 pub use topological::branches_in_topological_order;
 use uuid::Uuid;
-pub use validate::{BranchRef, validate_branch_refs, validate_plan, validate_plan_for_apply};
+pub use validate::{
+    BranchRef, validate_branch_refs, validate_merge_parents_for_apply, validate_plan,
+    validate_plan_for_apply,
+};
+
+pub const PLAN_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {
@@ -22,6 +27,12 @@ pub struct Plan {
     pub source: Source,
     pub nodes: Vec<Node>,
     pub dependencies: Vec<Dependency>,
+}
+
+impl Plan {
+    pub fn from_yaml(yaml: &str) -> Result<Self> {
+        Ok(serde_yaml::from_str(yaml)?)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -143,12 +154,32 @@ pub struct Source {
     pub tip: String,
 }
 
+/// A commit to replay, with its recorded parents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanCommit {
+    pub oid: String,
+    pub parents: Vec<String>,
+}
+
+impl PlanCommit {
+    pub fn new(oid: impl Into<String>, parents: Vec<String>) -> Self {
+        Self {
+            oid: oid.into(),
+            parents,
+        }
+    }
+
+    pub fn is_merge(&self) -> bool {
+        self.parents.len() > 1
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Node {
     pub branch: String,
     pub tip: String,
     pub base: String,
-    pub commits: Vec<String>,
+    pub commits: Vec<PlanCommit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
 }
@@ -162,8 +193,16 @@ impl Node {
         &self.base
     }
 
-    pub fn commits(&self) -> &[String] {
+    pub fn commits(&self) -> &[PlanCommit] {
         &self.commits
+    }
+
+    pub fn commit_oids(&self) -> impl Iterator<Item = &str> {
+        self.commits.iter().map(|commit| commit.oid.as_str())
+    }
+
+    pub fn contains_commit(&self, oid: &str) -> bool {
+        self.commit_oids().any(|commit| commit == oid)
     }
 
     pub fn is_root(&self) -> bool {

@@ -168,7 +168,7 @@ pr-2           D' -- E'
 pr-3                   F'
 ```
 
-When `--onto` is omitted, `git-cascade` uses the default branch, preferring `origin/HEAD`, then local `main`, then local `master`:
+When `--onto` is omitted, `git-cascade` uses the default branch, preferring `origin/HEAD`, then local `main`, then local `master`.
 
 For a true merge commit, `landed` uses the merge commit that introduced the old tip. That keeps child branches attached to the landing point instead of accidentally including unrelated later target-branch commits:
 
@@ -202,7 +202,7 @@ git cascade replay --old-base main --old-tip pr-1 --new-tip rewritten-pr-1
 
 `replay` moves the same kind of dependent branch stack as `sync`, `restack`, and `landed`, but it does not infer the situation for you. You provide the before/after refs directly.
 
-The targeted workflow commands always use `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. `replay` also defaults to `move-to-current-tips`, but it exposes `--strategy` for explicit-control cases.
+The targeted workflow commands and `replay` default to `move-to-current-tips`, so each child branch moves to its parent's rewritten apply-time tip. All of them expose `--strategy` for explicit-control cases.
 
 Preview the generic replay first:
 
@@ -230,7 +230,21 @@ The targeted workflow commands and explicit replay generate plans for you:
 
 Generated plans are deleted after a successful apply. If replay stops on a conflict, the generated plan is kept and the active state file points to it, so `git cascade continue` can recover.
 
-By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` strategy. Use `replay --strategy ...` or `plan apply --strategy ...` when you need a different strategy.
+By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` strategy. Pass `--strategy ...` when you need a different strategy.
+
+## Merge Commits
+
+Dependent branches are replayed along their first-parent chain, producing linear results:
+
+- A merge of target-branch history (typically a previous `git merge main` to catch up) is flattened away: the merged-in commits are already part of the new base, and the branch becomes linear.
+- A merge of history that the new tip does not contain (an unrelated local branch, or stacked work) cannot be flattened. Such branches are skipped during plan generation with a warning, or rejected at apply time; rebase them to linearize first.
+
+Two caveats about flattening:
+
+- Conflicts that were resolved in a flattened merge re-fire during replay and are resolved through the normal conflict flow. Edits that were made only in the merge commit itself, to content neither side had touched, are not replayed and disappear with the merge.
+- Branches that already start at their replay base are left untouched, including their merges. Linearization happens when a branch is actually replayed, not on no-op runs.
+
+Fork points that are ambiguous because of criss-cross merges make a branch unplannable; it is skipped with a warning.
 
 ## Conflicts
 

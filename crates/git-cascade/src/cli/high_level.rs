@@ -12,16 +12,6 @@ pub(super) struct RunOptions {
     pub(super) in_place: bool,
 }
 
-impl RunOptions {
-    pub(super) fn move_to_current_tips(is_dry_run: bool, in_place: bool) -> Self {
-        Self {
-            strategy: Strategy::MoveToCurrentTips,
-            is_dry_run,
-            in_place,
-        }
-    }
-}
-
 pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOptions) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
@@ -138,15 +128,20 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
             continue;
         }
 
-        let Some(fork_point) = git.merge_base(&onto_tip, &branch.tip)? else {
+        // Criss-cross branches are skipped here and warned about during
+        // plan generation.
+        let mut bases = git.merge_bases_all(&onto_tip, &branch.tip)?;
+        if bases.len() != 1 {
             continue;
-        };
+        }
+        let fork_point = bases.remove(0);
         if fork_point == onto_tip {
             continue;
         }
 
         oldest_fork_point = Some(if let Some(current) = oldest_fork_point {
-            git.merge_base(&current, &fork_point)?.unwrap_or(current)
+            git.unique_merge_base(&current, &fork_point)?
+                .unwrap_or(current)
         } else {
             fork_point
         });

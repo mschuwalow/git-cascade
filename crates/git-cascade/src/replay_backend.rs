@@ -39,6 +39,14 @@ pub(crate) trait ReplayBackend {
         commit_index: usize,
         total_commits: usize,
     ) -> Result<String>;
+    /// Reports that a merge commit was flattened away.
+    fn flatten_merge(
+        &mut self,
+        node: &Node,
+        commit: &str,
+        commit_index: usize,
+        total_commits: usize,
+    ) -> Result<()>;
     fn continue_cherry_pick(
         &mut self,
         state: &ApplyState,
@@ -177,6 +185,22 @@ impl ReplayBackend for GitReplayBackend<'_> {
             });
         }
         worktree_git.head_oid()
+    }
+
+    fn flatten_merge(
+        &mut self,
+        _node: &Node,
+        commit: &str,
+        commit_index: usize,
+        total_commits: usize,
+    ) -> Result<()> {
+        eprintln!(
+            "  flattened merge {}/{} {}",
+            commit_index + 1,
+            total_commits,
+            short_oid(commit)
+        );
+        Ok(())
     }
 
     fn skip_replay(
@@ -410,6 +434,17 @@ impl ReplayBackend for DryRunReplayBackend {
         } else {
             Ok(format!("<rewritten {}:{commit}>", node.branch))
         }
+    }
+
+    fn flatten_merge(
+        &mut self,
+        _node: &Node,
+        commit: &str,
+        _commit_index: usize,
+        _total_commits: usize,
+    ) -> Result<()> {
+        writeln!(self.output, "# flatten merge {commit}").unwrap();
+        Ok(())
     }
 
     fn skip_replay(

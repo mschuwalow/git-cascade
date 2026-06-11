@@ -42,14 +42,24 @@ fn plan_creates_named_plan_for_linear_stack() {
     assert_eq!(plan.nodes[0].branch, "pr-2");
     assert_eq!(plan.nodes[0].base(), pr1_b);
     assert_eq!(plan.nodes[0].tip, pr2);
-    assert_eq!(plan.nodes[0].commits(), std::slice::from_ref(&pr2));
+    assert_eq!(
+        plan.nodes[0].commit_oids().collect::<Vec<_>>(),
+        [pr2.as_str()]
+    );
+    assert_eq!(
+        plan.nodes[0].commits()[0].parents,
+        std::slice::from_ref(&pr1_b)
+    );
     assert_eq!(plan.nodes[0].parent(), None);
 
     assert_eq!(plan.nodes[1].branch, "pr-3");
     assert_eq!(plan.nodes[1].parent(), Some("pr-2"));
     assert_eq!(plan.nodes[1].base(), pr2);
     assert_eq!(plan.nodes[1].tip, pr3);
-    assert_eq!(plan.nodes[1].commits(), std::slice::from_ref(&pr3));
+    assert_eq!(
+        plan.nodes[1].commit_oids().collect::<Vec<_>>(),
+        [pr3.as_str()]
+    );
 
     assert_eq!(plan.dependencies[0].parent, "pr-2");
     assert_eq!(plan.dependencies[0].child, "pr-3");
@@ -420,7 +430,7 @@ fn plan_refuses_while_state_exists() {
 }
 
 #[test]
-fn plan_rejects_merge_commits() {
+fn plan_skips_branch_that_merged_sibling_work() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -444,11 +454,21 @@ fn plan_rejects_merge_commits() {
             "pr-1",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("merge replay is not supported"));
+        .success()
+        .stderr(predicate::str::contains(
+            "skipping branch `pr-2`: merge commit `",
+        ));
+
+    let plan = read_plan(&repo, "stack");
+    let branches = plan
+        .nodes
+        .iter()
+        .map(|node| node.branch.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(branches, ["side"]);
 }
 
 fn read_plan(repo: &TestRepo, name: &str) -> Plan {
     let content = std::fs::read_to_string(repo.plan_path(name)).unwrap();
-    serde_yaml::from_str(&content).unwrap()
+    Plan::from_yaml(&content).unwrap()
 }

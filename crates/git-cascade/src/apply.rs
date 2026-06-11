@@ -1,7 +1,7 @@
 use crate::git::Git;
 use crate::plan::{
-    BranchRef, Node, Plan, PlanName, branches_in_topological_order, validate_branch_refs,
-    validate_plan,
+    BranchRef, Node, Plan, PlanCommit, PlanName, branches_in_topological_order,
+    validate_branch_refs, validate_merge_parents_for_apply, validate_plan,
 };
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
@@ -36,6 +36,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     validate_plan(git, plan)?;
     let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
+    validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
     let ordered = branches_in_topological_order(plan)?;
     let worktree = if options.in_place {
         git.worktree_root()?
@@ -76,6 +77,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     validate_plan(git, plan)?;
     let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
+    validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
     let ordered = branches_in_topological_order(plan)?;
     let (worktree_state, worktree) = if options.in_place {
         let worktree = git.worktree_root()?;
@@ -134,7 +136,10 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
         run_deleting_state(&mut state_writer, &mut backend, &mut state)
     } else {
         let plan_name = state.plan_name.clone();
-        let plan = serde_yaml::from_str(&storage.read_plan(&plan_name)?)?;
+        let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
+        // Branch refs are not re-checked here: they may legitimately already
+        // point at rewritten tips when resuming a final update.
+        validate_plan(git, &plan)?;
         run_apply_state(&plan, &mut state_writer, &mut backend, &mut state)
     }
 }
@@ -251,8 +256,19 @@ fn replay_pending_branches(
         let commits = replay_commits_from_extra(node, &state.extra_commits);
         let was_resuming = state.current.is_some();
 
-        let start_commit_index = if was_resuming {
-            resume_start_commit_index(node, state, &mappings, &commits)?
+        let (start_commit_index, mut last_rewritten) = if was_resuming {
+            let start = resume_start_commit_index(node, state, &mappings, &commits)?;
+            let head = commits
+                .get(start.wrapping_sub(1))
+                .and_then(|commit| mappings.get(&commit.oid))
+                .cloned()
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "branch `{}` has no rewritten commit to resume from",
+                        node.branch
+                    ))
+                })?;
+            (start, head)
         } else {
             let base = actual_replay_base(
                 node,
@@ -269,14 +285,17 @@ fn replay_pending_branches(
             mappings.insert(node.base().to_owned(), base.clone());
 
             if base == node.base() {
-                // The branch already starts at its replay base; keep its
-                // existing commits instead of rewriting them.
+                // Already at its replay base; keep the existing commits.
                 for commit in &commits {
-                    mappings.insert(commit.clone(), commit.clone());
+                    mappings.insert(commit.oid.clone(), commit.oid.clone());
                 }
-                let current_tip = commits.last().cloned().ok_or_else(|| {
-                    Error::InvalidPlan(format!("branch `{}` has no commits", node.branch))
-                })?;
+                let current_tip =
+                    commits
+                        .last()
+                        .map(|commit| commit.oid.clone())
+                        .ok_or_else(|| {
+                            Error::InvalidPlan(format!("branch `{}` has no commits", node.branch))
+                        })?;
                 let (temp_ref, branch_tip) =
                     backend.skip_replay(plan, node, branch_index, total_branches, &current_tip)?;
                 temp_tips.insert(node.branch.clone(), branch_tip);
@@ -289,7 +308,7 @@ fn replay_pending_branches(
             }
 
             backend.prepare_branch(state, branch_index, total_branches, node, &base)?;
-            0
+            (0, base)
         };
 
         backend.start_replay(
@@ -301,13 +320,20 @@ fn replay_pending_branches(
             was_resuming,
         )?;
         for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
+            if commit.is_merge() {
+                // The merged history is contained in the new base; flatten.
+                backend.flatten_merge(node, &commit.oid, commit_index, commits.len())?;
+                mappings.insert(commit.oid.clone(), last_rewritten.clone());
+                continue;
+            }
+
             let rewritten_commit =
-                match backend.cherry_pick(state, node, commit, commit_index, commits.len()) {
+                match backend.cherry_pick(state, node, &commit.oid, commit_index, commits.len()) {
                     Ok(rewritten_commit) => rewritten_commit,
                     Err(error) => {
                         state.current = Some(CurrentState {
                             branch: node.branch.clone(),
-                            commit: commit.clone(),
+                            commit: commit.oid.clone(),
                             worktree: state.worktree.path().to_owned(),
                         });
                         state.mappings = mappings.clone();
@@ -317,14 +343,15 @@ fn replay_pending_branches(
                         return Err(error);
                     }
                 };
-            mappings.insert(commit.clone(), rewritten_commit);
+            mappings.insert(commit.oid.clone(), rewritten_commit.clone());
+            last_rewritten = rewritten_commit;
         }
 
         let rewritten_tip = if let Some(commit) = commits.last() {
-            mappings.get(commit).cloned().ok_or_else(|| {
+            mappings.get(&commit.oid).cloned().ok_or_else(|| {
                 Error::InvalidPlan(format!(
-                    "commit `{commit}` for branch `{}` has no rewritten mapping",
-                    node.branch
+                    "commit `{}` for branch `{}` has no rewritten mapping",
+                    commit.oid, node.branch
                 ))
             })?
         } else {
@@ -367,7 +394,7 @@ fn resume_start_commit_index(
     node: &Node,
     state: &mut ApplyState,
     mappings: &BTreeMap<String, String>,
-    commits: &[String],
+    commits: &[PlanCommit],
 ) -> Result<usize> {
     let current = state.current.as_ref().expect("resume requires current");
     if current.branch != node.branch {
@@ -385,7 +412,7 @@ fn resume_start_commit_index(
 
     let start_commit_index = commits
         .iter()
-        .position(|commit| commit == &current.commit)
+        .position(|commit| commit.oid == current.commit)
         .map(|index| index + 1)
         .ok_or_else(|| {
             Error::InvalidPlan(format!(
@@ -490,7 +517,7 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
 
 fn branch_tips_and_extra_commits(
     branch_refs: BTreeMap<String, BranchRef>,
-) -> (BTreeMap<String, String>, BTreeMap<String, Vec<String>>) {
+) -> (BTreeMap<String, String>, BTreeMap<String, Vec<PlanCommit>>) {
     let mut branch_tips = BTreeMap::new();
     let mut extra_commits = BTreeMap::new();
     for (branch, branch_ref) in branch_refs {
@@ -503,8 +530,8 @@ fn branch_tips_and_extra_commits(
 
 fn replay_commits_from_extra(
     node: &Node,
-    extra_commits: &BTreeMap<String, Vec<String>>,
-) -> Vec<String> {
+    extra_commits: &BTreeMap<String, Vec<PlanCommit>>,
+) -> Vec<PlanCommit> {
     let mut commits = node.commits().to_vec();
     if let Some(extra) = extra_commits.get(&node.branch) {
         commits.extend(extra.iter().cloned());
