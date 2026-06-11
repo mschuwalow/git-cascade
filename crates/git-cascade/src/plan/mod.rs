@@ -10,7 +10,33 @@ use std::str::FromStr;
 use time::OffsetDateTime;
 pub use topological::branches_in_topological_order;
 use uuid::Uuid;
-pub use validate::{BranchRef, validate_branch_refs, validate_plan, validate_plan_for_apply};
+pub use validate::{
+    BranchRef, validate_branch_refs, validate_plan, validate_plan_for_apply,
+    validate_unmapped_parents_for_apply,
+};
+
+/// Current plan schema version. Version 1 (linear commit lists) is still
+/// accepted on read; see [`Plan::from_yaml`].
+pub const PLAN_VERSION: u32 = 2;
+
+/// The first commit on the tip's first-parent chain whose own first parent
+/// lies outside `commits`. Its first parent is the branch's effective fork
+/// point; apply substitutes it with the selected replay base so the chain is
+/// transplanted even when it does not start at the node base.
+pub fn first_parent_chain_root(commits: &[PlanCommit]) -> Option<&PlanCommit> {
+    let by_oid = commits
+        .iter()
+        .map(|commit| (commit.oid.as_str(), commit))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut current = commits.last()?;
+    loop {
+        let parent = current.first_parent()?;
+        match by_oid.get(parent) {
+            Some(next) => current = next,
+            None => return Some(current),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {
@@ -22,6 +48,30 @@ pub struct Plan {
     pub source: Source,
     pub nodes: Vec<Node>,
     pub dependencies: Vec<Dependency>,
+}
+
+impl Plan {
+    /// Deserializes a stored plan and normalizes it to the current schema.
+    ///
+    /// Version 1 plans recorded commits as plain oid strings of a linear
+    /// range; parents are synthesized accordingly.
+    pub fn from_yaml(yaml: &str) -> Result<Self> {
+        let mut plan: Self = serde_yaml::from_str(yaml)?;
+        plan.normalize_commit_parents();
+        Ok(plan)
+    }
+
+    fn normalize_commit_parents(&mut self) {
+        for node in &mut self.nodes {
+            let mut previous = node.base.clone();
+            for commit in &mut node.commits {
+                if commit.parents.is_empty() {
+                    commit.parents = vec![previous.clone()];
+                }
+                previous = commit.oid.clone();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -143,12 +193,65 @@ pub struct Source {
     pub tip: String,
 }
 
+/// A commit to replay, with its recorded parents.
+///
+/// Deserializes from either a plain oid string (version 1 plans; parents are
+/// synthesized by [`Plan::from_yaml`]) or a structured `{oid, parents}` map.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PlanCommit {
+    pub oid: String,
+    pub parents: Vec<String>,
+}
+
+impl PlanCommit {
+    pub fn new(oid: impl Into<String>, parents: Vec<String>) -> Self {
+        Self {
+            oid: oid.into(),
+            parents,
+        }
+    }
+
+    pub fn is_merge(&self) -> bool {
+        self.parents.len() > 1
+    }
+
+    pub fn first_parent(&self) -> Option<&str> {
+        self.parents.first().map(String::as_str)
+    }
+}
+
+impl<'de> Deserialize<'de> for PlanCommit {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Plain(String),
+            Structured {
+                oid: String,
+                #[serde(default)]
+                parents: Vec<String>,
+            },
+        }
+
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::Plain(oid) => Self {
+                oid,
+                parents: Vec::new(),
+            },
+            Repr::Structured { oid, parents } => Self { oid, parents },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Node {
     pub branch: String,
     pub tip: String,
     pub base: String,
-    pub commits: Vec<String>,
+    pub commits: Vec<PlanCommit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
 }
@@ -162,8 +265,16 @@ impl Node {
         &self.base
     }
 
-    pub fn commits(&self) -> &[String] {
+    pub fn commits(&self) -> &[PlanCommit] {
         &self.commits
+    }
+
+    pub fn commit_oids(&self) -> impl Iterator<Item = &str> {
+        self.commits.iter().map(|commit| commit.oid.as_str())
+    }
+
+    pub fn contains_commit(&self, oid: &str) -> bool {
+        self.commit_oids().any(|commit| commit == oid)
     }
 
     pub fn is_root(&self) -> bool {

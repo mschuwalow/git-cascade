@@ -16,6 +16,25 @@ pub struct WorktreeEntry {
     pub branch: Option<String>,
 }
 
+/// Author identity of an existing commit, used to preserve authorship when
+/// re-creating merge commits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitAuthor {
+    pub name: String,
+    pub email: String,
+    pub date: String,
+}
+
+impl CommitAuthor {
+    fn env(&self) -> [(&'static str, &str); 3] {
+        [
+            ("GIT_AUTHOR_NAME", self.name.as_str()),
+            ("GIT_AUTHOR_EMAIL", self.email.as_str()),
+            ("GIT_AUTHOR_DATE", self.date.as_str()),
+        ]
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Git {
     cwd: PathBuf,
@@ -35,11 +54,41 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.output_with(args, &[], None)
+    }
+
+    fn output_with<I, S>(
+        &self,
+        args: I,
+        envs: &[(&str, &str)],
+        stdin: Option<&str>,
+    ) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let args = collect_args(args);
-        let output = Command::new("git")
-            .current_dir(&self.cwd)
-            .args(&args)
-            .output()?;
+        let mut command = Command::new("git");
+        command.current_dir(&self.cwd).args(&args);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+
+        let output = if let Some(input) = stdin {
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = command.spawn()?;
+            child
+                .stdin
+                .as_mut()
+                .expect("stdin is piped")
+                .write_all(input.as_bytes())?;
+            child.wait_with_output()?
+        } else {
+            command.output()?
+        };
 
         if !output.status.success() {
             return Err(Error::Git {
@@ -297,6 +346,15 @@ impl Git {
             .filter(|output| !output.is_empty()))
     }
 
+    /// All merge bases between two commits. More than one entry indicates a
+    /// criss-cross history where the fork point is ambiguous.
+    pub fn merge_bases_all(&self, left: &str, right: &str) -> Result<Vec<String>> {
+        Ok(self
+            .output_allowing_status(["merge-base", "--all", left, right], &[1])?
+            .map(|output| output.lines().map(str::to_owned).collect())
+            .unwrap_or_default())
+    }
+
     pub fn rev_list_reverse(&self, base: &str, tip: &str) -> Result<Vec<String>> {
         let range = format!("{base}..{tip}");
         Ok(self
@@ -304,6 +362,25 @@ impl Git {
             .lines()
             .map(str::to_owned)
             .collect())
+    }
+
+    /// Commits in `base..tip` with their parents, parents-before-children.
+    pub fn rev_list_with_parents(
+        &self,
+        base: &str,
+        tip: &str,
+    ) -> Result<Vec<(String, Vec<String>)>> {
+        let range = format!("{base}..{tip}");
+        let output = self.output(["rev-list", "--reverse", "--topo-order", "--parents", &range])?;
+        let mut commits = Vec::new();
+        for line in output.lines() {
+            let mut parts = line.split_whitespace().map(str::to_owned);
+            let Some(oid) = parts.next() else {
+                continue;
+            };
+            commits.push((oid, parts.collect()));
+        }
+        Ok(commits)
     }
 
     pub fn rev_list_merges(&self, base: &str, tip: &str) -> Result<Vec<String>> {
@@ -428,12 +505,22 @@ impl Git {
         self.run(["cherry-pick", commit])
     }
 
+    /// Stages the first-parent diff of a merge commit without committing.
+    pub fn cherry_pick_mainline_no_commit(&self, commit: &str) -> Result<()> {
+        self.run(["cherry-pick", "-m", "1", "--no-commit", commit])
+    }
+
     pub fn cherry_pick_continue(&self) -> Result<()> {
         self.run(["cherry-pick", "--continue"])
     }
 
     pub fn cherry_pick_skip(&self) -> Result<()> {
         self.run(["cherry-pick", "--skip"])
+    }
+
+    pub fn try_cherry_pick_quit(&self) -> Result<()> {
+        self.output_allowing_status(["cherry-pick", "--quit"], &[1, 128])
+            .map(|_| ())
     }
 
     pub fn cherry_pick_in_progress(&self) -> Result<bool> {
@@ -444,6 +531,78 @@ impl Git {
     pub fn has_staged_changes(&self) -> Result<bool> {
         self.output_allowing_status(["diff", "--cached", "--quiet"], &[1])
             .map(|output| output.is_none())
+    }
+
+    pub fn commit_author(&self, commit: &str) -> Result<CommitAuthor> {
+        let output = self.output(["log", "-1", "--format=%an%x00%ae%x00%aD", commit])?;
+        let mut parts = output.trim_end_matches('\n').splitn(3, '\0');
+        let (Some(name), Some(email), Some(date)) = (parts.next(), parts.next(), parts.next())
+        else {
+            return Err(Error::Unsupported(format!(
+                "cannot read author of commit `{commit}`"
+            )));
+        };
+        Ok(CommitAuthor {
+            name: name.to_owned(),
+            email: email.to_owned(),
+            date: date.to_owned(),
+        })
+    }
+
+    pub fn commit_message(&self, commit: &str) -> Result<String> {
+        self.output(["log", "-1", "--format=%B", commit])
+    }
+
+    pub fn write_tree(&self) -> Result<String> {
+        Ok(self.output(["write-tree"])?.trim().to_owned())
+    }
+
+    /// Creates a commit object for `tree` with explicit parents, preserving
+    /// the given author. The committer is the current user, matching
+    /// cherry-pick behavior.
+    pub fn commit_tree(
+        &self,
+        tree: &str,
+        parents: &[String],
+        message: &str,
+        author: &CommitAuthor,
+    ) -> Result<String> {
+        let mut args = vec![OsString::from("commit-tree"), OsString::from(tree)];
+        for parent in parents {
+            args.push(OsString::from("-p"));
+            args.push(OsString::from(parent));
+        }
+        Ok(self
+            .output_with(args, &author.env(), Some(message))?
+            .trim()
+            .to_owned())
+    }
+
+    /// Re-merges `commit` into HEAD with the original merge's message and
+    /// author.
+    pub fn merge_no_ff(&self, commit: &str, message: &str, author: &CommitAuthor) -> Result<()> {
+        self.output_with(
+            ["merge", "--no-ff", "--no-edit", "-m", message, commit],
+            &author.env(),
+            None,
+        )
+        .map(|_| ())
+    }
+
+    pub fn merge_in_progress(&self) -> Result<bool> {
+        Ok(self.try_rev_parse("MERGE_HEAD")?.is_some())
+    }
+
+    pub fn try_merge_abort(&self) -> Result<()> {
+        self.output_allowing_status(["merge", "--abort"], &[1, 128])
+            .map(|_| ())
+    }
+
+    /// Completes an in-progress merge after conflict resolution, preserving
+    /// the original author.
+    pub fn commit_no_edit_with_author(&self, author: &CommitAuthor) -> Result<()> {
+        self.output_with(["commit", "--no-edit"], &author.env(), None)
+            .map(|_| ())
     }
 
     pub fn try_cherry_pick_abort(&self) -> Result<()> {

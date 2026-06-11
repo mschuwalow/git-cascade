@@ -32,7 +32,7 @@ fn plan_creates_named_plan_for_linear_stack() {
         .stdout("created plan `stack`\n");
 
     let plan = read_plan(&repo, "stack");
-    assert_eq!(plan.version, 1);
+    assert_eq!(plan.version, 2);
     assert_eq!(plan.source.name, "stack");
     assert_eq!(plan.source.base, initial);
     assert_eq!(plan.source.tip, pr1_b);
@@ -42,14 +42,24 @@ fn plan_creates_named_plan_for_linear_stack() {
     assert_eq!(plan.nodes[0].branch, "pr-2");
     assert_eq!(plan.nodes[0].base(), pr1_b);
     assert_eq!(plan.nodes[0].tip, pr2);
-    assert_eq!(plan.nodes[0].commits(), std::slice::from_ref(&pr2));
+    assert_eq!(
+        plan.nodes[0].commit_oids().collect::<Vec<_>>(),
+        [pr2.as_str()]
+    );
+    assert_eq!(
+        plan.nodes[0].commits()[0].parents,
+        std::slice::from_ref(&pr1_b)
+    );
     assert_eq!(plan.nodes[0].parent(), None);
 
     assert_eq!(plan.nodes[1].branch, "pr-3");
     assert_eq!(plan.nodes[1].parent(), Some("pr-2"));
     assert_eq!(plan.nodes[1].base(), pr2);
     assert_eq!(plan.nodes[1].tip, pr3);
-    assert_eq!(plan.nodes[1].commits(), std::slice::from_ref(&pr3));
+    assert_eq!(
+        plan.nodes[1].commit_oids().collect::<Vec<_>>(),
+        [pr3.as_str()]
+    );
 
     assert_eq!(plan.dependencies[0].parent, "pr-2");
     assert_eq!(plan.dependencies[0].child, "pr-3");
@@ -420,7 +430,7 @@ fn plan_refuses_while_state_exists() {
 }
 
 #[test]
-fn plan_rejects_merge_commits() {
+fn plan_supports_merge_commits_in_dependents() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -428,9 +438,10 @@ fn plan_rejects_merge_commits() {
     repo.switch_new("pr-2");
     repo.commit_file("b.txt", "b\n", "b");
     repo.switch_new_at("side", "pr-1");
-    repo.commit_file("side.txt", "side\n", "side");
+    let side_commit = repo.commit_file("side.txt", "side\n", "side");
     repo.switch("pr-2");
     repo.git_ok(["merge", "--no-ff", "side", "-m", "merge side"]);
+    let merge_commit = repo.rev_parse("pr-2");
     repo.switch("main");
 
     repo.cascade()
@@ -444,11 +455,24 @@ fn plan_rejects_merge_commits() {
             "pr-1",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("merge replay is not supported"));
+        .success();
+
+    let plan = read_plan(&repo, "stack");
+    let pr2 = plan
+        .nodes
+        .iter()
+        .find(|node| node.branch == "pr-2")
+        .unwrap();
+    let merge = pr2
+        .commits()
+        .iter()
+        .find(|commit| commit.oid == merge_commit)
+        .unwrap();
+    assert_eq!(merge.parents.len(), 2);
+    assert!(merge.parents.contains(&side_commit) || pr2.base() == side_commit);
 }
 
 fn read_plan(repo: &TestRepo, name: &str) -> Plan {
     let content = std::fs::read_to_string(repo.plan_path(name)).unwrap();
-    serde_yaml::from_str(&content).unwrap()
+    Plan::from_yaml(&content).unwrap()
 }

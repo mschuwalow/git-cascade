@@ -6,7 +6,7 @@ mod status;
 use crate::Result;
 use crate::apply::{abort as abort_apply, continue_apply};
 use crate::git::Git;
-use crate::state::BaseStrategy;
+use crate::state::{BaseStrategy, MergeStrategy};
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -37,6 +37,9 @@ enum Command {
         /// Base branch or ref the branch stack forked from. Defaults to the default branch.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// How merge commits in dependent branches are reproduced.
+        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
+        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -58,6 +61,9 @@ enum Command {
         /// Base selection strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
         base_strategy: BaseStrategy,
+        /// How merge commits in dependent branches are reproduced.
+        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
+        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -70,6 +76,9 @@ enum Command {
         /// Base branch or ref to sync stacks onto. Defaults to the current default branch.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// How merge commits in dependent branches are reproduced.
+        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
+        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -88,6 +97,9 @@ enum Command {
         /// Explicit old range base for fast-forward or ambiguous landings.
         #[arg(long, value_name = "REF")]
         old_base: Option<String>,
+        /// How merge commits in dependent branches are reproduced.
+        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
+        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -131,18 +143,20 @@ where
         Command::Restack {
             branch,
             base,
+            merge_strategy,
             dry_run,
             in_place,
         } => high_level::restack(
             branch,
             base,
-            high_level::RunOptions::move_to_current_tips(dry_run, in_place),
+            high_level::RunOptions::move_to_current_tips(merge_strategy, dry_run, in_place),
         ),
         Command::Replay {
             old_tip,
             old_base,
             new_tip,
             base_strategy,
+            merge_strategy,
             dry_run,
             in_place,
         } => high_level::replay(
@@ -151,29 +165,32 @@ where
             &new_tip,
             high_level::RunOptions {
                 base_strategy,
+                merge_strategy,
                 is_dry_run: dry_run,
                 in_place,
             },
         ),
         Command::Sync {
             base,
+            merge_strategy,
             dry_run,
             in_place,
         } => high_level::sync(
             base,
-            high_level::RunOptions::move_to_current_tips(dry_run, in_place),
+            high_level::RunOptions::move_to_current_tips(merge_strategy, dry_run, in_place),
         ),
         Command::Landed {
             old_tip,
             onto,
             old_base,
+            merge_strategy,
             dry_run,
             in_place,
         } => high_level::landed(
             &old_tip,
             onto,
             old_base,
-            high_level::RunOptions::move_to_current_tips(dry_run, in_place),
+            high_level::RunOptions::move_to_current_tips(merge_strategy, dry_run, in_place),
         ),
         Command::Status => status::status(),
         Command::Abort => abort(),

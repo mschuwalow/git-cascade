@@ -1,4 +1,4 @@
-use crate::plan::{PlanId, PlanName};
+use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
 use crate::{Error, Result};
 use clap::ValueEnum;
@@ -23,11 +23,13 @@ pub struct ApplyState {
     pub new_tip: String,
     #[serde(alias = "strategy")]
     pub base_strategy: BaseStrategy,
+    #[serde(default)]
+    pub merge_strategy: MergeStrategy,
     pub current: Option<CurrentState>,
     pub worktree: WorktreeState,
     pub completed: CompletedState,
     pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<String>>,
+    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
     pub cleanup: CleanupState,
@@ -87,11 +89,69 @@ impl std::fmt::Display for BaseStrategy {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum MergeStrategy {
+    /// Replay each merge commit's original tree resolution onto the rewritten
+    /// parents, preserving manual conflict resolutions.
+    #[default]
+    ReplayResolution,
+    /// Re-run the merge on the rewritten parents, recomputing resolutions.
+    ReMerge,
+}
+
+impl MergeStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplayResolution => "replay-resolution",
+            Self::ReMerge => "re-merge",
+        }
+    }
+}
+
+impl std::fmt::Display for MergeStrategy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// The replay operation that was interrupted by a conflict, so `continue`
+/// can resume it correctly.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReplayOp {
+    #[default]
+    CherryPick,
+    MergeResolution,
+    ReMerge,
+}
+
+impl ReplayOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CherryPick => "cherry-pick",
+            Self::MergeResolution => "merge-resolution",
+            Self::ReMerge => "re-merge",
+        }
+    }
+}
+
+impl std::fmt::Display for ReplayOp {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurrentState {
     pub branch: String,
     pub commit: String,
     pub worktree: String,
+    #[serde(default)]
+    pub op: ReplayOp,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mapped_parents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -307,9 +367,10 @@ pub struct ApplyStateInput<'a> {
     pub plan_id: &'a PlanId,
     pub new_tip: &'a str,
     pub base_strategy: BaseStrategy,
+    pub merge_strategy: MergeStrategy,
     pub pending_branches: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<String>>,
+    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
     pub mappings: BTreeMap<String, String>,
     pub worktree: WorktreeState,
 }
@@ -318,7 +379,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
     let now = timestamp()?;
 
     Ok(ApplyState {
-        version: 1,
+        version: 2,
         phase: Phase::Replay,
         plan_name: input.plan_name.clone(),
         plan_id: *input.plan_id,
@@ -327,6 +388,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         pid: std::process::id(),
         new_tip: input.new_tip.to_owned(),
         base_strategy: input.base_strategy,
+        merge_strategy: input.merge_strategy,
         current: None,
         worktree: input.worktree,
         completed: CompletedState::default(),

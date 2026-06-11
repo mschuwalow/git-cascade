@@ -1,5 +1,7 @@
 use super::validate::validate_plan;
-use super::{Dependency, Node, Plan, PlanId, PlanName, Repository, Source};
+use super::{
+    Dependency, Node, PLAN_VERSION, Plan, PlanCommit, PlanId, PlanName, Repository, Source,
+};
 use crate::git::{Git, LocalBranch};
 use crate::storage::Storage;
 use crate::{Error, Result};
@@ -21,16 +23,16 @@ struct Candidate {
     branch: LocalBranch,
     parent_branch: Option<String>,
     old_base: String,
-    commits: Vec<String>,
+    commits: Vec<PlanCommit>,
 }
 
 /// Memoizes the pairwise git queries used during candidate discovery, which
 /// would otherwise be repeated for every candidate selection round.
 struct GitQueries<'a> {
     git: &'a Git,
-    merge_bases: HashMap<(String, String), Option<String>>,
+    merge_bases: HashMap<(String, String), Vec<String>>,
     ancestors: HashMap<(String, String), bool>,
-    owned_commits: HashMap<(String, String), Vec<String>>,
+    owned_commits: HashMap<(String, String), Vec<PlanCommit>>,
 }
 
 impl<'a> GitQueries<'a> {
@@ -43,15 +45,30 @@ impl<'a> GitQueries<'a> {
         }
     }
 
-    fn merge_base(&mut self, left: &str, right: &str) -> Result<Option<String>> {
+    /// The unique merge base of two commits, or an error when the history is
+    /// criss-crossed and the fork point is ambiguous.
+    fn unique_merge_base(
+        &mut self,
+        left: &str,
+        right: &str,
+        branch: &str,
+    ) -> Result<Option<String>> {
         let key = (left.to_owned(), right.to_owned());
-        if let Some(result) = self.merge_bases.get(&key) {
-            return Ok(result.clone());
-        }
+        let bases = if let Some(bases) = self.merge_bases.get(&key) {
+            bases.clone()
+        } else {
+            let bases = self.git.merge_bases_all(left, right)?;
+            self.merge_bases.insert(key, bases.clone());
+            bases
+        };
 
-        let result = self.git.merge_base(left, right)?;
-        self.merge_bases.insert(key, result.clone());
-        Ok(result)
+        match bases.len() {
+            0 => Ok(None),
+            1 => Ok(Some(bases[0].clone())),
+            _ => Err(Error::InvalidInvocation(format!(
+                "branch `{branch}` has multiple merge bases with `{left}` (criss-cross history); pass an explicit base with `plan create --old-base <ref>` or exclude the branch"
+            ))),
+        }
     }
 
     fn is_ancestor(&mut self, ancestor: &str, descendant: &str) -> Result<bool> {
@@ -65,20 +82,18 @@ impl<'a> GitQueries<'a> {
         Ok(result)
     }
 
-    fn owned_commits(&mut self, base: &str, tip: &str, branch: &str) -> Result<Vec<String>> {
+    fn owned_commits(&mut self, base: &str, tip: &str) -> Result<Vec<PlanCommit>> {
         let key = (base.to_owned(), tip.to_owned());
         if let Some(result) = self.owned_commits.get(&key) {
             return Ok(result.clone());
         }
 
-        let merges = self.git.rev_list_merges(base, tip)?;
-        if let Some(merge) = merges.first() {
-            return Err(Error::Unsupported(format!(
-                "branch `{branch}` contains merge commit `{merge}`; merge replay is not supported yet"
-            )));
-        }
-
-        let result = self.git.rev_list_reverse(base, tip)?;
+        let result = self
+            .git
+            .rev_list_with_parents(base, tip)?
+            .into_iter()
+            .map(|(oid, parents)| PlanCommit::new(oid, parents))
+            .collect::<Vec<_>>();
         self.owned_commits.insert(key, result.clone());
         Ok(result)
     }
@@ -146,7 +161,7 @@ pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
     let plan_id = PlanId::new();
 
     Ok(Plan {
-        version: 1,
+        version: PLAN_VERSION,
         plan_id,
         generated_at: OffsetDateTime::now_utc(),
         repository: Repository {
@@ -170,11 +185,16 @@ fn old_range_base(
     old_base_input: &str,
     old_base_tip: &str,
 ) -> Result<String> {
-    git.merge_base(old_tip, old_base_tip)?.ok_or_else(|| {
-        Error::InvalidInvocation(format!(
+    let mut bases = git.merge_bases_all(old_tip, old_base_tip)?;
+    match bases.len() {
+        0 => Err(Error::InvalidInvocation(format!(
             "old base `{old_base_input}` has no merge base with old tip for plan `{name}`"
-        ))
-    })
+        ))),
+        1 => Ok(bases.remove(0)),
+        _ => Err(Error::InvalidInvocation(format!(
+            "old base `{old_base_input}` has multiple merge bases with the old tip for plan `{name}` (criss-cross history); pass a concrete fork-point commit as --old-base"
+        ))),
+    }
 }
 
 fn old_tip_local_branch(git: &Git, old_tip: &str) -> Result<Option<String>> {
@@ -234,12 +254,18 @@ fn next_candidate(
             continue;
         }
 
-        if let Some(base) = queries.merge_base(source_old_tip, &branch.tip)?
-            && !queries.is_ancestor(&branch.tip, source_old_tip)?
+        // Branches already contained in the old tip are never candidates;
+        // check this before merge-base uniqueness so merged-away branches
+        // with criss-cross history do not abort generation.
+        if queries.is_ancestor(&branch.tip, source_old_tip)? {
+            continue;
+        }
+
+        if let Some(base) = queries.unique_merge_base(source_old_tip, &branch.tip, &branch.name)?
             && base != source_old_base
             && queries.is_ancestor(source_old_base, &base)?
         {
-            let commits = queries.owned_commits(&base, &branch.tip, &branch.name)?;
+            let commits = queries.owned_commits(&base, &branch.tip)?;
             if !commits.is_empty() {
                 let candidate = Candidate {
                     branch: branch.clone(),
@@ -254,15 +280,16 @@ fn next_candidate(
         }
 
         for parent in nodes {
-            let Some(base) = queries.merge_base(&parent.tip, &branch.tip)? else {
+            let Some(base) = queries.unique_merge_base(&parent.tip, &branch.tip, &branch.name)?
+            else {
                 continue;
             };
 
-            if !parent.commits().contains(&base) {
+            if !parent.contains_commit(&base) {
                 continue;
             }
 
-            let commits = queries.owned_commits(&base, &branch.tip, &branch.name)?;
+            let commits = queries.owned_commits(&base, &branch.tip)?;
             if commits.is_empty() {
                 continue;
             }

@@ -99,7 +99,7 @@ fn visit_ordered<'a>(
 #[cfg(test)]
 mod tests {
     use super::branches_in_topological_order;
-    use crate::plan::{Dependency, Node, Plan, PlanId, Repository, Source};
+    use crate::plan::{Dependency, Node, Plan, PlanCommit, PlanId, Repository, Source};
     use time::OffsetDateTime;
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
             branch: branch.to_owned(),
             tip: "0".repeat(40),
             base: "0".repeat(40),
-            commits: vec!["0".repeat(40)],
+            commits: vec![PlanCommit::new("0".repeat(40), vec!["0".repeat(40)])],
             parent: parent.map(str::to_owned),
         }
     }

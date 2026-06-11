@@ -2,20 +2,26 @@ use super::landed as landed_inference;
 use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
-use crate::state::BaseStrategy;
+use crate::state::{BaseStrategy, MergeStrategy};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
 pub(super) struct RunOptions {
     pub(super) base_strategy: BaseStrategy,
+    pub(super) merge_strategy: MergeStrategy,
     pub(super) is_dry_run: bool,
     pub(super) in_place: bool,
 }
 
 impl RunOptions {
-    pub(super) fn move_to_current_tips(is_dry_run: bool, in_place: bool) -> Self {
+    pub(super) fn move_to_current_tips(
+        merge_strategy: MergeStrategy,
+        is_dry_run: bool,
+        in_place: bool,
+    ) -> Self {
         Self {
             base_strategy: BaseStrategy::MoveToCurrentTips,
+            merge_strategy,
             is_dry_run,
             in_place,
         }
@@ -138,7 +144,8 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
             continue;
         }
 
-        let Some(fork_point) = git.merge_base(&onto_tip, &branch.tip)? else {
+        let Some(fork_point) = unique_merge_base(git, &onto_tip, &branch.tip, &branch.name, onto)?
+        else {
             continue;
         };
         if fork_point == onto_tip {
@@ -146,7 +153,7 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
         }
 
         oldest_fork_point = Some(if let Some(current) = oldest_fork_point {
-            git.merge_base(&current, &fork_point)?.unwrap_or(current)
+            unique_merge_base(git, &current, &fork_point, &branch.name, onto)?.unwrap_or(current)
         } else {
             fork_point
         });
@@ -158,6 +165,23 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
             "cannot infer old base for sync; oldest fork point `{base}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
         ))
     })
+}
+
+fn unique_merge_base(
+    git: &Git,
+    left: &str,
+    right: &str,
+    branch: &str,
+    onto: &str,
+) -> Result<Option<String>> {
+    let mut bases = git.merge_bases_all(left, right)?;
+    match bases.len() {
+        0 => Ok(None),
+        1 => Ok(Some(bases.remove(0))),
+        _ => Err(Error::InvalidInvocation(format!(
+            "branch `{branch}` has multiple merge bases with `{onto}` (criss-cross history); use `git cascade replay --old-base <ref> ...` with an explicit base"
+        ))),
+    }
 }
 
 struct GeneratedApply<'a> {
@@ -182,6 +206,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                     plan_name: options.generate.name,
                     new_tip_input: options.new_tip,
                     base_strategy: options.run.base_strategy,
+                    merge_strategy: options.run.merge_strategy,
                     in_place: options.run.in_place,
                 },
             )?
@@ -199,6 +224,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
             plan_name: options.generate.name.clone(),
             new_tip_input: options.new_tip,
             base_strategy: options.run.base_strategy,
+            merge_strategy: options.run.merge_strategy,
             in_place: options.run.in_place,
         },
     )?;

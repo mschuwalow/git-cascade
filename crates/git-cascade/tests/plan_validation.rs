@@ -1,7 +1,7 @@
 mod common;
 
 use git_cascade::git::Git;
-use git_cascade::plan::Plan;
+use git_cascade::plan::{Plan, PlanCommit};
 use git_cascade::plan::{validate_plan, validate_plan_for_apply};
 
 use common::repo::TestRepo;
@@ -164,11 +164,23 @@ fn validation_rejects_direct_child_at_anchor_base() {
         .unwrap();
     assert_eq!(node.parent(), None);
     node.base = plan.source.base.clone();
-    node.commits = repo.rev_list_reverse(&format!("{}..{}", node.base, node.tip));
+    node.commits = linear_commits(&repo, &node.base, &node.tip);
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
     assert!(error.contains("is outside source range"));
+}
+
+fn linear_commits(repo: &TestRepo, base: &str, tip: &str) -> Vec<PlanCommit> {
+    let mut previous = base.to_owned();
+    repo.rev_list_reverse(&format!("{base}..{tip}"))
+        .into_iter()
+        .map(|oid| {
+            let commit = PlanCommit::new(oid.clone(), vec![previous.clone()]);
+            previous = oid;
+            commit
+        })
+        .collect()
 }
 
 fn linear_stack() -> TestRepo {
@@ -186,5 +198,5 @@ fn linear_stack() -> TestRepo {
 
 fn read_plan(repo: &TestRepo, name: &str) -> Plan {
     let content = std::fs::read_to_string(repo.plan_path(name)).unwrap();
-    serde_yaml::from_str(&content).unwrap()
+    Plan::from_yaml(&content).unwrap()
 }

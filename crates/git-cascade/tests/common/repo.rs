@@ -68,6 +68,25 @@ impl TestRepo {
         self.git_output(args);
     }
 
+    /// Runs a git command that is expected to fail (e.g. a conflicting
+    /// merge that will be resolved manually).
+    pub fn git_fails<I, S>(&self, args: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = Command::new("git");
+        self.configure_command(&mut command);
+        let output = command.args(args).output().unwrap();
+
+        assert!(
+            !output.status.success(),
+            "git command unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     pub fn write(&self, path: &str, contents: &str) {
         let path = self.path().join(path);
         if let Some(parent) = path.parent() {

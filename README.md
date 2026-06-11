@@ -232,6 +232,17 @@ Generated plans are deleted after a successful apply. If replay stops on a confl
 
 By default, generated one-shot commands replay each child branch onto its parent's rewritten apply-time tip. This is the `move-to-current-tips` base strategy. Use `replay --base-strategy ...` or `plan apply --base-strategy ...` when you need a different strategy.
 
+## Merge Commits
+
+Dependent branches may contain merge commits, for example after merging the target branch to catch up, or after merging an unrelated local branch. Replay reproduces each merge on the rewritten parents:
+
+- A merge whose merged-in side is already contained in the new base (typically a previous `git merge main`) is redundant and dropped; the branch becomes linear.
+- Other merges are recreated with both parents. How their content is reproduced is controlled by `--merge-strategy`:
+  - `replay-resolution` (default): the original merge's tree is replayed onto the rewritten first parent, preserving manual conflict resolutions byte-for-byte.
+  - `re-merge`: the merge is re-run on the rewritten parents, recomputing conflict resolutions.
+
+Octopus merges (more than two parents) are not supported. Fork points that are ambiguous because of criss-cross merges require an explicit `--old-base`.
+
 ## Conflicts
 
 If replay conflicts, permanent branch refs remain unchanged and the active operation state is preserved.
