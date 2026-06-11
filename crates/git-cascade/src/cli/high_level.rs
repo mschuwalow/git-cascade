@@ -2,13 +2,12 @@ use super::landed as landed_inference;
 use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
-use crate::state::{BaseStrategy, MergeStrategy};
+use crate::state::BaseStrategy;
 use crate::storage::Storage;
 use crate::{Error, Result};
 
 pub(super) struct RunOptions {
     pub(super) base_strategy: BaseStrategy,
-    pub(super) merge_strategy: MergeStrategy,
     pub(super) is_dry_run: bool,
     pub(super) in_place: bool,
 }
@@ -174,7 +173,6 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                     plan_name: options.generate.name,
                     new_tip_input: options.new_tip,
                     base_strategy: options.run.base_strategy,
-                    merge_strategy: options.run.merge_strategy,
                     in_place: options.run.in_place,
                 },
             )?
@@ -192,7 +190,6 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
             plan_name: options.generate.name.clone(),
             new_tip_input: options.new_tip,
             base_strategy: options.run.base_strategy,
-            merge_strategy: options.run.merge_strategy,
             in_place: options.run.in_place,
         },
     )?;

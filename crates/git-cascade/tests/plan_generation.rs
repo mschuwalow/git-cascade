@@ -430,7 +430,7 @@ fn plan_refuses_while_state_exists() {
 }
 
 #[test]
-fn plan_supports_merge_commits_in_dependents() {
+fn plan_skips_branch_that_merged_sibling_work() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -438,10 +438,9 @@ fn plan_supports_merge_commits_in_dependents() {
     repo.switch_new("pr-2");
     repo.commit_file("b.txt", "b\n", "b");
     repo.switch_new_at("side", "pr-1");
-    let side_commit = repo.commit_file("side.txt", "side\n", "side");
+    repo.commit_file("side.txt", "side\n", "side");
     repo.switch("pr-2");
     repo.git_ok(["merge", "--no-ff", "side", "-m", "merge side"]);
-    let merge_commit = repo.rev_parse("pr-2");
     repo.switch("main");
 
     repo.cascade()
@@ -455,21 +454,18 @@ fn plan_supports_merge_commits_in_dependents() {
             "pr-1",
         ])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains(
+            "skipping branch `pr-2`: it merges history that is not part of the old tip",
+        ));
 
     let plan = read_plan(&repo, "stack");
-    let pr2 = plan
+    let branches = plan
         .nodes
         .iter()
-        .find(|node| node.branch == "pr-2")
-        .unwrap();
-    let merge = pr2
-        .commits()
-        .iter()
-        .find(|commit| commit.oid == merge_commit)
-        .unwrap();
-    assert_eq!(merge.parents.len(), 2);
-    assert!(merge.parents.contains(&side_commit) || pr2.base() == side_commit);
+        .map(|node| node.branch.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(branches, ["side"]);
 }
 
 fn read_plan(repo: &TestRepo, name: &str) -> Plan {

@@ -2,7 +2,7 @@ use crate::Result;
 use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
-use crate::state::{BaseStrategy, MergeStrategy, read_state};
+use crate::state::{BaseStrategy, read_state};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -34,9 +34,6 @@ pub(super) enum Command {
         /// Base selection strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = BaseStrategy::PreserveForkPoints)]
         base_strategy: BaseStrategy,
-        /// How merge commits in dependent branches are reproduced.
-        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
-        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -72,17 +69,9 @@ pub(super) fn run(command: Command) -> Result<()> {
             name,
             new_tip,
             base_strategy,
-            merge_strategy,
             dry_run,
             in_place,
-        } => apply(
-            name,
-            &new_tip,
-            base_strategy,
-            merge_strategy,
-            dry_run,
-            in_place,
-        ),
+        } => apply(name, &new_tip, base_strategy, dry_run, in_place),
         Command::List => list(),
         Command::Show { name } => show(&name),
         Command::Remove { name } => remove(name),
@@ -112,7 +101,6 @@ fn apply(
     name: PlanName,
     new_tip: &str,
     base_strategy: BaseStrategy,
-    merge_strategy: MergeStrategy,
     is_dry_run: bool,
     in_place: bool,
 ) -> Result<()> {
@@ -123,7 +111,6 @@ fn apply(
         plan_name: name,
         new_tip_input: new_tip.to_owned(),
         base_strategy,
-        merge_strategy,
         in_place,
     };
 

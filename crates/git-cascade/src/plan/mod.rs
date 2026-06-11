@@ -11,30 +11,11 @@ use time::OffsetDateTime;
 pub use topological::branches_in_topological_order;
 use uuid::Uuid;
 pub use validate::{
-    BranchRef, validate_branch_refs, validate_plan, validate_plan_for_apply,
-    validate_unmapped_parents_for_apply,
+    BranchRef, validate_branch_refs, validate_merge_parents_for_apply, validate_plan,
+    validate_plan_for_apply,
 };
 
 pub const PLAN_VERSION: u32 = 1;
-
-/// The first commit on the tip's first-parent chain whose own first parent
-/// lies outside `commits`. Apply substitutes that parent with the selected
-/// replay base so the chain is transplanted even when it does not start at
-/// the node base.
-pub fn first_parent_chain_root(commits: &[PlanCommit]) -> Option<&PlanCommit> {
-    let by_oid = commits
-        .iter()
-        .map(|commit| (commit.oid.as_str(), commit))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut current = commits.last()?;
-    loop {
-        let parent = current.first_parent()?;
-        match by_oid.get(parent) {
-            Some(next) => current = next,
-            None => return Some(current),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {

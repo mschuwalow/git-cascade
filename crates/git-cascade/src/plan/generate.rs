@@ -32,7 +32,7 @@ struct GitQueries<'a> {
     git: &'a Git,
     merge_bases: HashMap<(String, String), Vec<String>>,
     ancestors: HashMap<(String, String), bool>,
-    owned_commits: HashMap<(String, String), Vec<PlanCommit>>,
+    owned_commits: HashMap<(String, String), Option<Vec<PlanCommit>>>,
 }
 
 impl<'a> GitQueries<'a> {
@@ -69,18 +69,41 @@ impl<'a> GitQueries<'a> {
         Ok(result)
     }
 
-    fn owned_commits(&mut self, base: &str, tip: &str) -> Result<Vec<PlanCommit>> {
+    /// The first-parent chain of `base..tip`, or `None` (with a warning)
+    /// when the branch merges history that is not part of the old tip and
+    /// therefore cannot be flattened.
+    fn owned_commits(
+        &mut self,
+        base: &str,
+        tip: &str,
+        branch: &str,
+        source_old_tip: &str,
+    ) -> Result<Option<Vec<PlanCommit>>> {
         let key = (base.to_owned(), tip.to_owned());
         if let Some(result) = self.owned_commits.get(&key) {
             return Ok(result.clone());
         }
 
-        let result = self
+        let chain = self
             .git
-            .rev_list_with_parents(base, tip)?
+            .rev_list_first_parent_with_parents(base, tip)?
             .into_iter()
             .map(|(oid, parents)| PlanCommit::new(oid, parents))
             .collect::<Vec<_>>();
+        let mut result = Some(chain);
+        if let Some(chain) = &result {
+            'outer: for commit in chain {
+                for parent in commit.parents.iter().skip(1) {
+                    if !self.is_ancestor(parent, source_old_tip)? {
+                        eprintln!(
+                            "warning: skipping branch `{branch}`: it merges history that is not part of the old tip; rebase the branch to include it"
+                        );
+                        result = None;
+                        break 'outer;
+                    }
+                }
+            }
+        }
         self.owned_commits.insert(key, result.clone());
         Ok(result)
     }
@@ -246,18 +269,18 @@ fn next_candidate(
         if let Some(base) = queries.unique_merge_base(source_old_tip, &branch.tip)?
             && base != source_old_base
             && queries.is_ancestor(source_old_base, &base)?
+            && let Some(commits) =
+                queries.owned_commits(&base, &branch.tip, &branch.name, source_old_tip)?
+            && !commits.is_empty()
         {
-            let commits = queries.owned_commits(&base, &branch.tip)?;
-            if !commits.is_empty() {
-                let candidate = Candidate {
-                    branch: branch.clone(),
-                    parent_branch: None,
-                    old_base: base,
-                    commits,
-                };
-                if is_better_candidate(&candidate, best.as_ref(), &node_by_branch) {
-                    best = Some(candidate);
-                }
+            let candidate = Candidate {
+                branch: branch.clone(),
+                parent_branch: None,
+                old_base: base,
+                commits,
+            };
+            if is_better_candidate(&candidate, best.as_ref(), &node_by_branch) {
+                best = Some(candidate);
             }
         }
 
@@ -270,7 +293,11 @@ fn next_candidate(
                 continue;
             }
 
-            let commits = queries.owned_commits(&base, &branch.tip)?;
+            let Some(commits) =
+                queries.owned_commits(&base, &branch.tip, &branch.name, source_old_tip)?
+            else {
+                continue;
+            };
             if commits.is_empty() {
                 continue;
             }

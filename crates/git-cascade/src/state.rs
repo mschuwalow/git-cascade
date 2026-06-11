@@ -22,7 +22,6 @@ pub struct ApplyState {
     pub pid: u32,
     pub new_tip: String,
     pub base_strategy: BaseStrategy,
-    pub merge_strategy: MergeStrategy,
     pub current: Option<CurrentState>,
     pub worktree: WorktreeState,
     pub completed: CompletedState,
@@ -87,65 +86,11 @@ impl std::fmt::Display for BaseStrategy {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-#[serde(rename_all = "kebab-case")]
-pub enum MergeStrategy {
-    /// Replay each merge commit's original tree resolution onto the rewritten
-    /// parents, preserving manual conflict resolutions.
-    ReplayResolution,
-    /// Re-run the merge on the rewritten parents, recomputing resolutions.
-    ReMerge,
-}
-
-impl MergeStrategy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReplayResolution => "replay-resolution",
-            Self::ReMerge => "re-merge",
-        }
-    }
-}
-
-impl std::fmt::Display for MergeStrategy {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// The replay operation that was interrupted by a conflict, so `continue`
-/// can resume it correctly.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ReplayOp {
-    CherryPick,
-    MergeResolution,
-    ReMerge,
-}
-
-impl ReplayOp {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::CherryPick => "cherry-pick",
-            Self::MergeResolution => "merge-resolution",
-            Self::ReMerge => "re-merge",
-        }
-    }
-}
-
-impl std::fmt::Display for ReplayOp {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurrentState {
     pub branch: String,
     pub commit: String,
     pub worktree: String,
-    pub op: ReplayOp,
-    pub mapped_parents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -361,7 +306,6 @@ pub struct ApplyStateInput<'a> {
     pub plan_id: &'a PlanId,
     pub new_tip: &'a str,
     pub base_strategy: BaseStrategy,
-    pub merge_strategy: MergeStrategy,
     pub pending_branches: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
@@ -382,7 +326,6 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         pid: std::process::id(),
         new_tip: input.new_tip.to_owned(),
         base_strategy: input.base_strategy,
-        merge_strategy: input.merge_strategy,
         current: None,
         worktree: input.worktree,
         completed: CompletedState::default(),

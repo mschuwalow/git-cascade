@@ -6,7 +6,7 @@ mod status;
 use crate::Result;
 use crate::apply::{abort as abort_apply, continue_apply};
 use crate::git::Git;
-use crate::state::{BaseStrategy, MergeStrategy};
+use crate::state::BaseStrategy;
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -40,9 +40,6 @@ enum Command {
         /// Base selection strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
         base_strategy: BaseStrategy,
-        /// How merge commits in dependent branches are reproduced.
-        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
-        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -64,9 +61,6 @@ enum Command {
         /// Base selection strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
         base_strategy: BaseStrategy,
-        /// How merge commits in dependent branches are reproduced.
-        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
-        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -82,9 +76,6 @@ enum Command {
         /// Base selection strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
         base_strategy: BaseStrategy,
-        /// How merge commits in dependent branches are reproduced.
-        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
-        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -106,9 +97,6 @@ enum Command {
         /// Base selection strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = BaseStrategy::MoveToCurrentTips)]
         base_strategy: BaseStrategy,
-        /// How merge commits in dependent branches are reproduced.
-        #[arg(long, value_enum, default_value_t = MergeStrategy::ReplayResolution)]
-        merge_strategy: MergeStrategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
         dry_run: bool,
@@ -153,7 +141,6 @@ where
             branch,
             base,
             base_strategy,
-            merge_strategy,
             dry_run,
             in_place,
         } => high_level::restack(
@@ -161,7 +148,6 @@ where
             base,
             high_level::RunOptions {
                 base_strategy,
-                merge_strategy,
                 is_dry_run: dry_run,
                 in_place,
             },
@@ -171,7 +157,6 @@ where
             old_base,
             new_tip,
             base_strategy,
-            merge_strategy,
             dry_run,
             in_place,
         } => high_level::replay(
@@ -180,7 +165,6 @@ where
             &new_tip,
             high_level::RunOptions {
                 base_strategy,
-                merge_strategy,
                 is_dry_run: dry_run,
                 in_place,
             },
@@ -188,14 +172,12 @@ where
         Command::Sync {
             base,
             base_strategy,
-            merge_strategy,
             dry_run,
             in_place,
         } => high_level::sync(
             base,
             high_level::RunOptions {
                 base_strategy,
-                merge_strategy,
                 is_dry_run: dry_run,
                 in_place,
             },
@@ -205,7 +187,6 @@ where
             onto,
             old_base,
             base_strategy,
-            merge_strategy,
             dry_run,
             in_place,
         } => high_level::landed(
@@ -214,7 +195,6 @@ where
             old_base,
             high_level::RunOptions {
                 base_strategy,
-                merge_strategy,
                 is_dry_run: dry_run,
                 in_place,
             },

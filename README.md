@@ -234,14 +234,12 @@ By default, generated one-shot commands replay each child branch onto its parent
 
 ## Merge Commits
 
-Dependent branches may contain merge commits, for example after merging the target branch to catch up, or after merging an unrelated local branch. Replay reproduces each merge on the rewritten parents:
+Dependent branches are replayed along their first-parent chain, producing linear results:
 
-- A merge whose merged-in side is already contained in the new base (typically a previous `git merge main`) is redundant and dropped; the branch becomes linear.
-- Other merges are recreated with both parents. How their content is reproduced is controlled by `--merge-strategy`:
-  - `replay-resolution` (default): the original merge's tree is replayed onto the rewritten first parent, preserving manual conflict resolutions byte-for-byte.
-  - `re-merge`: the merge is re-run on the rewritten parents, recomputing conflict resolutions.
+- A merge of target-branch history (typically a previous `git merge main` to catch up) is flattened away: the merged-in commits are already part of the new base, and the branch becomes linear. Conflicts that were resolved in the merge may re-fire during replay and are resolved through the normal conflict flow.
+- A merge of history that the new tip does not contain (an unrelated local branch, or stacked work) cannot be flattened. Such branches are skipped during plan generation with a warning, or rejected at apply time; rebase them to linearize first.
 
-Octopus merges (more than two parents) are not supported. Fork points that are ambiguous because of criss-cross merges require an explicit `--old-base`.
+Fork points that are ambiguous because of criss-cross merges require an explicit `--old-base`.
 
 ## Conflicts
 

@@ -1,9 +1,7 @@
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
-use crate::plan::{Node, Plan, PlanCommit};
-use crate::state::{
-    ApplyState, CurrentState, MergeStrategy, ReplayOp, RestoreState, WorktreeState,
-};
+use crate::plan::{Node, Plan};
+use crate::state::{ApplyState, CurrentState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -33,9 +31,6 @@ pub(crate) trait ReplayBackend {
         start_commit_index: usize,
         was_resuming: bool,
     ) -> Result<()>;
-    /// Moves the replay worktree to `commit` before replaying a commit whose
-    /// rewritten first parent is not the current worktree head.
-    fn position_worktree(&mut self, state: &ApplyState, commit: &str) -> Result<()>;
     fn cherry_pick(
         &mut self,
         state: &ApplyState,
@@ -44,25 +39,19 @@ pub(crate) trait ReplayBackend {
         commit_index: usize,
         total_commits: usize,
     ) -> Result<String>;
-    /// Whether every mapped non-first parent is already contained in the
-    /// mapped first parent, making the merge redundant.
-    fn is_redundant_merge(&mut self, mapped_parents: &[String]) -> Result<bool>;
-    fn skip_redundant_merge(&mut self, node: &Node, commit: &str, kept: &str) -> Result<()>;
-    fn replay_merge(
+    /// Reports that a merge commit was flattened away.
+    fn flatten_merge(
         &mut self,
-        state: &ApplyState,
         node: &Node,
-        commit: &PlanCommit,
-        mapped_parents: &[String],
+        commit: &str,
         commit_index: usize,
         total_commits: usize,
-    ) -> Result<String>;
+    ) -> Result<()>;
     fn continue_cherry_pick(
         &mut self,
         state: &ApplyState,
         current: &CurrentState,
     ) -> Result<String>;
-    fn continue_merge(&mut self, state: &ApplyState, current: &CurrentState) -> Result<String>;
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -128,13 +117,11 @@ impl ReplayBackend for GitReplayBackend<'_> {
         let worktree = std::path::PathBuf::from(state.worktree.path());
         let worktree_git = Git::new(&worktree);
         if state.worktree.is_in_place() && state.completed.temp_refs.is_empty() {
-            // A stale cherry-pick or merge can linger after a crashed replay.
+            // A stale cherry-pick can linger after a crashed replay.
             let _ = worktree_git.try_cherry_pick_abort();
-            let _ = worktree_git.try_merge_abort();
             worktree_git.switch_detached(base)
         } else if worktree.exists() {
             let _ = worktree_git.try_cherry_pick_abort();
-            let _ = worktree_git.try_merge_abort();
             worktree_git.reset_hard(base)
         } else {
             self.git.worktree_add_detached(&worktree, base)
@@ -163,12 +150,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
             );
         }
         Ok(())
-    }
-
-    fn position_worktree(&mut self, state: &ApplyState, commit: &str) -> Result<()> {
-        eprintln!("  reset to {}", short_oid(commit));
-        let worktree_git = Git::new(state.worktree.path());
-        worktree_git.reset_hard(commit)
     }
 
     fn cherry_pick(
@@ -206,80 +187,20 @@ impl ReplayBackend for GitReplayBackend<'_> {
         worktree_git.head_oid()
     }
 
-    fn is_redundant_merge(&mut self, mapped_parents: &[String]) -> Result<bool> {
-        let Some((first, others)) = mapped_parents.split_first() else {
-            return Ok(false);
-        };
-        if others.is_empty() {
-            return Ok(false);
-        }
-        for parent in others {
-            if !self.git.is_ancestor(parent, first)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    fn skip_redundant_merge(&mut self, _node: &Node, commit: &str, kept: &str) -> Result<()> {
-        eprintln!(
-            "  skipped redundant merge {}; already contained in {}",
-            short_oid(commit),
-            short_oid(kept)
-        );
-        Ok(())
-    }
-
-    fn replay_merge(
+    fn flatten_merge(
         &mut self,
-        state: &ApplyState,
-        node: &Node,
-        commit: &PlanCommit,
-        mapped_parents: &[String],
+        _node: &Node,
+        commit: &str,
         commit_index: usize,
         total_commits: usize,
-    ) -> Result<String> {
+    ) -> Result<()> {
         eprintln!(
-            "  merge {}/{} {}",
+            "  flattened merge {}/{} {}",
             commit_index + 1,
             total_commits,
-            short_oid(&commit.oid)
+            short_oid(commit)
         );
-        let worktree = std::path::PathBuf::from(state.worktree.path());
-        let worktree_git = Git::new(&worktree);
-        let author = self.git.commit_author(&commit.oid)?;
-        let message = self.git.commit_message(&commit.oid)?;
-
-        match state.merge_strategy {
-            MergeStrategy::ReplayResolution => {
-                if let Err(error) = worktree_git.cherry_pick_mainline_no_commit(&commit.oid) {
-                    return Err(Error::ApplyStopped {
-                        branch: node.branch.clone(),
-                        commit: commit.oid.clone(),
-                        worktree,
-                        message: error.to_string(),
-                    });
-                }
-                finish_merge_resolution(&worktree_git, mapped_parents, &message, &author)
-            }
-            MergeStrategy::ReMerge => {
-                let merge_parent = mapped_parents.get(1).ok_or_else(|| {
-                    Error::InvalidPlan(format!(
-                        "merge commit `{}` has no mapped second parent",
-                        commit.oid
-                    ))
-                })?;
-                if let Err(error) = worktree_git.merge_no_ff(merge_parent, &message, &author) {
-                    return Err(Error::ApplyStopped {
-                        branch: node.branch.clone(),
-                        commit: commit.oid.clone(),
-                        worktree,
-                        message: error.to_string(),
-                    });
-                }
-                worktree_git.head_oid()
-            }
-        }
+        Ok(())
     }
 
     fn skip_replay(
@@ -345,32 +266,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
         worktree_git.head_oid()
     }
 
-    fn continue_merge(&mut self, _state: &ApplyState, current: &CurrentState) -> Result<String> {
-        let worktree = std::path::PathBuf::from(&current.worktree);
-        let worktree_git = Git::new(&worktree);
-        if !worktree_git.unmerged_entries()?.is_empty() {
-            return Err(Error::InvalidInvocation(format!(
-                "worktree {} still has unresolved conflicts; resolve them and git add the files before continuing",
-                worktree.display()
-            )));
-        }
-
-        let author = self.git.commit_author(&current.commit)?;
-        match current.op {
-            ReplayOp::MergeResolution => {
-                let message = self.git.commit_message(&current.commit)?;
-                finish_merge_resolution(&worktree_git, &current.mapped_parents, &message, &author)
-            }
-            ReplayOp::ReMerge => {
-                worktree_git.commit_no_edit_with_author(&author)?;
-                worktree_git.head_oid()
-            }
-            ReplayOp::CherryPick => Err(Error::InvalidInvocation(
-                "continue_merge called for a cherry-pick operation".to_owned(),
-            )),
-        }
-    }
-
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
         eprintln!("Updating branch refs");
         finish_final_update(self.git, plan, state)
@@ -386,7 +281,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
         if worktree.exists() {
             let worktree_git = Git::new(&worktree);
             let _ = worktree_git.try_cherry_pick_abort();
-            let _ = worktree_git.try_merge_abort();
             if let WorktreeState::InPlace { restore, .. } = &state.worktree {
                 match restore {
                     RestoreState::Branch { name, .. } => worktree_git.switch_branch(name)?,
@@ -435,7 +329,6 @@ impl DryRunReplayBackend {
         writeln!(output, "# git-cascade apply --dry-run").unwrap();
         writeln!(output, "new-tip {}", state.new_tip).unwrap();
         writeln!(output, "base-strategy {}", state.base_strategy).unwrap();
-        writeln!(output, "merge-strategy {}", state.merge_strategy).unwrap();
         writeln!(output, "worktree-mode {}", state.worktree).unwrap();
         let worktree = if state.worktree.path().is_empty() {
             storage.worktrees_dir().join(plan.plan_id.to_string())
@@ -522,16 +415,6 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn position_worktree(&mut self, state: &ApplyState, commit: &str) -> Result<()> {
-        writeln!(
-            self.output,
-            "git -C {} reset --hard {commit}",
-            state.worktree.path()
-        )
-        .unwrap();
-        Ok(())
-    }
-
     fn cherry_pick(
         &mut self,
         state: &ApplyState,
@@ -553,74 +436,15 @@ impl ReplayBackend for DryRunReplayBackend {
         }
     }
 
-    fn is_redundant_merge(&mut self, _mapped_parents: &[String]) -> Result<bool> {
-        // Rewritten commits do not exist during a dry run; always print the
-        // merge replay with an annotation instead.
-        Ok(false)
-    }
-
-    fn skip_redundant_merge(&mut self, _node: &Node, commit: &str, kept: &str) -> Result<()> {
-        writeln!(
-            self.output,
-            "# merge {commit} dropped; already contained in {kept}"
-        )
-        .unwrap();
-        Ok(())
-    }
-
-    fn replay_merge(
+    fn flatten_merge(
         &mut self,
-        state: &ApplyState,
-        node: &Node,
-        commit: &PlanCommit,
-        mapped_parents: &[String],
+        _node: &Node,
+        commit: &str,
         _commit_index: usize,
         _total_commits: usize,
-    ) -> Result<String> {
-        let worktree = state.worktree.path();
-        writeln!(
-            self.output,
-            "# merge {} may be dropped at apply time if already contained in the new base",
-            commit.oid
-        )
-        .unwrap();
-        match state.merge_strategy {
-            MergeStrategy::ReplayResolution => {
-                writeln!(
-                    self.output,
-                    "git -C {worktree} cherry-pick -m 1 --no-commit {}",
-                    commit.oid
-                )
-                .unwrap();
-                let parent_args = mapped_parents
-                    .iter()
-                    .map(|parent| format!("-p {parent}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                writeln!(
-                    self.output,
-                    "git -C {worktree} commit-tree <tree> {parent_args}"
-                )
-                .unwrap();
-            }
-            MergeStrategy::ReMerge => {
-                let merge_parent = mapped_parents
-                    .get(1)
-                    .map(String::as_str)
-                    .unwrap_or("<missing parent>");
-                writeln!(
-                    self.output,
-                    "git -C {worktree} merge --no-ff {merge_parent}"
-                )
-                .unwrap();
-            }
-        }
-
-        if commit.oid == node.tip {
-            Ok(format!("<rewritten {} planned tip>", node.branch))
-        } else {
-            Ok(format!("<rewritten {}:{}>", node.branch, commit.oid))
-        }
+    ) -> Result<()> {
+        writeln!(self.output, "# flatten merge {commit}").unwrap();
+        Ok(())
     }
 
     fn skip_replay(
@@ -669,10 +493,6 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(format!("<rewritten {}:{}>", current.branch, current.commit))
     }
 
-    fn continue_merge(&mut self, _state: &ApplyState, current: &CurrentState) -> Result<String> {
-        Ok(format!("<rewritten {}:{}>", current.branch, current.commit))
-    }
-
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
         writeln!(self.output).unwrap();
         writeln!(self.output, "# final ref transaction").unwrap();
@@ -715,21 +535,6 @@ fn is_empty_cherry_pick(worktree_git: &Git) -> Result<bool> {
     Ok(worktree_git.cherry_pick_in_progress()?
         && worktree_git.unmerged_entries()?.is_empty()
         && !worktree_git.has_staged_changes()?)
-}
-
-/// Commits the staged merge result with the mapped parents, preserving the
-/// original message and author.
-fn finish_merge_resolution(
-    worktree_git: &Git,
-    mapped_parents: &[String],
-    message: &str,
-    author: &crate::git::CommitAuthor,
-) -> Result<String> {
-    let tree = worktree_git.write_tree()?;
-    let merge_commit = worktree_git.commit_tree(&tree, mapped_parents, message, author)?;
-    let _ = worktree_git.try_cherry_pick_quit();
-    worktree_git.reset_hard(&merge_commit)?;
-    Ok(merge_commit)
 }
 
 fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()> {

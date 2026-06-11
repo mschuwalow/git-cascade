@@ -26,15 +26,10 @@ fn status_output(storage: &Storage) -> Result<String> {
         "base-strategy: {}\n",
         state.base_strategy.as_str()
     ));
-    output.push_str(&format!(
-        "merge-strategy: {}\n",
-        state.merge_strategy.as_str()
-    ));
     output.push_str(&format!("worktree-mode: {}\n", state.worktree));
     if let Some(current) = &state.current {
         output.push_str(&format!("current-branch: {}\n", current.branch));
         output.push_str(&format!("current-commit: {}\n", current.commit));
-        output.push_str(&format!("current-op: {}\n", current.op));
     } else {
         output.push_str("current: none\n");
     }

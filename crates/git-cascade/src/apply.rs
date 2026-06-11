@@ -1,13 +1,12 @@
 use crate::git::Git;
 use crate::plan::{
     BranchRef, Node, Plan, PlanCommit, PlanName, branches_in_topological_order,
-    first_parent_chain_root, validate_branch_refs, validate_plan,
-    validate_unmapped_parents_for_apply,
+    validate_branch_refs, validate_merge_parents_for_apply, validate_plan,
 };
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
-    ApplyState, ApplyStateInput, BaseStrategy, CurrentState, MergeStrategy, Phase, ReplayOp,
-    RestoreState, StateFile, WorktreeState, initial_apply_state,
+    ApplyState, ApplyStateInput, BaseStrategy, CurrentState, Phase, RestoreState, StateFile,
+    WorktreeState, initial_apply_state,
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::Storage;
@@ -21,7 +20,6 @@ pub struct ApplyOptions {
     pub plan_name: PlanName,
     pub new_tip_input: String,
     pub base_strategy: BaseStrategy,
-    pub merge_strategy: MergeStrategy,
     pub in_place: bool,
 }
 
@@ -38,7 +36,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     validate_plan(git, plan)?;
     let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    validate_unmapped_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
+    validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
     let ordered = branches_in_topological_order(plan)?;
     let worktree = if options.in_place {
         git.worktree_root()?
@@ -62,7 +60,6 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
         base_strategy: options.base_strategy,
-        merge_strategy: options.merge_strategy,
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -80,7 +77,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     validate_plan(git, plan)?;
     let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    validate_unmapped_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
+    validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
     let ordered = branches_in_topological_order(plan)?;
     let (worktree_state, worktree) = if options.in_place {
         let worktree = git.worktree_root()?;
@@ -110,7 +107,6 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
         base_strategy: options.base_strategy,
-        merge_strategy: options.merge_strategy,
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -223,10 +219,7 @@ fn resolve_conflict(backend: &mut dyn ReplayBackend, state: &mut ApplyState) -> 
     let current = state.current.clone().ok_or_else(|| {
         Error::InvalidInvocation("active apply state has no current commit".to_owned())
     })?;
-    let rewritten_commit = match current.op {
-        ReplayOp::CherryPick => backend.continue_cherry_pick(state, &current)?,
-        ReplayOp::MergeResolution | ReplayOp::ReMerge => backend.continue_merge(state, &current)?,
-    };
+    let rewritten_commit = backend.continue_cherry_pick(state, &current)?;
     state.mappings.insert(current.commit, rewritten_commit);
     Ok(())
 }
@@ -243,10 +236,6 @@ fn replay_pending_branches(
         .map(|node| (node.branch.as_str(), node))
         .collect::<HashMap<_, _>>();
     let mut mappings = state.mappings.clone();
-    // Merges of the old root tip replay onto its replacement.
-    mappings
-        .entry(plan.source.tip.clone())
-        .or_insert_with(|| state.new_tip.clone());
     let mut temp_refs = state.completed.temp_refs.clone();
     let mut temp_tips = backend.temp_tips(&temp_refs)?;
     let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
@@ -264,12 +253,18 @@ fn replay_pending_branches(
         let commits = replay_commits_from_extra(node, &state.extra_commits);
         let was_resuming = state.current.is_some();
 
-        let (start_commit_index, mut expected_head) = if was_resuming {
+        let (start_commit_index, mut last_rewritten) = if was_resuming {
             let start = resume_start_commit_index(node, state, &mappings, &commits)?;
             let head = commits
                 .get(start.wrapping_sub(1))
                 .and_then(|commit| mappings.get(&commit.oid))
-                .cloned();
+                .cloned()
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "branch `{}` has no rewritten commit to resume from",
+                        node.branch
+                    ))
+                })?;
             (start, head)
         } else {
             let base = actual_replay_base(
@@ -310,7 +305,7 @@ fn replay_pending_branches(
             }
 
             backend.prepare_branch(state, branch_index, total_branches, node, &base)?;
-            (0, Some(base))
+            (0, base)
         };
 
         backend.start_replay(
@@ -321,77 +316,32 @@ fn replay_pending_branches(
             start_commit_index,
             was_resuming,
         )?;
-        // Transplant the first-parent chain onto the selected replay base.
-        let chain_root = first_parent_chain_root(&commits).map(|commit| commit.oid.clone());
-        let selected_base = selected_bases.get(&node.branch).cloned();
         for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
-            let mut mapped_parents = mapped_parents(commit, &mappings);
-            if chain_root.as_deref() == Some(commit.oid.as_str())
-                && let Some(base) = &selected_base
-                && let Some(first) = mapped_parents.first_mut()
-            {
-                *first = base.clone();
-            }
-            let first_parent = mapped_parents.first().cloned().ok_or_else(|| {
-                Error::InvalidPlan(format!(
-                    "commit `{}` for branch `{}` has no recorded parents",
-                    commit.oid, node.branch
-                ))
-            })?;
-
-            if commit.is_merge() && backend.is_redundant_merge(&mapped_parents)? {
-                backend.skip_redundant_merge(node, &commit.oid, &first_parent)?;
-                mappings.insert(commit.oid.clone(), first_parent);
+            if commit.is_merge() {
+                // The merged history is contained in the new base; flatten.
+                backend.flatten_merge(node, &commit.oid, commit_index, commits.len())?;
+                mappings.insert(commit.oid.clone(), last_rewritten.clone());
                 continue;
             }
 
-            if expected_head.as_deref() != Some(first_parent.as_str()) {
-                backend.position_worktree(state, &first_parent)?;
-            }
-
-            let replayed = if commit.is_merge() {
-                backend.replay_merge(
-                    state,
-                    node,
-                    commit,
-                    &mapped_parents,
-                    commit_index,
-                    commits.len(),
-                )
-            } else {
-                backend.cherry_pick(state, node, &commit.oid, commit_index, commits.len())
-            };
-            let rewritten_commit = match replayed {
-                Ok(rewritten_commit) => rewritten_commit,
-                Err(error) => {
-                    let op = if commit.is_merge() {
-                        match state.merge_strategy {
-                            MergeStrategy::ReplayResolution => ReplayOp::MergeResolution,
-                            MergeStrategy::ReMerge => ReplayOp::ReMerge,
-                        }
-                    } else {
-                        ReplayOp::CherryPick
-                    };
-                    state.current = Some(CurrentState {
-                        branch: node.branch.clone(),
-                        commit: commit.oid.clone(),
-                        worktree: state.worktree.path().to_owned(),
-                        op,
-                        mapped_parents: if commit.is_merge() {
-                            mapped_parents
-                        } else {
-                            Vec::new()
-                        },
-                    });
-                    state.mappings = mappings.clone();
-                    state.completed.temp_refs = temp_refs.clone();
-                    state.phase = Phase::Conflict;
-                    state_writer.write_state(state)?;
-                    return Err(error);
-                }
-            };
+            let rewritten_commit =
+                match backend.cherry_pick(state, node, &commit.oid, commit_index, commits.len()) {
+                    Ok(rewritten_commit) => rewritten_commit,
+                    Err(error) => {
+                        state.current = Some(CurrentState {
+                            branch: node.branch.clone(),
+                            commit: commit.oid.clone(),
+                            worktree: state.worktree.path().to_owned(),
+                        });
+                        state.mappings = mappings.clone();
+                        state.completed.temp_refs = temp_refs.clone();
+                        state.phase = Phase::Conflict;
+                        state_writer.write_state(state)?;
+                        return Err(error);
+                    }
+                };
             mappings.insert(commit.oid.clone(), rewritten_commit.clone());
-            expected_head = Some(rewritten_commit);
+            last_rewritten = rewritten_commit;
         }
 
         let rewritten_tip = if let Some(commit) = commits.last() {
@@ -421,21 +371,6 @@ fn replay_pending_branches(
     state.completed.temp_refs = temp_refs;
 
     Ok(())
-}
-
-/// Maps a commit's parents through the rewrite; unmapped parents are
-/// untouched outside history and map to themselves.
-fn mapped_parents(commit: &PlanCommit, mappings: &BTreeMap<String, String>) -> Vec<String> {
-    commit
-        .parents
-        .iter()
-        .map(|parent| {
-            mappings
-                .get(parent)
-                .cloned()
-                .unwrap_or_else(|| parent.clone())
-        })
-        .collect()
 }
 
 /// Persists progress after a branch finished so a crashed apply can resume
