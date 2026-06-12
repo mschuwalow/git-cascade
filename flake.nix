@@ -9,6 +9,10 @@
   outputs =
     inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [
+        flake-parts.flakeModules.easyOverlay
+      ];
+
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -17,17 +21,22 @@
       ];
 
       perSystem =
-        { pkgs, ... }:
-        let
-          git-cascade = pkgs.callPackage ./nix/git-cascade.nix { };
-        in
         {
-          packages = {
+          pkgs,
+          final,
+          config,
+          ...
+        }:
+
+        {
+          packages = rec {
             default = git-cascade;
-            inherit git-cascade;
+            git-cascade = final.callPackage ./nix/git-cascade.nix { };
           };
 
-          checks.default = git-cascade;
+          overlayAttrs = {
+            inherit (config.packages) git-cascade;
+          };
 
           devShells.default = pkgs.callPackage ./nix/dev-shell.nix { };
 
