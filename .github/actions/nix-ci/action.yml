@@ -1,0 +1,23 @@
+name: Nix CI
+description: Install Nix, check the flake, and build the default package.
+
+inputs:
+  github-token:
+    description: GitHub token used by the Nix installer to avoid API rate limits.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31
+      with:
+        github_access_token: ${{ inputs.github-token }}
+
+    - name: Check flake
+      shell: bash
+      run: nix flake check
+
+    - name: Build package
+      shell: bash
+      run: nix build .#git-cascade

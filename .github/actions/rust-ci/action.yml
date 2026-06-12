@@ -1,0 +1,20 @@
+name: Rust CI
+description: Set up Rust and run the repository Cargo CI checks.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache Rust
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install cargo-make
+      uses: davidB/rust-cargo-make@v1
+
+    - name: Run CI checks
+      shell: bash
+      run: cargo make ci
