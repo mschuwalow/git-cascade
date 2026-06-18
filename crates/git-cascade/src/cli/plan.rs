@@ -41,9 +41,9 @@ pub(super) enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop after each branch so checks and fixes can be committed manually.
+        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
         #[arg(long)]
-        pause_after_each_branch: bool,
+        pause_at_checkpoints: bool,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -75,14 +75,14 @@ pub(super) fn run(command: Command) -> Result<()> {
             strategy,
             dry_run,
             in_place,
-            pause_after_each_branch,
+            pause_at_checkpoints,
         } => apply(
             name,
             &new_tip,
             strategy,
             dry_run,
             in_place,
-            pause_after_each_branch,
+            pause_at_checkpoints,
         ),
         Command::List => list(),
         Command::Show { name } => show(&name),
@@ -115,7 +115,7 @@ fn apply(
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
-    pause_after_each_branch: bool,
+    pause_at_checkpoints: bool,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
@@ -125,7 +125,7 @@ fn apply(
         new_tip_input: new_tip.to_owned(),
         strategy,
         in_place,
-        pause_after_each_branch,
+        pause_at_checkpoints,
     };
 
     if is_dry_run {
@@ -133,7 +133,7 @@ fn apply(
     } else {
         match execute(&git, &storage, &plan, options)? {
             ApplyOutcome::Complete => println!("applied cascade plan"),
-            ApplyOutcome::Paused { branch, worktree } => print_paused_message(&branch, &worktree),
+            ApplyOutcome::Paused { paused } => print_paused_message(&paused),
         }
     }
 

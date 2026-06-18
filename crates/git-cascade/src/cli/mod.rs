@@ -6,7 +6,7 @@ mod status;
 use crate::Result;
 use crate::apply::{abort as abort_apply, continue_apply};
 use crate::git::Git;
-use crate::state::Strategy;
+use crate::state::{PausedState, Strategy};
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -46,9 +46,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop after each branch so checks and fixes can be committed manually.
+        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
         #[arg(long)]
-        pause_after_each_branch: bool,
+        pause_at_checkpoints: bool,
     },
     /// Replay dependents from an old root tip onto an arbitrary replacement tip.
     Replay {
@@ -70,9 +70,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop after each branch so checks and fixes can be committed manually.
+        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
         #[arg(long)]
-        pause_after_each_branch: bool,
+        pause_at_checkpoints: bool,
     },
     /// Update branches after the default branch advanced.
     Sync {
@@ -88,9 +88,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop after each branch so checks and fixes can be committed manually.
+        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
         #[arg(long)]
-        pause_after_each_branch: bool,
+        pause_at_checkpoints: bool,
     },
     /// Move dependents of a branch that landed on the default branch.
     Landed {
@@ -112,9 +112,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop after each branch so checks and fixes can be committed manually.
+        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
         #[arg(long)]
-        pause_after_each_branch: bool,
+        pause_at_checkpoints: bool,
     },
     /// Show the active cascade operation, if any.
     Status,
@@ -155,7 +155,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_after_each_branch,
+            pause_at_checkpoints,
         } => high_level::restack(
             branch,
             base,
@@ -163,7 +163,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_after_each_branch,
+                pause_at_checkpoints,
             },
         ),
         Command::Replay {
@@ -173,7 +173,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_after_each_branch,
+            pause_at_checkpoints,
         } => high_level::replay(
             &old_tip,
             &old_base,
@@ -182,7 +182,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_after_each_branch,
+                pause_at_checkpoints,
             },
         ),
         Command::Sync {
@@ -190,14 +190,14 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_after_each_branch,
+            pause_at_checkpoints,
         } => high_level::sync(
             base,
             high_level::RunOptions {
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_after_each_branch,
+                pause_at_checkpoints,
             },
         ),
         Command::Landed {
@@ -207,7 +207,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_after_each_branch,
+            pause_at_checkpoints,
         } => high_level::landed(
             &old_tip,
             onto,
@@ -216,7 +216,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_after_each_branch,
+                pause_at_checkpoints,
             },
         ),
         Command::Status => status::status(),
@@ -238,18 +238,30 @@ fn continue_operation() -> Result<()> {
     let storage = Storage::discover(&git)?;
     match continue_apply(&git, &storage)? {
         crate::apply::ApplyOutcome::Complete => println!("continued cascade operation"),
-        crate::apply::ApplyOutcome::Paused { branch, worktree } => {
-            print_paused_message(&branch, &worktree);
+        crate::apply::ApplyOutcome::Paused { paused } => {
+            print_paused_message(&paused);
         }
     }
 
     Ok(())
 }
 
-pub(super) fn print_paused_message(branch: &str, worktree: &str) {
-    println!(
-        "paused after branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
-    );
+pub(super) fn print_paused_message(paused: &PausedState) {
+    match paused {
+        PausedState::BranchEnd {
+            branch, worktree, ..
+        } => println!(
+            "paused after branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
+        ),
+        PausedState::ChildBase {
+            branch,
+            commit,
+            worktree,
+            ..
+        } => println!(
+            "paused at child base `{commit}` on branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
+        ),
+    }
 }
 
 fn abort() -> Result<()> {

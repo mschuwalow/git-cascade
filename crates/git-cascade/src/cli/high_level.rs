@@ -11,7 +11,7 @@ pub(super) struct RunOptions {
     pub(super) strategy: Strategy,
     pub(super) is_dry_run: bool,
     pub(super) in_place: bool,
-    pub(super) pause_after_each_branch: bool,
+    pub(super) pause_at_checkpoints: bool,
 }
 
 pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOptions) -> Result<()> {
@@ -180,7 +180,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                     new_tip_input: options.new_tip,
                     strategy: options.run.strategy,
                     in_place: options.run.in_place,
-                    pause_after_each_branch: options.run.pause_after_each_branch,
+                    pause_at_checkpoints: options.run.pause_at_checkpoints,
                 },
             )?
         );
@@ -198,13 +198,13 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
             new_tip_input: options.new_tip,
             strategy: options.run.strategy,
             in_place: options.run.in_place,
-            pause_after_each_branch: options.run.pause_after_each_branch,
+            pause_at_checkpoints: options.run.pause_at_checkpoints,
         },
     )?;
 
     match outcome {
         ApplyOutcome::Complete => println!("{}", options.success_message),
-        ApplyOutcome::Paused { branch, worktree } => print_paused_message(&branch, &worktree),
+        ApplyOutcome::Paused { paused } => print_paused_message(&paused),
     }
     Ok(())
 }

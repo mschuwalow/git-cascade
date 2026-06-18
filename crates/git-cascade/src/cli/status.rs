@@ -36,8 +36,17 @@ fn status_output(storage: &Storage) -> Result<String> {
         _ => output.push_str("current: none\n"),
     }
     if let Phase::Paused { paused } = &state.phase {
-        output.push_str(&format!("paused-branch: {}\n", paused.branch));
-        output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip));
+        match paused {
+            crate::state::PausedState::BranchEnd { .. } => {
+                output.push_str("paused-kind: branch-end\n");
+            }
+            crate::state::PausedState::ChildBase { commit, .. } => {
+                output.push_str("paused-kind: child-base\n");
+                output.push_str(&format!("paused-commit: {commit}\n"));
+            }
+        }
+        output.push_str(&format!("paused-branch: {}\n", paused.branch()));
+        output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip()));
     }
     output.push_str(&format!("worktree: {}\n", state.worktree.path()));
     output.push_str(&format!(

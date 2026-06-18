@@ -12,7 +12,7 @@ use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 
 #[derive(Debug, Clone)]
@@ -21,13 +21,13 @@ pub struct ApplyOptions {
     pub new_tip_input: String,
     pub strategy: Strategy,
     pub in_place: bool,
-    pub pause_after_each_branch: bool,
+    pub pause_at_checkpoints: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
     Complete,
-    Paused { branch: String, worktree: String },
+    Paused { paused: PausedState },
 }
 
 struct ActualReplayContext<'a> {
@@ -222,10 +222,7 @@ fn run_apply_state(
             }
             Phase::Paused { paused } => {
                 if stop_on_pause && !resume_initial_pause {
-                    return Ok(ApplyOutcome::Paused {
-                        branch: paused.branch.clone(),
-                        worktree: paused.worktree.clone(),
-                    });
+                    return Ok(ApplyOutcome::Paused { paused });
                 }
                 resume_initial_pause = false;
                 resume_paused_branch(plan, state_writer, backend, state, paused)?;
@@ -239,8 +236,8 @@ fn run_apply_state(
 }
 
 fn replay_mode(options: &ApplyOptions) -> ReplayMode {
-    if options.pause_after_each_branch {
-        ReplayMode::PauseAfterEachBranch
+    if options.pause_at_checkpoints {
+        ReplayMode::PauseAtCheckpoints
     } else {
         ReplayMode::RunToCompletion
     }
@@ -288,16 +285,35 @@ fn resume_paused_branch(
     state: &mut ApplyState,
     paused: PausedState,
 ) -> Result<()> {
-    if !plan.nodes.iter().any(|node| node.branch == paused.branch) {
+    if !plan.nodes.iter().any(|node| node.branch == paused.branch()) {
         return Err(Error::InvalidPlan(format!(
             "paused branch `{}` is not in the active plan",
-            paused.branch
+            paused.branch()
         )));
     }
 
     let rewritten_tip = backend.resume_paused_branch(state, &paused)?;
-    state.mappings.insert(paused.mapped_commit, rewritten_tip);
-    state.phase = Phase::Replay { current: None };
+    match paused {
+        PausedState::BranchEnd { mapped_commit, .. } => {
+            state.mappings.insert(mapped_commit, rewritten_tip);
+            state.phase = Phase::Replay { current: None };
+        }
+        PausedState::ChildBase {
+            branch,
+            commit,
+            worktree,
+            ..
+        } => {
+            state.mappings.insert(commit.clone(), rewritten_tip);
+            state.phase = Phase::Replay {
+                current: Some(CurrentState {
+                    branch,
+                    commit,
+                    worktree,
+                }),
+            };
+        }
+    }
     state_writer.write_state(state)
 }
 
@@ -333,6 +349,11 @@ fn replay_pending_branches(
             _ => None,
         };
         let was_resuming = replay_current.is_some();
+        let child_base_pause_commits = if state.replay_mode.pauses_at_checkpoints() {
+            child_base_pause_commits(plan, node, state.strategy, &commits)
+        } else {
+            BTreeSet::new()
+        };
 
         let (start_commit_index, mut last_rewritten) = if was_resuming {
             let current = replay_current.as_ref().expect("resume requires current");
@@ -404,6 +425,18 @@ fn replay_pending_branches(
                 // The merged history is contained in the new base; flatten.
                 backend.flatten_merge(node, &commit.oid, commit_index, commits.len())?;
                 mappings.insert(commit.oid.clone(), last_rewritten.clone());
+                if child_base_pause_commits.contains(&commit.oid) {
+                    checkpoint_paused_child_base(
+                        state,
+                        state_writer,
+                        &mappings,
+                        &temp_refs,
+                        node,
+                        &commit.oid,
+                        &last_rewritten,
+                    )?;
+                    return Ok(());
+                }
                 continue;
             }
 
@@ -426,6 +459,18 @@ fn replay_pending_branches(
                 };
             mappings.insert(commit.oid.clone(), rewritten_commit.clone());
             last_rewritten = rewritten_commit;
+            if child_base_pause_commits.contains(&commit.oid) {
+                checkpoint_paused_child_base(
+                    state,
+                    state_writer,
+                    &mappings,
+                    &temp_refs,
+                    node,
+                    &commit.oid,
+                    &last_rewritten,
+                )?;
+                return Ok(());
+            }
         }
 
         let rewritten_tip = if let Some(commit) = commits.last() {
@@ -449,8 +494,8 @@ fn replay_pending_branches(
         remove_pending_branch(state, &branch)?;
         let pause = state
             .replay_mode
-            .pauses_after_each_branch()
-            .then(|| PausedState {
+            .pauses_at_checkpoints()
+            .then(|| PausedState::BranchEnd {
                 branch: node.branch.clone(),
                 rewritten_tip: branch_tip.clone(),
                 temp_ref: temp_ref.clone(),
@@ -471,6 +516,28 @@ fn replay_pending_branches(
     state.completed.temp_refs = temp_refs;
 
     Ok(())
+}
+
+fn checkpoint_paused_child_base(
+    state: &mut ApplyState,
+    state_writer: &mut dyn StateWriter,
+    mappings: &BTreeMap<String, String>,
+    temp_refs: &[String],
+    node: &Node,
+    commit: &str,
+    rewritten_tip: &str,
+) -> Result<()> {
+    state.mappings = mappings.clone();
+    state.completed.temp_refs = temp_refs.to_vec();
+    state.phase = Phase::Paused {
+        paused: PausedState::ChildBase {
+            branch: node.branch.clone(),
+            commit: commit.to_owned(),
+            rewritten_tip: rewritten_tip.to_owned(),
+            worktree: state.worktree.path().to_owned(),
+        },
+    };
+    state_writer.write_state(state)
 }
 
 /// Persists progress after a branch finished so a crashed apply can resume
@@ -637,6 +704,49 @@ fn replay_commits_from_extra(
         commits.extend(extra.iter().cloned());
     }
     commits
+}
+
+fn child_base_pause_commits(
+    plan: &Plan,
+    node: &Node,
+    strategy: Strategy,
+    commits: &[PlanCommit],
+) -> BTreeSet<String> {
+    let Some(last_commit) = commits.last() else {
+        return BTreeSet::new();
+    };
+    let has_child = plan
+        .nodes
+        .iter()
+        .any(|child| child.parent() == Some(node.branch.as_str()));
+    if !has_child {
+        return BTreeSet::new();
+    }
+
+    let commit_oids = commits
+        .iter()
+        .map(|commit| commit.oid.as_str())
+        .collect::<BTreeSet<_>>();
+    match strategy {
+        Strategy::MoveToCurrentTips => BTreeSet::new(),
+        Strategy::MoveToPlannedTips => {
+            if node.tip != last_commit.oid && commit_oids.contains(node.tip.as_str()) {
+                BTreeSet::from([node.tip.clone()])
+            } else {
+                BTreeSet::new()
+            }
+        }
+        Strategy::PreserveForkPoints => plan
+            .nodes
+            .iter()
+            .filter(|child| child.parent() == Some(node.branch.as_str()))
+            .map(Node::base)
+            .filter(|base| *base != node.base())
+            .filter(|base| *base != last_commit.oid)
+            .filter(|base| commit_oids.contains(*base))
+            .map(str::to_owned)
+            .collect(),
+    }
 }
 
 fn selected_bases_from_mappings(

@@ -272,7 +272,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         _state: &ApplyState,
         paused: &PausedState,
     ) -> Result<String> {
-        let worktree = std::path::PathBuf::from(&paused.worktree);
+        let worktree = std::path::PathBuf::from(paused.worktree());
         let worktree_git = Git::new(&worktree);
         if !worktree_git.is_clean_worktree()? {
             return Err(Error::InvalidInvocation(format!(
@@ -281,16 +281,20 @@ impl ReplayBackend for GitReplayBackend<'_> {
             )));
         }
         let head = worktree_git.head_oid()?;
-        if !worktree_git.is_ancestor(&paused.rewritten_tip, &head)? {
+        if !worktree_git.is_ancestor(paused.rewritten_tip(), &head)? {
             return Err(Error::InvalidInvocation(format!(
                 "paused branch `{}` HEAD `{}` is not a descendant of rewritten tip `{}`; restore the paused branch tip or abort the cascade operation",
-                paused.branch, head, paused.rewritten_tip
+                paused.branch(),
+                head,
+                paused.rewritten_tip()
             )));
         }
-        self.git.update_ref(&paused.temp_ref, &head)?;
+        if let PausedState::BranchEnd { temp_ref, .. } = paused {
+            self.git.update_ref(temp_ref, &head)?;
+        }
         eprintln!(
             "Continuing after paused branch `{}` at {}",
-            paused.branch,
+            paused.branch(),
             short_oid(&head)
         );
         Ok(head)
@@ -530,14 +534,21 @@ impl ReplayBackend for DryRunReplayBackend {
         paused: &PausedState,
     ) -> Result<String> {
         writeln!(self.output).unwrap();
-        writeln!(self.output, "# pause after branch {}", paused.branch).unwrap();
+        match paused {
+            PausedState::BranchEnd { branch, .. } => {
+                writeln!(self.output, "# pause after branch {branch}").unwrap();
+            }
+            PausedState::ChildBase { branch, commit, .. } => {
+                writeln!(self.output, "# pause at child base {branch}:{commit}").unwrap();
+            }
+        }
         writeln!(
             self.output,
             "# run checks in {}, commit fixes, then git cascade continue",
-            paused.worktree
+            paused.worktree()
         )
         .unwrap();
-        Ok(paused.rewritten_tip.clone())
+        Ok(paused.rewritten_tip().to_owned())
     }
 
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {

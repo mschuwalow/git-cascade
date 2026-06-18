@@ -259,7 +259,7 @@ fn continue_without_active_operation_fails_clearly() {
 }
 
 #[test]
-fn pause_after_each_branch_allows_fix_before_replaying_child() {
+fn pause_at_checkpoints_allows_fix_before_replaying_child() {
     let repo = paused_linear_stack();
     let old_pr2 = repo.rev_parse("pr-2");
     let old_pr3 = repo.rev_parse("pr-3");
@@ -274,7 +274,7 @@ fn pause_after_each_branch_allows_fix_before_replaying_child() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-after-each-branch",
+            "--pause-at-checkpoints",
         ])
         .assert()
         .success()
@@ -282,8 +282,8 @@ fn pause_after_each_branch_allows_fix_before_replaying_child() {
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
-    assert_eq!(state.replay_mode, ReplayMode::PauseAfterEachBranch);
-    assert_eq!(paused_state(&state).branch, "pr-2");
+    assert_eq!(state.replay_mode, ReplayMode::PauseAtCheckpoints);
+    assert_eq!(paused_state(&state).branch(), "pr-2");
     assert_eq!(state.pending.branches, vec!["pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
@@ -311,7 +311,7 @@ fn pause_after_each_branch_allows_fix_before_replaying_child() {
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
-    assert_eq!(paused_state(&state).branch, "pr-3");
+    assert_eq!(paused_state(&state).branch(), "pr-3");
     assert!(state.pending.branches.is_empty());
     assert_eq!(
         repo.git_output(["-C", worktree.to_str().unwrap(), "show", "HEAD:fix.txt"]),
@@ -346,7 +346,7 @@ fn continue_refuses_dirty_paused_worktree() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-after-each-branch",
+            "--pause-at-checkpoints",
         ])
         .assert()
         .success();
@@ -361,7 +361,98 @@ fn continue_refuses_dirty_paused_worktree() {
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
-    assert_eq!(paused_state(&state).branch, "pr-2");
+    assert_eq!(paused_state(&state).branch(), "pr-2");
+}
+
+#[test]
+fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
+    let repo = paused_intermediate_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at child base"));
+
+    let state = read_state(&repo);
+    let first_pause = paused_state(&state);
+    assert_eq!(first_pause.branch(), "pr-2");
+    assert!(matches!(first_pause, PausedState::ChildBase { .. }));
+    assert_eq!(state.pending.branches, vec!["pr-2", "pr-3"]);
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    std::fs::write(worktree.join("base-fix.txt"), "base fix\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "base-fix.txt"]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "fix child base",
+    ]);
+    let fixed_child_base = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    assert!(matches!(
+        paused_state(&state),
+        PausedState::BranchEnd { .. }
+    ));
+    assert_eq!(state.pending.branches, vec!["pr-3"]);
+    std::fs::write(worktree.join("tip-fix.txt"), "tip fix\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "tip-fix.txt"]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "fix branch tip",
+    ]);
+    let fixed_pr2_tip = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_eq!(repo.rev_parse("pr-2"), fixed_pr2_tip);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_child_base);
+    assert_eq!(repo.show("pr-3:base-fix.txt"), "base fix\n");
+    repo.git_fails(["show", "pr-3:tip-fix.txt"]);
+    assert_eq!(repo.show("pr-2:tip-fix.txt"), "tip fix\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
 }
 
 #[test]
@@ -643,6 +734,33 @@ fn paused_linear_stack() -> TestRepo {
     repo.commit_file("pr2.txt", "b\n", "pr-2");
     repo.switch_new("pr-3");
     repo.commit_file("pr3.txt", "c\n", "pr-3");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    repo
+}
+
+fn paused_intermediate_stack() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    let pr2_first = repo.commit_file("pr2-a.txt", "b\n", "pr-2 a");
+    repo.commit_file("pr2-b.txt", "c\n", "pr-2 b");
+    repo.switch_new_at("pr-3", &pr2_first);
+    repo.commit_file("pr3.txt", "d\n", "pr-3");
     repo.switch("main");
 
     repo.cascade()

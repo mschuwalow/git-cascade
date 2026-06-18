@@ -101,19 +101,19 @@ impl std::fmt::Display for Strategy {
 pub enum ReplayMode {
     #[default]
     RunToCompletion,
-    PauseAfterEachBranch,
+    PauseAtCheckpoints,
 }
 
 impl ReplayMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RunToCompletion => "run-to-completion",
-            Self::PauseAfterEachBranch => "pause-after-each-branch",
+            Self::PauseAtCheckpoints => "pause-at-checkpoints",
         }
     }
 
-    pub fn pauses_after_each_branch(self) -> bool {
-        self == Self::PauseAfterEachBranch
+    pub fn pauses_at_checkpoints(self) -> bool {
+        self == Self::PauseAtCheckpoints
     }
 }
 
@@ -131,12 +131,43 @@ pub struct CurrentState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PausedState {
-    pub branch: String,
-    pub rewritten_tip: String,
-    pub temp_ref: String,
-    pub mapped_commit: String,
-    pub worktree: String,
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PausedState {
+    BranchEnd {
+        branch: String,
+        rewritten_tip: String,
+        temp_ref: String,
+        mapped_commit: String,
+        worktree: String,
+    },
+    ChildBase {
+        branch: String,
+        commit: String,
+        rewritten_tip: String,
+        worktree: String,
+    },
+}
+
+impl PausedState {
+    pub fn branch(&self) -> &str {
+        match self {
+            Self::BranchEnd { branch, .. } | Self::ChildBase { branch, .. } => branch,
+        }
+    }
+
+    pub fn rewritten_tip(&self) -> &str {
+        match self {
+            Self::BranchEnd { rewritten_tip, .. } | Self::ChildBase { rewritten_tip, .. } => {
+                rewritten_tip
+            }
+        }
+    }
+
+    pub fn worktree(&self) -> &str {
+        match self {
+            Self::BranchEnd { worktree, .. } | Self::ChildBase { worktree, .. } => worktree,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
