@@ -1,7 +1,7 @@
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
-use crate::state::{ApplyState, CurrentState, RestoreState, WorktreeState};
+use crate::state::{ApplyState, CurrentState, PausedState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -52,6 +52,7 @@ pub(crate) trait ReplayBackend {
         state: &ApplyState,
         current: &CurrentState,
     ) -> Result<String>;
+    fn resume_paused_branch(&mut self, state: &ApplyState, paused: &PausedState) -> Result<String>;
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -87,8 +88,8 @@ impl<'a> GitReplayBackend<'a> {
 impl ReplayBackend for GitReplayBackend<'_> {
     fn start(&mut self, state: &ApplyState) -> Result<()> {
         eprintln!(
-            "Applying cascade plan `{}` with strategy `{}` in {} worktree mode",
-            state.plan_name, state.strategy, state.worktree
+            "Applying cascade plan `{}` with strategy `{}` in {} worktree mode ({})",
+            state.plan_name, state.strategy, state.worktree, state.replay_mode
         );
         Ok(())
     }
@@ -266,6 +267,35 @@ impl ReplayBackend for GitReplayBackend<'_> {
         worktree_git.head_oid()
     }
 
+    fn resume_paused_branch(
+        &mut self,
+        _state: &ApplyState,
+        paused: &PausedState,
+    ) -> Result<String> {
+        let worktree = std::path::PathBuf::from(&paused.worktree);
+        let worktree_git = Git::new(&worktree);
+        if !worktree_git.is_clean_worktree()? {
+            return Err(Error::InvalidInvocation(format!(
+                "paused worktree {} has uncommitted changes; commit, stash, or discard them before continuing",
+                worktree.display()
+            )));
+        }
+        let head = worktree_git.head_oid()?;
+        if !worktree_git.is_ancestor(&paused.rewritten_tip, &head)? {
+            return Err(Error::InvalidInvocation(format!(
+                "paused branch `{}` HEAD `{}` is not a descendant of rewritten tip `{}`; restore the paused branch tip or abort the cascade operation",
+                paused.branch, head, paused.rewritten_tip
+            )));
+        }
+        self.git.update_ref(&paused.temp_ref, &head)?;
+        eprintln!(
+            "Continuing after paused branch `{}` at {}",
+            paused.branch,
+            short_oid(&head)
+        );
+        Ok(head)
+    }
+
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
         eprintln!("Updating branch refs");
         finish_final_update(self.git, plan, state)
@@ -329,6 +359,7 @@ impl DryRunReplayBackend {
         writeln!(output, "# git-cascade apply --dry-run").unwrap();
         writeln!(output, "new-tip {}", state.new_tip).unwrap();
         writeln!(output, "strategy {}", state.strategy).unwrap();
+        writeln!(output, "replay-mode {}", state.replay_mode).unwrap();
         writeln!(output, "worktree-mode {}", state.worktree).unwrap();
         let worktree = if state.worktree.path().is_empty() {
             storage.worktrees_dir().join(plan.plan_id.to_string())
@@ -491,6 +522,22 @@ impl ReplayBackend for DryRunReplayBackend {
         current: &CurrentState,
     ) -> Result<String> {
         Ok(format!("<rewritten {}:{}>", current.branch, current.commit))
+    }
+
+    fn resume_paused_branch(
+        &mut self,
+        _state: &ApplyState,
+        paused: &PausedState,
+    ) -> Result<String> {
+        writeln!(self.output).unwrap();
+        writeln!(self.output, "# pause after branch {}", paused.branch).unwrap();
+        writeln!(
+            self.output,
+            "# run checks in {}, commit fixes, then git cascade continue",
+            paused.worktree
+        )
+        .unwrap();
+        Ok(paused.rewritten_tip.clone())
     }
 
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {

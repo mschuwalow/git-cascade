@@ -1,5 +1,6 @@
 use super::landed as landed_inference;
-use crate::apply::{ApplyOptions, dry_run, execute};
+use super::print_paused_message;
+use crate::apply::{ApplyOptions, ApplyOutcome, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
 use crate::state::Strategy;
@@ -10,6 +11,7 @@ pub(super) struct RunOptions {
     pub(super) strategy: Strategy,
     pub(super) is_dry_run: bool,
     pub(super) in_place: bool,
+    pub(super) pause_after_each_branch: bool,
 }
 
 pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOptions) -> Result<()> {
@@ -178,6 +180,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                     new_tip_input: options.new_tip,
                     strategy: options.run.strategy,
                     in_place: options.run.in_place,
+                    pause_after_each_branch: options.run.pause_after_each_branch,
                 },
             )?
         );
@@ -186,7 +189,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
 
     let plan = generate_stored_plan(options.git, options.storage, &options.generate, false)?;
 
-    execute(
+    let outcome = execute(
         options.git,
         options.storage,
         &plan,
@@ -195,10 +198,14 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
             new_tip_input: options.new_tip,
             strategy: options.run.strategy,
             in_place: options.run.in_place,
+            pause_after_each_branch: options.run.pause_after_each_branch,
         },
     )?;
 
-    println!("{}", options.success_message);
+    match outcome {
+        ApplyOutcome::Complete => println!("{}", options.success_message),
+        ApplyOutcome::Paused { branch, worktree } => print_paused_message(&branch, &worktree),
+    }
     Ok(())
 }
 

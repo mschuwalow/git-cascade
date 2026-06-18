@@ -261,14 +261,17 @@ impl Git {
     }
 
     pub fn ensure_clean_worktree(&self) -> Result<()> {
-        let status = self.output(["status", "--porcelain"])?;
-        if status.is_empty() {
+        if self.is_clean_worktree()? {
             return Ok(());
         }
 
         Err(Error::InvalidInvocation(
             "cannot apply in-place with a dirty worktree; commit, stash, or discard local changes first".to_owned(),
         ))
+    }
+
+    pub fn is_clean_worktree(&self) -> Result<bool> {
+        Ok(self.output(["status", "--porcelain"])?.is_empty())
     }
 
     pub fn checked_out_branches_except(&self, excluded_path: &Path) -> Result<Vec<String>> {

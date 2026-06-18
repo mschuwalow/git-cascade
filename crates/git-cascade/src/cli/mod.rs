@@ -46,6 +46,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
+        /// Stop after each branch so checks and fixes can be committed manually.
+        #[arg(long)]
+        pause_after_each_branch: bool,
     },
     /// Replay dependents from an old root tip onto an arbitrary replacement tip.
     Replay {
@@ -67,6 +70,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
+        /// Stop after each branch so checks and fixes can be committed manually.
+        #[arg(long)]
+        pause_after_each_branch: bool,
     },
     /// Update branches after the default branch advanced.
     Sync {
@@ -82,6 +88,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
+        /// Stop after each branch so checks and fixes can be committed manually.
+        #[arg(long)]
+        pause_after_each_branch: bool,
     },
     /// Move dependents of a branch that landed on the default branch.
     Landed {
@@ -103,6 +112,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
+        /// Stop after each branch so checks and fixes can be committed manually.
+        #[arg(long)]
+        pause_after_each_branch: bool,
     },
     /// Show the active cascade operation, if any.
     Status,
@@ -143,6 +155,7 @@ where
             strategy,
             dry_run,
             in_place,
+            pause_after_each_branch,
         } => high_level::restack(
             branch,
             base,
@@ -150,6 +163,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
+                pause_after_each_branch,
             },
         ),
         Command::Replay {
@@ -159,6 +173,7 @@ where
             strategy,
             dry_run,
             in_place,
+            pause_after_each_branch,
         } => high_level::replay(
             &old_tip,
             &old_base,
@@ -167,6 +182,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
+                pause_after_each_branch,
             },
         ),
         Command::Sync {
@@ -174,12 +190,14 @@ where
             strategy,
             dry_run,
             in_place,
+            pause_after_each_branch,
         } => high_level::sync(
             base,
             high_level::RunOptions {
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
+                pause_after_each_branch,
             },
         ),
         Command::Landed {
@@ -189,6 +207,7 @@ where
             strategy,
             dry_run,
             in_place,
+            pause_after_each_branch,
         } => high_level::landed(
             &old_tip,
             onto,
@@ -197,6 +216,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
+                pause_after_each_branch,
             },
         ),
         Command::Status => status::status(),
@@ -216,10 +236,20 @@ fn completions(shell: Shell) -> Result<()> {
 fn continue_operation() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    continue_apply(&git, &storage)?;
-    println!("continued cascade operation");
+    match continue_apply(&git, &storage)? {
+        crate::apply::ApplyOutcome::Complete => println!("continued cascade operation"),
+        crate::apply::ApplyOutcome::Paused { branch, worktree } => {
+            print_paused_message(&branch, &worktree);
+        }
+    }
 
     Ok(())
+}
+
+pub(super) fn print_paused_message(branch: &str, worktree: &str) {
+    println!(
+        "paused after branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
+    );
 }
 
 fn abort() -> Result<()> {

@@ -22,7 +22,11 @@ pub struct ApplyState {
     pub pid: u32,
     pub new_tip: String,
     pub strategy: Strategy,
+    #[serde(default)]
+    pub replay_mode: ReplayMode,
     pub current: Option<CurrentState>,
+    #[serde(default)]
+    pub paused: Option<PausedState>,
     pub worktree: WorktreeState,
     pub completed: CompletedState,
     pub branch_tips: BTreeMap<String, String>,
@@ -37,6 +41,7 @@ pub struct ApplyState {
 pub enum Phase {
     Replay,
     Conflict,
+    Paused,
     FinalUpdate,
     Deleting,
 }
@@ -46,6 +51,7 @@ impl Phase {
         match self {
             Self::Replay => "replay",
             Self::Conflict => "conflict",
+            Self::Paused => "paused",
             Self::FinalUpdate => "final_update",
             Self::Deleting => "deleting",
         }
@@ -86,10 +92,46 @@ impl std::fmt::Display for Strategy {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReplayMode {
+    #[default]
+    RunToCompletion,
+    PauseAfterEachBranch,
+}
+
+impl ReplayMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RunToCompletion => "run-to-completion",
+            Self::PauseAfterEachBranch => "pause-after-each-branch",
+        }
+    }
+
+    pub fn pauses_after_each_branch(self) -> bool {
+        self == Self::PauseAfterEachBranch
+    }
+}
+
+impl std::fmt::Display for ReplayMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurrentState {
     pub branch: String,
     pub commit: String,
+    pub worktree: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PausedState {
+    pub branch: String,
+    pub rewritten_tip: String,
+    pub temp_ref: String,
+    pub mapped_commit: String,
     pub worktree: String,
 }
 
@@ -306,6 +348,7 @@ pub struct ApplyStateInput<'a> {
     pub plan_id: &'a PlanId,
     pub new_tip: &'a str,
     pub strategy: Strategy,
+    pub replay_mode: ReplayMode,
     pub pending_branches: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
@@ -326,7 +369,9 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         pid: std::process::id(),
         new_tip: input.new_tip.to_owned(),
         strategy: input.strategy,
+        replay_mode: input.replay_mode,
         current: None,
+        paused: None,
         worktree: input.worktree,
         completed: CompletedState::default(),
         branch_tips: input.branch_tips,

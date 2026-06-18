@@ -5,8 +5,8 @@ use crate::plan::{
 };
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
-    ApplyState, ApplyStateInput, CurrentState, Phase, RestoreState, StateFile, Strategy,
-    WorktreeState, initial_apply_state,
+    ApplyState, ApplyStateInput, CurrentState, PausedState, Phase, ReplayMode, RestoreState,
+    StateFile, Strategy, WorktreeState, initial_apply_state,
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::Storage;
@@ -21,6 +21,13 @@ pub struct ApplyOptions {
     pub new_tip_input: String,
     pub strategy: Strategy,
     pub in_place: bool,
+    pub pause_after_each_branch: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    Complete,
+    Paused { branch: String, worktree: String },
 }
 
 struct ActualReplayContext<'a> {
@@ -60,6 +67,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
         strategy: options.strategy,
+        replay_mode: replay_mode(&options),
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -68,12 +76,17 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     })?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
-    run_apply_state(plan, &mut state_writer, &mut backend, &mut state)?;
+    run_apply_state(plan, &mut state_writer, &mut backend, &mut state, false)?;
 
     Ok(backend.finish())
 }
 
-pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<()> {
+pub fn execute(
+    git: &Git,
+    storage: &Storage,
+    plan: &Plan,
+    options: ApplyOptions,
+) -> Result<ApplyOutcome> {
     validate_plan(git, plan)?;
     let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
@@ -107,6 +120,7 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
         strategy: options.strategy,
+        replay_mode: replay_mode(&options),
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -122,10 +136,10 @@ pub fn execute(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     let mut state = state;
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    run_apply_state(plan, &mut state_writer, &mut backend, &mut state)
+    run_apply_state(plan, &mut state_writer, &mut backend, &mut state, true)
 }
 
-pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
+pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
     let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
     let mut state = state_file.read_state()?;
@@ -133,14 +147,15 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<()> {
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
     if state.phase == Phase::Deleting {
-        run_deleting_state(&mut state_writer, &mut backend, &mut state)
+        run_deleting_state(&mut state_writer, &mut backend, &mut state)?;
+        Ok(ApplyOutcome::Complete)
     } else {
         let plan_name = state.plan_name.clone();
         let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
         // Branch refs are not re-checked here: they may legitimately already
         // point at rewritten tips when resuming a final update.
         validate_plan(git, &plan)?;
-        run_apply_state(&plan, &mut state_writer, &mut backend, &mut state)
+        run_apply_state(&plan, &mut state_writer, &mut backend, &mut state, true)
     }
 }
 
@@ -177,12 +192,17 @@ fn run_apply_state(
     state_writer: &mut dyn StateWriter,
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
-) -> Result<()> {
+    stop_on_pause: bool,
+) -> Result<ApplyOutcome> {
     backend.start(state)?;
+    let mut resume_initial_pause = state.phase == Phase::Paused;
     loop {
         match state.phase {
             Phase::Replay => {
                 replay_pending_branches(plan, state_writer, backend, state)?;
+                if state.phase == Phase::Paused {
+                    continue;
+                }
                 state.phase = Phase::FinalUpdate;
                 state_writer.write_state(state)?;
             }
@@ -199,10 +219,34 @@ fn run_apply_state(
                 state.phase = Phase::Replay;
                 state_writer.write_state(state)?;
             }
+            Phase::Paused => {
+                if stop_on_pause && !resume_initial_pause {
+                    let paused = state.paused.as_ref().ok_or_else(|| {
+                        Error::InvalidInvocation(
+                            "active apply state is paused without paused branch details".to_owned(),
+                        )
+                    })?;
+                    return Ok(ApplyOutcome::Paused {
+                        branch: paused.branch.clone(),
+                        worktree: paused.worktree.clone(),
+                    });
+                }
+                resume_initial_pause = false;
+                resume_paused_branch(plan, state_writer, backend, state)?;
+            }
             Phase::Deleting => {
-                return run_deleting_state(state_writer, backend, state);
+                run_deleting_state(state_writer, backend, state)?;
+                return Ok(ApplyOutcome::Complete);
             }
         }
+    }
+}
+
+fn replay_mode(options: &ApplyOptions) -> ReplayMode {
+    if options.pause_after_each_branch {
+        ReplayMode::PauseAfterEachBranch
+    } else {
+        ReplayMode::RunToCompletion
     }
 }
 
@@ -225,6 +269,29 @@ fn resolve_conflict(backend: &mut dyn ReplayBackend, state: &mut ApplyState) -> 
     let rewritten_commit = backend.continue_cherry_pick(state, &current)?;
     state.mappings.insert(current.commit, rewritten_commit);
     Ok(())
+}
+
+fn resume_paused_branch(
+    plan: &Plan,
+    state_writer: &mut dyn StateWriter,
+    backend: &mut dyn ReplayBackend,
+    state: &mut ApplyState,
+) -> Result<()> {
+    let paused = state.paused.clone().ok_or_else(|| {
+        Error::InvalidInvocation("active apply state is paused without branch details".to_owned())
+    })?;
+    if !plan.nodes.iter().any(|node| node.branch == paused.branch) {
+        return Err(Error::InvalidPlan(format!(
+            "paused branch `{}` is not in the active plan",
+            paused.branch
+        )));
+    }
+
+    let rewritten_tip = backend.resume_paused_branch(state, &paused)?;
+    state.mappings.insert(paused.mapped_commit, rewritten_tip);
+    state.paused = None;
+    state.phase = Phase::Replay;
+    state_writer.write_state(state)
 }
 
 fn replay_pending_branches(
@@ -303,7 +370,7 @@ fn replay_pending_branches(
                     temp_refs.push(temp_ref);
                 }
                 remove_pending_branch(state, &branch)?;
-                checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs)?;
+                checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, None)?;
                 continue;
             }
 
@@ -361,12 +428,28 @@ fn replay_pending_branches(
         };
         let (temp_ref, branch_tip) =
             backend.write_temp_ref(plan, node, branch_index, total_branches, &rewritten_tip)?;
-        temp_tips.insert(node.branch.clone(), branch_tip);
+        temp_tips.insert(node.branch.clone(), branch_tip.clone());
         if !temp_refs.contains(&temp_ref) {
-            temp_refs.push(temp_ref);
+            temp_refs.push(temp_ref.clone());
         }
         remove_pending_branch(state, &branch)?;
-        checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs)?;
+        let pause = state
+            .replay_mode
+            .pauses_after_each_branch()
+            .then(|| PausedState {
+                branch: node.branch.clone(),
+                rewritten_tip: branch_tip.clone(),
+                temp_ref: temp_ref.clone(),
+                mapped_commit: commits
+                    .last()
+                    .map(|commit| commit.oid.clone())
+                    .unwrap_or_else(|| node.base().to_owned()),
+                worktree: state.worktree.path().to_owned(),
+            });
+        checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, pause)?;
+        if state.phase == Phase::Paused {
+            return Ok(());
+        }
     }
 
     state.current = None;
@@ -383,10 +466,15 @@ fn checkpoint_completed_branch(
     state_writer: &mut dyn StateWriter,
     mappings: &BTreeMap<String, String>,
     temp_refs: &[String],
+    pause: Option<PausedState>,
 ) -> Result<()> {
     state.current = None;
     state.mappings = mappings.clone();
     state.completed.temp_refs = temp_refs.to_vec();
+    if let Some(paused) = pause {
+        state.paused = Some(paused);
+        state.phase = Phase::Paused;
+    }
     state_writer.write_state(state)
 }
 

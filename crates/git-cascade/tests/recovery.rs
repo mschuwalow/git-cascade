@@ -1,7 +1,7 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::state::{Phase, RestoreState, WorktreeState};
+use git_cascade::state::{Phase, ReplayMode, RestoreState, WorktreeState};
 use predicates::prelude::*;
 
 #[test]
@@ -253,6 +253,112 @@ fn continue_without_active_operation_fails_clearly() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("no active cascade operation"));
+}
+
+#[test]
+fn pause_after_each_branch_allows_fix_before_replaying_child() {
+    let repo = paused_linear_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-current-tips",
+            "--pause-after-each-branch",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    assert_eq!(state.phase, Phase::Paused);
+    assert_eq!(state.replay_mode, ReplayMode::PauseAfterEachBranch);
+    assert_eq!(state.paused.as_ref().unwrap().branch, "pr-2");
+    assert_eq!(state.pending.branches, vec!["pr-3"]);
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    std::fs::write(worktree.join("fix.txt"), "fix\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "fix.txt"]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "fix pr-2 after replay",
+    ]);
+    let fixed_pr2 = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    let state = read_state(&repo);
+    assert_eq!(state.phase, Phase::Paused);
+    assert_eq!(state.paused.as_ref().unwrap().branch, "pr-3");
+    assert!(state.pending.branches.is_empty());
+    assert_eq!(
+        repo.git_output(["-C", worktree.to_str().unwrap(), "show", "HEAD:fix.txt"]),
+        "fix\n"
+    );
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_eq!(repo.rev_parse("pr-2"), fixed_pr2);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    repo.git_ok(["merge-base", "--is-ancestor", "pr-2", "pr-3"]);
+    assert_eq!(repo.show("pr-3:fix.txt"), "fix\n");
+    assert_eq!(repo.show("pr-3:pr3.txt"), "c\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn continue_refuses_dirty_paused_worktree() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-after-each-branch",
+        ])
+        .assert()
+        .success();
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    std::fs::write(worktree.join("dirty.txt"), "dirty\n").unwrap();
+
+    repo.cascade().arg("continue").assert().failure().stderr(
+        predicate::str::contains("paused worktree")
+            .and(predicate::str::contains("has uncommitted changes")),
+    );
+
+    let state = read_state(&repo);
+    assert_eq!(state.phase, Phase::Paused);
+    assert_eq!(state.paused.unwrap().branch, "pr-2");
 }
 
 #[test]
@@ -524,6 +630,40 @@ fn repeated_conflict_stack() -> TestRepo {
     repo.git_ok(["commit", "-m", "anchor new"]);
     repo.switch("main");
     repo
+}
+
+fn paused_linear_stack() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch_new("pr-3");
+    repo.commit_file("pr3.txt", "c\n", "pr-3");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    repo
+}
+
+fn rewrite_anchor(repo: &TestRepo) {
+    repo.switch("main");
+    repo.commit_file("main2.txt", "new base\n", "new base");
+    repo.switch("pr-1");
+    repo.git_ok(["rebase", "main"]);
+    repo.switch("main");
 }
 
 fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {

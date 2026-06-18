@@ -23,12 +23,17 @@ fn status_output(storage: &Storage) -> Result<String> {
     output.push_str(&format!("plan-id: {}\n", state.plan_id));
     output.push_str(&format!("new-tip: {}\n", state.new_tip));
     output.push_str(&format!("strategy: {}\n", state.strategy.as_str()));
+    output.push_str(&format!("replay-mode: {}\n", state.replay_mode));
     output.push_str(&format!("worktree-mode: {}\n", state.worktree));
     if let Some(current) = &state.current {
         output.push_str(&format!("current-branch: {}\n", current.branch));
         output.push_str(&format!("current-commit: {}\n", current.commit));
     } else {
         output.push_str("current: none\n");
+    }
+    if let Some(paused) = &state.paused {
+        output.push_str(&format!("paused-branch: {}\n", paused.branch));
+        output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip));
     }
     output.push_str(&format!("worktree: {}\n", state.worktree.path()));
     output.push_str(&format!(

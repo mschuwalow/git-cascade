@@ -1,5 +1,6 @@
+use super::print_paused_message;
 use crate::Result;
-use crate::apply::{ApplyOptions, dry_run, execute};
+use crate::apply::{ApplyOptions, ApplyOutcome, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::state::{Strategy, read_state};
@@ -40,6 +41,9 @@ pub(super) enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
+        /// Stop after each branch so checks and fixes can be committed manually.
+        #[arg(long)]
+        pause_after_each_branch: bool,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -71,7 +75,15 @@ pub(super) fn run(command: Command) -> Result<()> {
             strategy,
             dry_run,
             in_place,
-        } => apply(name, &new_tip, strategy, dry_run, in_place),
+            pause_after_each_branch,
+        } => apply(
+            name,
+            &new_tip,
+            strategy,
+            dry_run,
+            in_place,
+            pause_after_each_branch,
+        ),
         Command::List => list(),
         Command::Show { name } => show(&name),
         Command::Remove { name } => remove(name),
@@ -103,6 +115,7 @@ fn apply(
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
+    pause_after_each_branch: bool,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
@@ -112,13 +125,16 @@ fn apply(
         new_tip_input: new_tip.to_owned(),
         strategy,
         in_place,
+        pause_after_each_branch,
     };
 
     if is_dry_run {
         print!("{}", dry_run(&git, &storage, &plan, options)?);
     } else {
-        execute(&git, &storage, &plan, options)?;
-        println!("applied cascade plan");
+        match execute(&git, &storage, &plan, options)? {
+            ApplyOutcome::Complete => println!("applied cascade plan"),
+            ApplyOutcome::Paused { branch, worktree } => print_paused_message(&branch, &worktree),
+        }
     }
 
     Ok(())

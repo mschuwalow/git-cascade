@@ -279,6 +279,25 @@ git cascade abort
 
 Abort cleans temporary state and leaves the stored plan intact so it can be retried.
 
+## Branch-Boundary Checks
+
+Pass `--pause-after-each-branch` when you want to run tests or make manual fixes after each rewritten branch before replaying its children:
+
+```sh
+git cascade restack pr-1 --pause-after-each-branch
+```
+
+When replay pauses, permanent branch refs are still unchanged. Run checks in the reported worktree. If a branch needs fixes, commit them in that worktree, then continue:
+
+```sh
+git -C <worktree> status
+git -C <worktree> add <files>
+git -C <worktree> commit -m "fix after replay"
+git cascade continue
+```
+
+`continue` records the paused worktree's current `HEAD` as that branch's rewritten tip, then replays dependent branches using the selected strategy. It refuses to continue if the paused worktree has uncommitted changes or if `HEAD` no longer descends from the rewritten branch tip.
+
 ## Power-User Plan Commands
 
 Use `git cascade plan ...` when you need to snapshot topology before a destructive rewrite, inspect a plan before applying it, or script the lower-level workflow directly.
@@ -341,6 +360,12 @@ git cascade plan apply stack --new-tip pr-1 --in-place
 ```
 
 `--in-place` requires a clean worktree. If replay conflicts, the conflict is left in the current worktree and `git cascade abort` restores the checkout that was active before apply started.
+
+Pause after each replayed branch when applying a stored plan:
+
+```sh
+git cascade plan apply stack --new-tip pr-1 --pause-after-each-branch
+```
 
 Replace an existing plan:
 
