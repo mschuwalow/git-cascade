@@ -5,8 +5,8 @@ use crate::plan::{
 };
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use crate::state::{
-    ApplyState, ApplyStateInput, CurrentState, PausedState, Phase, ReplayMode, RestoreState,
-    StateFile, Strategy, WorktreeState, initial_apply_state,
+    ApplyState, ApplyStateInput, CleanupState, CurrentState, PausedState, Phase, ReplayMode,
+    RestoreState, StateFile, Strategy, WorktreeState, initial_apply_state,
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::Storage;
@@ -146,7 +146,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
 
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    if state.phase == Phase::Deleting {
+    if matches!(state.phase, Phase::Deleting { .. }) {
         run_deleting_state(&mut state_writer, &mut backend, &mut state)?;
         Ok(ApplyOutcome::Complete)
     } else {
@@ -167,9 +167,10 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
     };
     let mut state = state_file.read_state()?;
 
-    if state.phase != Phase::Deleting {
-        state.phase = Phase::Deleting;
-        state.cleanup.delete_plan = false;
+    if !matches!(state.phase, Phase::Deleting { .. }) {
+        state.phase = Phase::Deleting {
+            cleanup: CleanupState { delete_plan: false },
+        };
         state_file.write_state(&mut state)?;
     }
 
@@ -195,12 +196,12 @@ fn run_apply_state(
     stop_on_pause: bool,
 ) -> Result<ApplyOutcome> {
     backend.start(state)?;
-    let mut resume_initial_pause = state.phase == Phase::Paused;
+    let mut resume_initial_pause = matches!(state.phase, Phase::Paused { .. });
     loop {
-        match state.phase {
-            Phase::Replay => {
+        match state.phase.clone() {
+            Phase::Replay { .. } => {
                 replay_pending_branches(plan, state_writer, backend, state)?;
-                if state.phase == Phase::Paused {
+                if matches!(state.phase, Phase::Paused { .. }) {
                     continue;
                 }
                 state.phase = Phase::FinalUpdate;
@@ -209,32 +210,27 @@ fn run_apply_state(
             Phase::FinalUpdate => {
                 backend.final_update(plan, state)?;
                 test_hooks::run("after-final-update")?;
-                state.phase = Phase::Deleting;
-                state.cleanup.delete_plan = true;
+                state.phase = Phase::Deleting {
+                    cleanup: CleanupState { delete_plan: true },
+                };
                 state_writer.write_state(state)?;
                 test_hooks::run("after-deleting-state-written")?;
             }
-            Phase::Conflict => {
-                resolve_conflict(backend, state)?;
-                state.phase = Phase::Replay;
+            Phase::Conflict { current } => {
+                resolve_conflict(backend, state, current)?;
                 state_writer.write_state(state)?;
             }
-            Phase::Paused => {
+            Phase::Paused { paused } => {
                 if stop_on_pause && !resume_initial_pause {
-                    let paused = state.paused.as_ref().ok_or_else(|| {
-                        Error::InvalidInvocation(
-                            "active apply state is paused without paused branch details".to_owned(),
-                        )
-                    })?;
                     return Ok(ApplyOutcome::Paused {
                         branch: paused.branch.clone(),
                         worktree: paused.worktree.clone(),
                     });
                 }
                 resume_initial_pause = false;
-                resume_paused_branch(plan, state_writer, backend, state)?;
+                resume_paused_branch(plan, state_writer, backend, state, paused)?;
             }
-            Phase::Deleting => {
+            Phase::Deleting { .. } => {
                 run_deleting_state(state_writer, backend, state)?;
                 return Ok(ApplyOutcome::Complete);
             }
@@ -255,19 +251,33 @@ fn run_deleting_state(
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
 ) -> Result<()> {
-    if state.cleanup.delete_plan {
+    let cleanup = match &state.phase {
+        Phase::Deleting { cleanup } => cleanup.clone(),
+        _ => {
+            return Err(Error::InvalidInvocation(
+                "active apply state is not in deleting phase".to_owned(),
+            ));
+        }
+    };
+    if cleanup.delete_plan {
         backend.delete_applied_plan(state)?;
     }
     backend.cleanup_deleting_state(state)?;
     state_writer.remove_state()
 }
 
-fn resolve_conflict(backend: &mut dyn ReplayBackend, state: &mut ApplyState) -> Result<()> {
-    let current = state.current.clone().ok_or_else(|| {
-        Error::InvalidInvocation("active apply state has no current commit".to_owned())
-    })?;
+fn resolve_conflict(
+    backend: &mut dyn ReplayBackend,
+    state: &mut ApplyState,
+    current: CurrentState,
+) -> Result<()> {
     let rewritten_commit = backend.continue_cherry_pick(state, &current)?;
-    state.mappings.insert(current.commit, rewritten_commit);
+    state
+        .mappings
+        .insert(current.commit.clone(), rewritten_commit);
+    state.phase = Phase::Replay {
+        current: Some(current),
+    };
     Ok(())
 }
 
@@ -276,10 +286,8 @@ fn resume_paused_branch(
     state_writer: &mut dyn StateWriter,
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
+    paused: PausedState,
 ) -> Result<()> {
-    let paused = state.paused.clone().ok_or_else(|| {
-        Error::InvalidInvocation("active apply state is paused without branch details".to_owned())
-    })?;
     if !plan.nodes.iter().any(|node| node.branch == paused.branch) {
         return Err(Error::InvalidPlan(format!(
             "paused branch `{}` is not in the active plan",
@@ -289,8 +297,7 @@ fn resume_paused_branch(
 
     let rewritten_tip = backend.resume_paused_branch(state, &paused)?;
     state.mappings.insert(paused.mapped_commit, rewritten_tip);
-    state.paused = None;
-    state.phase = Phase::Replay;
+    state.phase = Phase::Replay { current: None };
     state_writer.write_state(state)
 }
 
@@ -321,10 +328,16 @@ fn replay_pending_branches(
             .ok_or_else(|| Error::InvalidPlan(format!("unknown pending branch `{branch}`")))?;
         let branch_index = temp_refs.len() + 1;
         let commits = replay_commits_from_extra(node, &state.extra_commits);
-        let was_resuming = state.current.is_some();
+        let replay_current = match &state.phase {
+            Phase::Replay { current } => current.clone(),
+            _ => None,
+        };
+        let was_resuming = replay_current.is_some();
 
         let (start_commit_index, mut last_rewritten) = if was_resuming {
-            let start = resume_start_commit_index(node, state, &mappings, &commits)?;
+            let current = replay_current.as_ref().expect("resume requires current");
+            let start = resume_start_commit_index(node, current, &mappings, &commits)?;
+            state.phase = Phase::Replay { current: None };
             let head = commits
                 .get(start.wrapping_sub(1))
                 .and_then(|commit| mappings.get(&commit.oid))
@@ -398,14 +411,15 @@ fn replay_pending_branches(
                 match backend.cherry_pick(state, node, &commit.oid, commit_index, commits.len()) {
                     Ok(rewritten_commit) => rewritten_commit,
                     Err(error) => {
-                        state.current = Some(CurrentState {
-                            branch: node.branch.clone(),
-                            commit: commit.oid.clone(),
-                            worktree: state.worktree.path().to_owned(),
-                        });
+                        state.phase = Phase::Conflict {
+                            current: CurrentState {
+                                branch: node.branch.clone(),
+                                commit: commit.oid.clone(),
+                                worktree: state.worktree.path().to_owned(),
+                            },
+                        };
                         state.mappings = mappings.clone();
                         state.completed.temp_refs = temp_refs.clone();
-                        state.phase = Phase::Conflict;
                         state_writer.write_state(state)?;
                         return Err(error);
                     }
@@ -447,12 +461,12 @@ fn replay_pending_branches(
                 worktree: state.worktree.path().to_owned(),
             });
         checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, pause)?;
-        if state.phase == Phase::Paused {
+        if matches!(state.phase, Phase::Paused { .. }) {
             return Ok(());
         }
     }
 
-    state.current = None;
+    state.phase = Phase::Replay { current: None };
     state.mappings = mappings;
     state.completed.temp_refs = temp_refs;
 
@@ -468,23 +482,22 @@ fn checkpoint_completed_branch(
     temp_refs: &[String],
     pause: Option<PausedState>,
 ) -> Result<()> {
-    state.current = None;
     state.mappings = mappings.clone();
     state.completed.temp_refs = temp_refs.to_vec();
-    if let Some(paused) = pause {
-        state.paused = Some(paused);
-        state.phase = Phase::Paused;
-    }
+    state.phase = if let Some(paused) = pause {
+        Phase::Paused { paused }
+    } else {
+        Phase::Replay { current: None }
+    };
     state_writer.write_state(state)
 }
 
 fn resume_start_commit_index(
     node: &Node,
-    state: &mut ApplyState,
+    current: &CurrentState,
     mappings: &BTreeMap<String, String>,
     commits: &[PlanCommit],
 ) -> Result<usize> {
-    let current = state.current.as_ref().expect("resume requires current");
     if current.branch != node.branch {
         return Err(Error::InvalidPlan(format!(
             "current branch `{}` is not the next pending branch `{}`",
@@ -508,7 +521,6 @@ fn resume_start_commit_index(
                 current.commit, current.branch
             ))
         })?;
-    state.current = None;
     Ok(start_commit_index)
 }
 

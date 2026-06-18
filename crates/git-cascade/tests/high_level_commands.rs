@@ -1,7 +1,7 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::state::ApplyState;
+use git_cascade::state::{ApplyState, Phase};
 use predicates::prelude::*;
 
 #[test]
@@ -109,7 +109,7 @@ fn restack_conflict_keeps_generated_plan_for_continue() {
     let plan_name = state.plan_name.clone();
     assert!(repo.plan_path(plan_name.as_str()).exists());
 
-    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    let worktree = std::path::PathBuf::from(conflict_worktree(&state));
     std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -472,4 +472,11 @@ fn stack_on_non_root_main_tip() -> TestRepo {
     repo.commit_file("pr2.txt", "b\n", "pr-2");
     repo.switch("main");
     repo
+}
+
+fn conflict_worktree(state: &ApplyState) -> String {
+    match &state.phase {
+        Phase::Conflict { current } => current.worktree.clone(),
+        phase => panic!("expected conflict phase, got {phase:?}"),
+    }
 }

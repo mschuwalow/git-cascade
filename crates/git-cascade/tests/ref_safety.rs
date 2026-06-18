@@ -159,8 +159,10 @@ fn continue_finishes_successful_deleting_state() {
         ));
 
     let state = read_state(&repo);
-    assert_eq!(state.phase, Phase::Deleting);
-    assert!(state.cleanup.delete_plan);
+    match state.phase {
+        Phase::Deleting { cleanup } => assert!(cleanup.delete_plan),
+        phase => panic!("expected deleting phase, got {phase:?}"),
+    }
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     assert!(repo.common_dir().join("cascade/state.yaml").exists());
     assert!(repo.plan_path("stack").exists());

@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::git::Git;
-use crate::state::read_state;
+use crate::state::{Phase, read_state};
 use crate::storage::Storage;
 
 pub(super) fn status() -> Result<()> {
@@ -25,13 +25,17 @@ fn status_output(storage: &Storage) -> Result<String> {
     output.push_str(&format!("strategy: {}\n", state.strategy.as_str()));
     output.push_str(&format!("replay-mode: {}\n", state.replay_mode));
     output.push_str(&format!("worktree-mode: {}\n", state.worktree));
-    if let Some(current) = &state.current {
-        output.push_str(&format!("current-branch: {}\n", current.branch));
-        output.push_str(&format!("current-commit: {}\n", current.commit));
-    } else {
-        output.push_str("current: none\n");
+    match &state.phase {
+        Phase::Replay {
+            current: Some(current),
+        }
+        | Phase::Conflict { current } => {
+            output.push_str(&format!("current-branch: {}\n", current.branch));
+            output.push_str(&format!("current-commit: {}\n", current.commit));
+        }
+        _ => output.push_str("current: none\n"),
     }
-    if let Some(paused) = &state.paused {
+    if let Phase::Paused { paused } = &state.phase {
         output.push_str(&format!("paused-branch: {}\n", paused.branch));
         output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip));
     }

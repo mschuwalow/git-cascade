@@ -22,38 +22,42 @@ pub struct ApplyState {
     pub pid: u32,
     pub new_tip: String,
     pub strategy: Strategy,
-    #[serde(default)]
     pub replay_mode: ReplayMode,
-    pub current: Option<CurrentState>,
-    #[serde(default)]
-    pub paused: Option<PausedState>,
     pub worktree: WorktreeState,
     pub completed: CompletedState,
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
     pub mappings: BTreeMap<String, String>,
     pub pending: PendingState,
-    pub cleanup: CleanupState,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
-    Replay,
-    Conflict,
-    Paused,
+    Replay {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<CurrentState>,
+    },
+    Conflict {
+        current: CurrentState,
+    },
+    Paused {
+        paused: PausedState,
+    },
     FinalUpdate,
-    Deleting,
+    Deleting {
+        cleanup: CleanupState,
+    },
 }
 
 impl Phase {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Replay => "replay",
-            Self::Conflict => "conflict",
-            Self::Paused => "paused",
+            Self::Replay { .. } => "replay",
+            Self::Conflict { .. } => "conflict",
+            Self::Paused { .. } => "paused",
             Self::FinalUpdate => "final_update",
-            Self::Deleting => "deleting",
+            Self::Deleting { .. } => "deleting",
         }
     }
 }
@@ -119,14 +123,14 @@ impl std::fmt::Display for ReplayMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CurrentState {
     pub branch: String,
     pub commit: String,
     pub worktree: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PausedState {
     pub branch: String,
     pub rewritten_tip: String,
@@ -178,17 +182,17 @@ pub enum RestoreState {
     Detached { head: String },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompletedState {
     pub temp_refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingState {
     pub branches: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CleanupState {
     pub delete_plan: bool,
 }
@@ -361,7 +365,7 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
 
     Ok(ApplyState {
         version: 1,
-        phase: Phase::Replay,
+        phase: Phase::Replay { current: None },
         plan_name: input.plan_name.clone(),
         plan_id: *input.plan_id,
         started_at: now.clone(),
@@ -370,8 +374,6 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         new_tip: input.new_tip.to_owned(),
         strategy: input.strategy,
         replay_mode: input.replay_mode,
-        current: None,
-        paused: None,
         worktree: input.worktree,
         completed: CompletedState::default(),
         branch_tips: input.branch_tips,
@@ -380,7 +382,6 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         pending: PendingState {
             branches: input.pending_branches,
         },
-        cleanup: CleanupState::default(),
     })
 }
 
