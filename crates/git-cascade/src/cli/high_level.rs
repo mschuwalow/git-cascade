@@ -1,6 +1,6 @@
+use super::handle_apply_outcome;
 use super::landed as landed_inference;
-use super::print_paused_message;
-use crate::apply::{ApplyOptions, ApplyOutcome, dry_run, execute};
+use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
 use crate::state::Strategy;
@@ -202,11 +202,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
         },
     )?;
 
-    match outcome {
-        ApplyOutcome::Complete => println!("{}", options.success_message),
-        ApplyOutcome::Paused { paused } => print_paused_message(&paused),
-    }
-    Ok(())
+    handle_apply_outcome(outcome, options.success_message)
 }
 
 fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {

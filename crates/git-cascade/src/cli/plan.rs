@@ -1,6 +1,6 @@
-use super::print_paused_message;
+use super::handle_apply_outcome;
 use crate::Result;
-use crate::apply::{ApplyOptions, ApplyOutcome, dry_run, execute};
+use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::state::{Strategy, read_state};
@@ -131,10 +131,10 @@ fn apply(
     if is_dry_run {
         print!("{}", dry_run(&git, &storage, &plan, options)?);
     } else {
-        match execute(&git, &storage, &plan, options)? {
-            ApplyOutcome::Complete => println!("applied cascade plan"),
-            ApplyOutcome::Paused { paused } => print_paused_message(&paused),
-        }
+        handle_apply_outcome(
+            execute(&git, &storage, &plan, options)?,
+            "applied cascade plan",
+        )?;
     }
 
     Ok(())

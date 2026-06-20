@@ -3,7 +3,9 @@ use crate::plan::{
     BranchRef, Node, Plan, PlanCommit, PlanName, branches_in_topological_order,
     validate_branch_refs, validate_merge_parents_for_apply, validate_plan,
 };
-use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
+use crate::replay_backend::{
+    CherryPickOutcome, DryRunReplayBackend, GitReplayBackend, ReplayBackend,
+};
 use crate::state::{
     ApplyState, ApplyStateInput, CleanupState, CurrentState, PausedState, Phase, ReplayMode,
     RestoreState, StateFile, Strategy, WorktreeState, initial_apply_state,
@@ -27,7 +29,13 @@ pub struct ApplyOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
     Complete,
-    Paused { paused: PausedState },
+    Conflict {
+        current: CurrentState,
+        message: String,
+    },
+    Paused {
+        paused: PausedState,
+    },
 }
 
 struct ActualReplayContext<'a> {
@@ -200,7 +208,10 @@ fn run_apply_state(
     loop {
         match state.phase.clone() {
             Phase::Replay { .. } => {
-                replay_pending_branches(plan, state_writer, backend, state)?;
+                if let Some(outcome) = replay_pending_branches(plan, state_writer, backend, state)?
+                {
+                    return Ok(outcome);
+                }
                 if matches!(state.phase, Phase::Paused { .. }) {
                     continue;
                 }
@@ -322,7 +333,7 @@ fn replay_pending_branches(
     state_writer: &mut dyn StateWriter,
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
-) -> Result<()> {
+) -> Result<Option<ApplyOutcome>> {
     let nodes = plan
         .nodes
         .iter()
@@ -435,26 +446,27 @@ fn replay_pending_branches(
                         &commit.oid,
                         &last_rewritten,
                     )?;
-                    return Ok(());
+                    return Ok(None);
                 }
                 continue;
             }
 
             let rewritten_commit =
-                match backend.cherry_pick(state, node, &commit.oid, commit_index, commits.len()) {
-                    Ok(rewritten_commit) => rewritten_commit,
-                    Err(error) => {
+                match backend.cherry_pick(state, node, &commit.oid, commit_index, commits.len())? {
+                    CherryPickOutcome::Applied(rewritten_commit) => rewritten_commit,
+                    CherryPickOutcome::Conflict { message } => {
+                        let current = CurrentState {
+                            branch: node.branch.clone(),
+                            commit: commit.oid.clone(),
+                            worktree: state.worktree.path().to_owned(),
+                        };
                         state.phase = Phase::Conflict {
-                            current: CurrentState {
-                                branch: node.branch.clone(),
-                                commit: commit.oid.clone(),
-                                worktree: state.worktree.path().to_owned(),
-                            },
+                            current: current.clone(),
                         };
                         state.mappings = mappings.clone();
                         state.completed.temp_refs = temp_refs.clone();
                         state_writer.write_state(state)?;
-                        return Err(error);
+                        return Ok(Some(ApplyOutcome::Conflict { current, message }));
                     }
                 };
             mappings.insert(commit.oid.clone(), rewritten_commit.clone());
@@ -469,7 +481,7 @@ fn replay_pending_branches(
                     &commit.oid,
                     &last_rewritten,
                 )?;
-                return Ok(());
+                return Ok(None);
             }
         }
 
@@ -507,7 +519,7 @@ fn replay_pending_branches(
             });
         checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, pause)?;
         if matches!(state.phase, Phase::Paused { .. }) {
-            return Ok(());
+            return Ok(None);
         }
     }
 
@@ -515,7 +527,7 @@ fn replay_pending_branches(
     state.mappings = mappings;
     state.completed.temp_refs = temp_refs;
 
-    Ok(())
+    Ok(None)
 }
 
 fn checkpoint_paused_child_base(

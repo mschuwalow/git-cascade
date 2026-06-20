@@ -38,7 +38,7 @@ pub(crate) trait ReplayBackend {
         commit: &str,
         commit_index: usize,
         total_commits: usize,
-    ) -> Result<String>;
+    ) -> Result<CherryPickOutcome>;
     /// Reports that a merge commit was flattened away.
     fn flatten_merge(
         &mut self,
@@ -72,6 +72,11 @@ pub(crate) trait ReplayBackend {
     fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()>;
     fn delete_applied_plan(&mut self, state: &ApplyState) -> Result<()>;
     fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()>;
+}
+
+pub(crate) enum CherryPickOutcome {
+    Applied(String),
+    Conflict { message: String },
 }
 
 pub(crate) struct GitReplayBackend<'a> {
@@ -156,11 +161,11 @@ impl ReplayBackend for GitReplayBackend<'_> {
     fn cherry_pick(
         &mut self,
         state: &ApplyState,
-        node: &Node,
+        _node: &Node,
         commit: &str,
         commit_index: usize,
         total_commits: usize,
-    ) -> Result<String> {
+    ) -> Result<CherryPickOutcome> {
         eprintln!(
             "  cherry-pick {}/{} {}",
             commit_index + 1,
@@ -176,16 +181,13 @@ impl ReplayBackend for GitReplayBackend<'_> {
                     "  skipped empty commit {}; its changes are already applied",
                     short_oid(commit)
                 );
-                return worktree_git.head_oid();
+                return worktree_git.head_oid().map(CherryPickOutcome::Applied);
             }
-            return Err(Error::ApplyStopped {
-                branch: node.branch.clone(),
-                commit: commit.to_owned(),
-                worktree,
+            return Ok(CherryPickOutcome::Conflict {
                 message: error.to_string(),
             });
         }
-        worktree_git.head_oid()
+        worktree_git.head_oid().map(CherryPickOutcome::Applied)
     }
 
     fn flatten_merge(
@@ -457,7 +459,7 @@ impl ReplayBackend for DryRunReplayBackend {
         commit: &str,
         _commit_index: usize,
         _total_commits: usize,
-    ) -> Result<String> {
+    ) -> Result<CherryPickOutcome> {
         writeln!(
             self.output,
             "git -C {} cherry-pick {commit}",
@@ -465,9 +467,15 @@ impl ReplayBackend for DryRunReplayBackend {
         )
         .unwrap();
         if commit == node.tip {
-            Ok(format!("<rewritten {} planned tip>", node.branch))
+            Ok(CherryPickOutcome::Applied(format!(
+                "<rewritten {} planned tip>",
+                node.branch
+            )))
         } else {
-            Ok(format!("<rewritten {}:{commit}>", node.branch))
+            Ok(CherryPickOutcome::Applied(format!(
+                "<rewritten {}:{commit}>",
+                node.branch
+            )))
         }
     }
 

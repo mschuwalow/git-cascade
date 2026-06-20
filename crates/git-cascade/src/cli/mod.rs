@@ -4,7 +4,7 @@ mod plan;
 mod status;
 
 use crate::Result;
-use crate::apply::{abort as abort_apply, continue_apply};
+use crate::apply::{ApplyOutcome, abort as abort_apply, continue_apply};
 use crate::git::Git;
 use crate::state::{PausedState, Strategy};
 use crate::storage::Storage;
@@ -236,14 +236,33 @@ fn completions(shell: Shell) -> Result<()> {
 fn continue_operation() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    match continue_apply(&git, &storage)? {
-        crate::apply::ApplyOutcome::Complete => println!("continued cascade operation"),
-        crate::apply::ApplyOutcome::Paused { paused } => {
-            print_paused_message(&paused);
+    handle_apply_outcome(
+        continue_apply(&git, &storage)?,
+        "continued cascade operation",
+    )
+}
+
+pub(super) fn handle_apply_outcome(outcome: ApplyOutcome, success_message: &str) -> Result<()> {
+    match outcome {
+        ApplyOutcome::Complete => println!("{success_message}"),
+        ApplyOutcome::Paused { paused } => print_paused_message(&paused),
+        ApplyOutcome::Conflict { current, message } => {
+            print_conflict_message(
+                &current.branch,
+                &current.commit,
+                &current.worktree,
+                &message,
+            );
         }
     }
 
     Ok(())
+}
+
+fn print_conflict_message(branch: &str, commit: &str, worktree: &str, message: &str) {
+    println!(
+        "stopped on conflict while replaying branch `{branch}` commit `{commit}` in worktree {worktree}: {message}\n\nResolve the conflicts in that worktree, stage the resolved files with `git -C {worktree} add <files>`, then run `git cascade continue`. Do not run `git -C {worktree} cherry-pick --continue` manually; git-cascade will do that after checking its recovery state."
+    );
 }
 
 pub(super) fn print_paused_message(paused: &PausedState) {

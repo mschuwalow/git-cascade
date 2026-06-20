@@ -43,16 +43,6 @@ pub enum Error {
     #[error("invalid command invocation: {0}")]
     InvalidInvocation(String),
 
-    #[error(
-        "apply stopped while replaying branch `{branch}` commit `{commit}` in worktree {worktree}: {message}\n\nResolve the conflicts in that worktree, stage the resolved files with `git -C {worktree} add <files>`, then run `git cascade continue`. Do not run `git -C {worktree} cherry-pick --continue` manually; git-cascade will do that after checking its recovery state."
-    )]
-    ApplyStopped {
-        branch: String,
-        commit: String,
-        worktree: PathBuf,
-        message: String,
-    },
-
     #[error("cannot start a new cascade operation while state file exists at {path}")]
     ActiveOperation { path: PathBuf },
 

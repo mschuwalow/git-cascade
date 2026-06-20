@@ -98,9 +98,9 @@ fn restack_conflict_keeps_generated_plan_for_continue() {
     repo.cascade()
         .args(["restack", "pr-1"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "apply stopped while replaying branch `pr-2`",
+        .success()
+        .stdout(predicate::str::contains(
+            "stopped on conflict while replaying branch `pr-2`",
         ));
 
     let state_path = repo.common_dir().join("cascade/state.yaml");

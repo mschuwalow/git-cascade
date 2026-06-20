@@ -86,8 +86,10 @@ fn flatten_reconflicts_through_normal_conflict_flow() {
     repo.cascade()
         .arg("sync")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("apply stopped while replaying"));
+        .success()
+        .stdout(predicate::str::contains(
+            "stopped on conflict while replaying",
+        ));
 
     let state = read_state(&repo);
     let worktree = std::path::PathBuf::from(state.worktree.path());

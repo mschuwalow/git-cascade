@@ -26,7 +26,7 @@ fn status_reports_conflict_state() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     let worktree = std::path::PathBuf::from(state.worktree.path());
     assert_eq!(
@@ -60,7 +60,7 @@ fn abort_cleans_conflict_state_without_moving_refs() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     repo.git_ok([
         "update-ref",
@@ -94,7 +94,7 @@ fn abort_in_place_conflict_restores_original_checkout() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--in-place"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     assert!(matches!(
         &state.worktree,
@@ -128,7 +128,7 @@ fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     std::fs::remove_dir_all(state.worktree.path()).unwrap();
 
@@ -148,7 +148,7 @@ fn abort_succeeds_when_plan_was_already_deleted() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
     state.phase = deleting_phase();
     write_state(&repo, &state);
@@ -172,7 +172,7 @@ fn status_reports_deleting_state_without_cleanup() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
     state.phase = deleting_phase();
     write_state(&repo, &state);
@@ -194,7 +194,7 @@ fn continue_finishes_deleting_state() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
     state.phase = deleting_phase();
     write_state(&repo, &state);
@@ -217,7 +217,7 @@ fn abort_finishes_cleanup_for_deleting_state() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
     state.phase = deleting_phase();
     write_state(&repo, &state);
@@ -462,7 +462,7 @@ fn continue_refuses_unresolved_conflicts() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     repo.cascade()
         .arg("continue")
@@ -480,7 +480,7 @@ fn continue_after_conflict_finishes_apply() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     let state = read_state(&repo);
     let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
@@ -509,7 +509,7 @@ fn continue_after_conflict_continues_to_child_branch() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     let state = read_state(&repo);
     let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
@@ -538,7 +538,7 @@ fn continue_resumes_replay_phase_after_crash() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     // Simulate a crash mid-replay: the persisted phase is `replay` with no
     // current commit, and the worktree still has a cherry-pick in progress.
@@ -552,9 +552,9 @@ fn continue_resumes_replay_phase_after_crash() {
     repo.cascade()
         .arg("continue")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "apply stopped while replaying branch `pr-2`",
+        .success()
+        .stdout(predicate::str::contains(
+            "stopped on conflict while replaying branch `pr-2`",
         ));
 
     let state = read_state(&repo);
@@ -581,7 +581,7 @@ fn continue_rejects_tampered_plan_but_abort_recovers() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     // Tamper with the stored plan: duplicate a planned commit.
     let plan_path = repo.plan_path("stack");
@@ -614,17 +614,16 @@ fn continue_can_stop_again_on_later_conflict() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let first_state = read_state(&repo);
     let first_conflict = conflict_current(&first_state).commit;
     let worktree = std::path::PathBuf::from(first_state.worktree.path());
     std::fs::write(worktree.join("a.txt"), "resolved a\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "a.txt"]);
 
-    repo.cascade().arg("continue").assert().failure().stderr(
-        predicate::str::contains("apply stopped while replaying branch `pr-2`")
-            .and(predicate::str::contains("git cascade continue"))
-            .and(predicate::str::contains("Do not run")),
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("stopped on conflict while replaying branch `pr-2`")
+            .and(predicate::str::contains("git cascade continue")),
     );
 
     let second_state = read_state(&repo);

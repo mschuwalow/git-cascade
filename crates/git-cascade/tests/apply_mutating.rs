@@ -436,11 +436,10 @@ fn apply_conflict_leaves_permanent_refs_unchanged_and_state_present() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure()
-        .stderr(
-            predicate::str::contains("apply stopped while replaying branch `pr-2`")
-                .and(predicate::str::contains("git cascade continue"))
-                .and(predicate::str::contains("Do not run")),
+        .success()
+        .stdout(
+            predicate::str::contains("stopped on conflict while replaying branch `pr-2`")
+                .and(predicate::str::contains("git cascade continue")),
         );
 
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);

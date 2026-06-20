@@ -166,7 +166,7 @@ fn remove_refuses_plan_referenced_by_active_operation() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     repo.cascade()
         .args(["plan", "remove", "stack"])
