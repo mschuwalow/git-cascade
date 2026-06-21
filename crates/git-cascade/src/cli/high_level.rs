@@ -1,8 +1,8 @@
 use super::handle_apply_outcome;
 use super::landed as landed_inference;
-use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
+use crate::replay::{ApplyOptions, dry_run, execute};
 use crate::state::Strategy;
 use crate::storage::Storage;
 use crate::{Error, Result};

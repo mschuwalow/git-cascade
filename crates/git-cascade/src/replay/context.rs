@@ -1,44 +1,13 @@
-use crate::git::Git;
-use crate::plan::{
-    branches_in_topological_order, validate_branch_refs, validate_merge_parents_for_apply,
-    validate_plan, BranchRef, Node, Plan, PlanCommit, PlanName,
-};
-use crate::replay_backend::{
-    CherryPickOutcome, DryRunReplayBackend, GitReplayBackend, ReplayBackend,
-};
-use crate::state::{
-    initial_apply_state, ApplyState, CurrentState, InitialApplyStateInput, PausedState, Phase,
-    ReplayMode, RestoreState, StateFile, Strategy, WorktreeState,
-};
-use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
-use crate::storage::Storage;
+use super::{run_deleting_state, ReplayOutcome};
+use crate::plan::{Node, Plan, PlanCommit};
+use crate::replay_backend::{CherryPickOutcome, ReplayBackend};
+use crate::state::{ApplyState, CurrentState, PausedState, Phase, Strategy};
+use crate::state_writer::StateWriter;
 use crate::test_hooks;
 use crate::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs;
 
-#[derive(Debug, Clone)]
-pub struct ApplyOptions {
-    pub plan_name: PlanName,
-    pub new_tip_input: String,
-    pub strategy: Strategy,
-    pub in_place: bool,
-    pub pause_at_checkpoints: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ApplyOutcome {
-    Complete,
-    Conflict {
-        current: CurrentState,
-        message: String,
-    },
-    Paused {
-        paused: PausedState,
-    },
-}
-
-struct ReplayContext<'plan, 'state> {
+pub(super) struct ReplayContext<'plan, 'state> {
     plan: &'plan Plan,
     state_writer: &'state mut dyn StateWriter,
     backend: &'state mut dyn ReplayBackend,
@@ -48,200 +17,8 @@ struct ReplayContext<'plan, 'state> {
     selected_bases: HashMap<String, String>,
 }
 
-pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<String> {
-    validate_plan(git, plan)?;
-    let branch_refs = validate_branch_refs(git, plan)?;
-    let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
-    let ordered = branches_in_topological_order(plan)?;
-    let worktree = if options.in_place {
-        git.worktree_root()?
-    } else {
-        storage.worktrees_dir().join(plan.plan_id.to_string())
-    };
-    let worktree_state = if options.in_place {
-        WorktreeState::InPlace {
-            path: worktree.display().to_string(),
-            restore: restore_state(git)?,
-        }
-    } else {
-        WorktreeState::Temporary {
-            path: worktree.display().to_string(),
-        }
-    };
-    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
-    let mappings = BTreeMap::new();
-    let state = initial_apply_state(InitialApplyStateInput {
-        plan_name: &options.plan_name,
-        plan_id: &plan.plan_id,
-        new_tip: &new_tip,
-        strategy: options.strategy,
-        replay_mode: replay_mode(&options),
-        pending_branches: ordered,
-        branch_tips,
-        extra_commits,
-        mappings,
-        worktree: worktree_state,
-    })?;
-    let mut state_writer = NoopStateWriter;
-    let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
-    {
-        let mut replay = ReplayContext::new(plan, &mut state_writer, &mut backend, state)?;
-        loop {
-            match replay.run()? {
-                ApplyOutcome::Complete => break,
-                ApplyOutcome::Paused { paused } => replay.continue_after_pause(paused),
-                ApplyOutcome::Conflict { .. } => break,
-            }
-        }
-    }
-
-    Ok(backend.finish())
-}
-
-pub fn execute(
-    git: &Git,
-    storage: &Storage,
-    plan: &Plan,
-    options: ApplyOptions,
-) -> Result<ApplyOutcome> {
-    validate_plan(git, plan)?;
-    let branch_refs = validate_branch_refs(git, plan)?;
-    let new_tip = git.resolve_commit(&options.new_tip_input)?;
-    validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
-    let ordered = branches_in_topological_order(plan)?;
-    let (worktree_state, worktree) = if options.in_place {
-        let worktree = git.worktree_root()?;
-        git.ensure_clean_worktree()?;
-        ensure_target_branches_not_checked_out_except(git, &ordered, &worktree)?;
-        (
-            WorktreeState::InPlace {
-                path: worktree.display().to_string(),
-                restore: restore_state(git)?,
-            },
-            worktree,
-        )
-    } else {
-        let worktree = storage.worktrees_dir().join(plan.plan_id.to_string());
-        ensure_target_branches_not_checked_out(git, &ordered)?;
-        (
-            WorktreeState::Temporary {
-                path: worktree.display().to_string(),
-            },
-            worktree,
-        )
-    };
-    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
-    let mappings = BTreeMap::new();
-    let state = initial_apply_state(InitialApplyStateInput {
-        plan_name: &options.plan_name,
-        plan_id: &plan.plan_id,
-        new_tip: &new_tip,
-        strategy: options.strategy,
-        replay_mode: replay_mode(&options),
-        pending_branches: ordered,
-        branch_tips,
-        extra_commits,
-        mappings,
-        worktree: worktree_state.clone(),
-    })?;
-    let state_file = StateFile::create(storage, &state)?;
-
-    if worktree_state.is_temporary() {
-        storage.ensure_worktrees_dir()?;
-        cleanup_stale_worktree(git, &worktree)?;
-    }
-    let mut state_writer = LockedStateWriter::new(state_file);
-    let mut backend = GitReplayBackend::new(git, storage);
-    ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run()
-}
-
-pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
-    let mut state_file = StateFile::open(storage)?
-        .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
-    let mut state = state_file.read_state()?;
-
-    let mut state_writer = LockedStateWriter::new(state_file);
-    let mut backend = GitReplayBackend::new(git, storage);
-    if matches!(state.phase, Phase::Deleting { .. }) {
-        run_deleting_state(&mut state_writer, &mut backend, &mut state)?;
-        Ok(ApplyOutcome::Complete)
-    } else {
-        prepare_continue_phase(&mut state);
-        let plan_name = state.plan_name.clone();
-        let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
-        // Branch refs are not re-checked here: they may legitimately already
-        // point at rewritten tips when resuming a final update.
-        validate_plan(git, &plan)?;
-        ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?.run()
-    }
-}
-
-fn prepare_continue_phase(state: &mut ApplyState) {
-    state.phase = match state.phase.clone() {
-        Phase::Conflict { current, .. } => Phase::ContinueAfterConflict { current },
-        Phase::Paused { paused } => Phase::ContinueAfterPause { paused },
-        phase => phase,
-    };
-}
-
-pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
-    let Some(mut state_file) = StateFile::open(storage)? else {
-        return Err(Error::InvalidInvocation(
-            "no active cascade operation".to_owned(),
-        ));
-    };
-    let mut state = state_file.read_state()?;
-
-    if !matches!(state.phase, Phase::Deleting { .. }) {
-        state.phase = Phase::Deleting { delete_plan: false };
-        state_file.write_state(&mut state)?;
-    }
-
-    let mut state_writer = LockedStateWriter::new(state_file);
-    let mut backend = GitReplayBackend::new(git, storage);
-    run_deleting_state(&mut state_writer, &mut backend, &mut state)
-}
-
-fn restore_state(git: &Git) -> Result<RestoreState> {
-    let head = git.head_oid()?;
-    Ok(if let Some(name) = git.current_branch()? {
-        RestoreState::Branch { name, head }
-    } else {
-        RestoreState::Detached { head }
-    })
-}
-
-fn replay_mode(options: &ApplyOptions) -> ReplayMode {
-    if options.pause_at_checkpoints {
-        ReplayMode::PauseAtCheckpoints
-    } else {
-        ReplayMode::RunToCompletion
-    }
-}
-
-fn run_deleting_state(
-    state_writer: &mut dyn StateWriter,
-    backend: &mut dyn ReplayBackend,
-    state: &mut ApplyState,
-) -> Result<()> {
-    let delete_plan = match &state.phase {
-        Phase::Deleting { delete_plan } => *delete_plan,
-        _ => {
-            return Err(Error::InvalidInvocation(
-                "active apply state is not in deleting phase".to_owned(),
-            ));
-        }
-    };
-    if delete_plan {
-        backend.delete_applied_plan(state)?;
-    }
-    backend.cleanup_deleting_state(state)?;
-    state_writer.remove_state()
-}
-
 impl<'plan, 'state> ReplayContext<'plan, 'state> {
-    fn new(
+    pub(super) fn new(
         plan: &'plan Plan,
         state_writer: &'state mut dyn StateWriter,
         backend: &'state mut dyn ReplayBackend,
@@ -254,7 +31,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
             .map(|(index, node)| (node.branch.clone(), index))
             .collect::<HashMap<_, _>>();
         let temp_tips = backend.temp_tips(&state.completed_temp_refs)?;
-        let selected_bases = selected_bases_from_mappings(&plan, &state.mappings);
+        let selected_bases = selected_bases_from_mappings(plan, &state.mappings);
 
         Ok(Self {
             plan,
@@ -267,7 +44,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         })
     }
 
-    fn run(&mut self) -> Result<ApplyOutcome> {
+    pub(super) fn run(&mut self) -> Result<ReplayOutcome> {
         self.backend.start(&self.state)?;
         loop {
             match self.state.phase.clone() {
@@ -275,33 +52,41 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                     self.replay_pending_branches()?;
                 }
                 Phase::FinalUpdate => {
-                    self.backend.final_update(&self.plan, &self.state)?;
+                    self.backend.final_update(self.plan, &self.state)?;
                     test_hooks::run("after-final-update")?;
                     self.state.phase = Phase::Deleting { delete_plan: true };
                     self.state_writer.write_state(&mut self.state)?;
                     test_hooks::run("after-deleting-state-written")?;
                 }
                 Phase::Conflict { current, message } => {
-                    return Ok(ApplyOutcome::Conflict { current, message });
+                    return Ok(ReplayOutcome::Conflict { current, message });
                 }
                 Phase::ContinueAfterConflict { current } => {
                     self.resolve_conflict(current)?;
                     self.state_writer.write_state(&mut self.state)?;
                 }
                 Phase::Paused { paused } => {
-                    return Ok(ApplyOutcome::Paused { paused });
+                    return Ok(ReplayOutcome::Paused { paused });
                 }
                 Phase::ContinueAfterPause { paused } => self.resume_paused_branch(paused)?,
                 Phase::Deleting { .. } => {
                     run_deleting_state(self.state_writer, self.backend, &mut self.state)?;
-                    return Ok(ApplyOutcome::Complete);
+                    return Ok(ReplayOutcome::Complete);
                 }
             }
         }
     }
 
-    fn continue_after_pause(&mut self, paused: PausedState) {
-        self.state.phase = Phase::ContinueAfterPause { paused };
+    pub(super) fn continue_after_pause(&mut self) {
+        match &self.state.phase {
+            Phase::Conflict { current, .. } => {
+                self.state.phase = Phase::ContinueAfterConflict { current: current.clone() };
+            }
+            Phase::Paused { paused } => {
+                self.state.phase = Phase::ContinueAfterPause { paused: paused.clone() };
+            }
+            _ => { },
+        };
     }
 
     fn replay_pending_branches(&mut self) -> Result<()> {
@@ -316,7 +101,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
             let replay_current = self.replay_current();
             let was_resuming = replay_current.is_some();
             let child_base_pause_commits = if self.state.replay_mode.pauses_at_checkpoints() {
-                child_base_pause_commits(&self.plan, &node, self.state.strategy, &commits)
+                child_base_pause_commits(self.plan, &node, self.state.strategy, &commits)
             } else {
                 BTreeSet::new()
             };
@@ -453,7 +238,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                     })?
             };
             let (temp_ref, branch_tip) = self.backend.write_temp_ref(
-                &self.plan,
+                self.plan,
                 &node,
                 branch_index,
                 self.total_branches(),
@@ -560,7 +345,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 Error::InvalidPlan(format!("branch `{}` has no commits", node.branch))
             })?;
         let (temp_ref, branch_tip) = self.backend.skip_replay(
-            &self.plan,
+            self.plan,
             node,
             self.branch_index(),
             self.total_branches(),
@@ -695,49 +480,6 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
     }
 }
 
-fn ensure_target_branches_not_checked_out(git: &Git, branches: &[String]) -> Result<()> {
-    let checked_out = git.checked_out_branches()?;
-    ensure_branches_not_checked_out(branches, &checked_out)
-}
-
-fn ensure_target_branches_not_checked_out_except(
-    git: &Git,
-    branches: &[String],
-    excluded_path: &std::path::Path,
-) -> Result<()> {
-    let checked_out = git.checked_out_branches_except(excluded_path)?;
-    ensure_branches_not_checked_out(branches, &checked_out)
-}
-
-fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) -> Result<()> {
-    let blocked = branches
-        .iter()
-        .filter(|branch| checked_out.contains(branch))
-        .cloned()
-        .collect::<Vec<_>>();
-    if blocked.is_empty() {
-        return Ok(());
-    }
-
-    Err(Error::InvalidInvocation(format!(
-        "cannot apply while target branch(es) are checked out in a worktree: {}. Switch those worktrees to another branch or a detached HEAD before running apply.",
-        blocked.join(", ")
-    )))
-}
-
-fn branch_tips_and_extra_commits(
-    branch_refs: BTreeMap<String, BranchRef>,
-) -> (BTreeMap<String, String>, BTreeMap<String, Vec<PlanCommit>>) {
-    let mut branch_tips = BTreeMap::new();
-    let mut extra_commits = BTreeMap::new();
-    for (branch, branch_ref) in branch_refs {
-        branch_tips.insert(branch.clone(), branch_ref.expected_tip);
-        extra_commits.insert(branch, branch_ref.extra_commits);
-    }
-
-    (branch_tips, extra_commits)
-}
-
 fn replay_commits_from_extra(
     node: &Node,
     extra_commits: &BTreeMap<String, Vec<PlanCommit>>,
@@ -804,20 +546,4 @@ fn selected_bases_from_mappings(
                 .map(|base| (node.branch.clone(), base.clone()))
         })
         .collect()
-}
-
-fn cleanup_stale_worktree(git: &Git, worktree: &std::path::Path) -> Result<()> {
-    if !worktree.exists() {
-        return Ok(());
-    }
-
-    let _ = git.worktree_remove_force(worktree);
-    if worktree.exists() {
-        fs::remove_dir_all(worktree).map_err(|source| Error::IoWithPath {
-            path: worktree.to_owned(),
-            source,
-        })?;
-    }
-
-    Ok(())
 }

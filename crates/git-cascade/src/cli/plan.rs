@@ -1,8 +1,8 @@
 use super::handle_apply_outcome;
 use crate::Result;
-use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
+use crate::replay::{ApplyOptions, dry_run, execute};
 use crate::state::{Strategy, read_state};
 use crate::storage::Storage;
 use clap::Subcommand;

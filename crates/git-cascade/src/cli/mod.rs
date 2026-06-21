@@ -4,8 +4,8 @@ mod plan;
 mod status;
 
 use crate::Result;
-use crate::apply::{ApplyOutcome, abort as abort_apply, continue_apply};
 use crate::git::Git;
+use crate::replay::{ReplayOutcome, abort as abort_apply, continue_apply};
 use crate::state::{PausedState, Strategy};
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -240,11 +240,11 @@ fn continue_operation() -> Result<()> {
     handle_apply_outcome(outcome, "continued cascade operation")
 }
 
-pub(super) fn handle_apply_outcome(outcome: ApplyOutcome, success_message: &str) -> Result<()> {
+pub(super) fn handle_apply_outcome(outcome: ReplayOutcome, success_message: &str) -> Result<()> {
     match outcome {
-        ApplyOutcome::Complete => println!("{success_message}"),
-        ApplyOutcome::Paused { paused } => print_paused_message(&paused),
-        ApplyOutcome::Conflict { current, message } => {
+        ReplayOutcome::Complete => println!("{success_message}"),
+        ReplayOutcome::Paused { paused } => print_paused_message(&paused),
+        ReplayOutcome::Conflict { current, message } => {
             print_conflict_message(
                 &current.branch,
                 &current.commit,
