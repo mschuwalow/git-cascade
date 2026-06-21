@@ -5,7 +5,6 @@ mod state_writer;
 
 use crate::git::Git;
 use crate::model::Strategy;
-
 use crate::plan::{
     BranchRef, Plan, PlanCommit, PlanName, branches_in_topological_order, validate_branch_refs,
     validate_merge_parents_for_apply, validate_plan,
@@ -88,9 +87,10 @@ pub fn dry_run(
     {
         let mut replay = ReplayContext::new(plan, &mut state_writer, &mut backend, state)?;
         loop {
+            // drive replay to completions, as there are no manual resolutions in dry run
             match replay.run()? {
                 ReplayOutcome::Complete => break,
-                ReplayOutcome::Paused { .. } => replay.continue_after_pause(),
+                ReplayOutcome::Paused { .. } => replay.continue_after_pause_or_conflict(),
                 ReplayOutcome::Conflict { .. } => break,
             }
         }
@@ -156,7 +156,7 @@ pub fn execute(
     ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run()
 }
 
-pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
+pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
     let mut state_file = StateFile::open(storage)?
         .ok_or_else(|| Error::InvalidInvocation("no active cascade operation".to_owned()))?;
     let mut state = state_file.read_state()?;
@@ -173,7 +173,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
         // point at rewritten tips when resuming a final update.
         validate_plan(git, &plan)?;
         let mut context = ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?;
-        context.continue_after_pause();
+        context.continue_after_pause_or_conflict();
         context.run()
     }
 }

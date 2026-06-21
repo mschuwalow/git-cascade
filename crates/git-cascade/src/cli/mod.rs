@@ -6,7 +6,7 @@ mod status;
 use crate::Result;
 use crate::git::Git;
 use crate::model::Strategy;
-use crate::replay::{PausedState, ReplayOutcome, abort as abort_apply, continue_apply};
+use crate::replay::{PausedState, ReplayOutcome, abort as abort_apply, continue_replay};
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -236,11 +236,11 @@ fn completions(shell: Shell) -> Result<()> {
 fn continue_operation() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let outcome = continue_apply(&git, &storage)?;
-    handle_apply_outcome(outcome, "continued cascade operation")
+    let outcome = continue_replay(&git, &storage)?;
+    handle_replay_outcome(outcome, "continued cascade operation")
 }
 
-pub(super) fn handle_apply_outcome(outcome: ReplayOutcome, success_message: &str) -> Result<()> {
+pub(super) fn handle_replay_outcome(outcome: ReplayOutcome, success_message: &str) -> Result<()> {
     match outcome {
         ReplayOutcome::Complete => println!("{success_message}"),
         ReplayOutcome::Paused { paused } => print_paused_message(&paused),

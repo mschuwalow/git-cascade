@@ -85,7 +85,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         }
     }
 
-    pub(super) fn continue_after_pause(&mut self) {
+    pub(super) fn continue_after_pause_or_conflict(&mut self) {
         match &self.state.phase {
             Phase::Conflict { current, .. } => {
                 self.state.phase = Phase::ContinueAfterConflict {

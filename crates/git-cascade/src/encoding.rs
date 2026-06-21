@@ -1,6 +1,5 @@
-use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
-
 use crate::{Error, Result};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
 
 const COMPONENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')

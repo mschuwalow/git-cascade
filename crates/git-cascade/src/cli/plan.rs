@@ -1,4 +1,4 @@
-use super::handle_apply_outcome;
+use super::handle_replay_outcome;
 use crate::Result;
 use crate::git::Git;
 use crate::model::Strategy;
@@ -132,7 +132,7 @@ fn apply(
     if is_dry_run {
         print!("{}", dry_run(&git, &storage, &plan, options)?);
     } else {
-        handle_apply_outcome(
+        handle_replay_outcome(
             execute(&git, &storage, &plan, options)?,
             "applied cascade plan",
         )?;
