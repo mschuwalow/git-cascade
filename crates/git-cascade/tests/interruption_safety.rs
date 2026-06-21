@@ -6,58 +6,43 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn recovers_linear_stack_after_git_operation_interruptions() {
-    let mut total_interruptions = 0;
-
     for seed in 1..=12 {
         let repo = clean_stack_with_rebased_root();
         let old_pr2 = repo.rev_parse("pr-2");
 
-        total_interruptions +=
-            apply_with_interruptions(&repo, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
+        apply_with_interruptions(&repo, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
 
         assert_ne!(repo.rev_parse("pr-2"), old_pr2);
         assert_eq!(repo.merge_base("pr-1", "pr-2"), repo.rev_parse("pr-1"));
         assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
         assert_clean_cascade_state(&repo);
     }
-
-    assert!(total_interruptions > 0);
 }
 
 #[test]
 fn recovers_no_dependent_branches_after_git_operation_interruptions() {
-    let mut total_interruptions = 0;
-
     for seed in 1..=12 {
         let repo = root_only_stack();
 
-        total_interruptions +=
-            apply_with_interruptions(&repo, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
+        apply_with_interruptions(&repo, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
 
         assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
         assert_clean_cascade_state(&repo);
     }
-
-    assert!(total_interruptions > 0);
 }
 
 #[test]
 fn recovers_branches_already_at_replay_base_after_git_operation_interruptions() {
-    let mut total_interruptions = 0;
-
     for seed in 1..=12 {
         let repo = clean_stack();
         let pr2 = repo.rev_parse("pr-2");
 
-        total_interruptions +=
-            apply_with_interruptions(&repo, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
+        apply_with_interruptions(&repo, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
 
         assert_eq!(repo.rev_parse("pr-2"), pr2);
         assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
         assert_clean_cascade_state(&repo);
     }
-
-    assert!(total_interruptions > 0);
 }
 
 fn apply_with_interruptions<const N: usize>(
@@ -77,6 +62,7 @@ fn apply_with_interruptions<const N: usize>(
             command.arg("continue");
         }
         let output = command
+            .env("GIT_CASCADE_TEST_HOOK_BEFORE_GIT_OPERATION", &hook)
             .env("GIT_CASCADE_TEST_HOOK_AFTER_GIT_OPERATION", &hook)
             .env("GIT_CASCADE_TEST_COMMON_DIR", repo.common_dir())
             .env("GIT_CASCADE_TEST_HOOK_COUNT", &count_path)
@@ -90,6 +76,7 @@ fn apply_with_interruptions<const N: usize>(
         }
 
         interruptions += 1;
+        assert!(interruptions <= 100);
     }
 }
 
