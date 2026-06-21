@@ -181,59 +181,69 @@ fn continue_finishes_successful_deleting_state() {
 
 #[test]
 fn continue_recovers_after_interruption_following_git_operations() {
-    let repo = clean_stack_with_rebased_root();
-    let old_pr2 = repo.rev_parse("pr-2");
-    let hook = write_fail_active_git_operation_hook(&repo);
-    let count_path = repo.path().join("git-operation-hook-count");
-    let failures = 30;
-    let mut attempts = 0;
+    let mut total_interruptions = 0;
 
-    loop {
-        let mut command = repo.cascade();
-        if attempts == 0 {
-            command.args(["plan", "apply", "stack", "--new-tip", "pr-1"]);
-        } else {
-            command.arg("continue");
+    for seed in 1..=12 {
+        let repo = clean_stack_with_rebased_root();
+        let old_pr2 = repo.rev_parse("pr-2");
+        let hook = write_probabilistic_active_git_operation_hook(&repo);
+        let count_path = repo.path().join("git-operation-hook-count");
+        let mut interruptions = 0;
+
+        loop {
+            let mut command = repo.cascade();
+            if interruptions == 0 {
+                command.args(["plan", "apply", "stack", "--new-tip", "pr-1"]);
+            } else {
+                command.arg("continue");
+            }
+            let output = command
+                .env("GIT_CASCADE_TEST_HOOK_AFTER_GIT_OPERATION", &hook)
+                .env("GIT_CASCADE_TEST_COMMON_DIR", repo.common_dir())
+                .env("GIT_CASCADE_TEST_HOOK_COUNT", &count_path)
+                .env("GIT_CASCADE_TEST_HOOK_FAILURE_PERCENT", "10")
+                .env("GIT_CASCADE_TEST_HOOK_SEED", seed.to_string())
+                .output()
+                .unwrap();
+
+            if output.status.success() {
+                break;
+            }
+
+            interruptions += 1;
+            assert!(
+                interruptions <= 80,
+                "too many interrupted attempts for seed {seed}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("test hook `after-git-operation` failed"),
+                "unexpected failure for seed {seed}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(repo.common_dir().join("cascade/state.yaml").exists());
         }
-        let output = command
-            .env("GIT_CASCADE_TEST_HOOK_AFTER_GIT_OPERATION", &hook)
-            .env("GIT_CASCADE_TEST_COMMON_DIR", repo.common_dir())
-            .env("GIT_CASCADE_TEST_HOOK_COUNT", &count_path)
-            .env("GIT_CASCADE_TEST_HOOK_FAILURES", failures.to_string())
-            .output()
-            .unwrap();
 
-        if output.status.success() {
-            break;
-        }
-
-        attempts += 1;
-        assert!(
-            attempts <= failures + 5,
-            "too many interrupted attempts\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+        let count = std::fs::read_to_string(count_path)
+            .ok()
+            .and_then(|content| content.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        assert!(count >= interruptions);
+        total_interruptions += interruptions;
+        assert_ne!(
+            repo.rev_parse("pr-2"),
+            old_pr2,
+            "seed {seed} completed with {interruptions} interruptions but did not update pr-2"
         );
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("test hook `after-git-operation` failed"),
-            "unexpected failure\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(repo.common_dir().join("cascade/state.yaml").exists());
+        assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+        assert!(!repo.plan_path("stack").exists());
+        assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
     }
 
-    let count = std::fs::read_to_string(count_path)
-        .unwrap()
-        .trim()
-        .parse::<usize>()
-        .unwrap();
-    assert!(count > failures);
-    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
-    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
-    assert!(!repo.plan_path("stack").exists());
-    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+    assert!(total_interruptions > 0);
 }
 
 fn write_move_anchor_hook(repo: &TestRepo) -> std::path::PathBuf {
@@ -287,8 +297,10 @@ fn write_failing_hook(repo: &TestRepo, name: &str) -> std::path::PathBuf {
     path
 }
 
-fn write_fail_active_git_operation_hook(repo: &TestRepo) -> std::path::PathBuf {
-    let path = repo.path().join("fail-active-git-operation-hook.sh");
+fn write_probabilistic_active_git_operation_hook(repo: &TestRepo) -> std::path::PathBuf {
+    let path = repo
+        .path()
+        .join("probabilistic-active-git-operation-hook.sh");
     std::fs::write(
         &path,
         indoc! {r#"
@@ -299,7 +311,10 @@ fn write_fail_active_git_operation_hook(repo: &TestRepo) -> std::path::PathBuf {
             [ -f "$GIT_CASCADE_TEST_HOOK_COUNT" ] && count=$(cat "$GIT_CASCADE_TEST_HOOK_COUNT")
             count=$((count + 1))
             echo "$count" > "$GIT_CASCADE_TEST_HOOK_COUNT"
-            [ "$count" -le "$GIT_CASCADE_TEST_HOOK_FAILURES" ] && exit 1
+            seed=${GIT_CASCADE_TEST_HOOK_SEED:-1}
+            percent=${GIT_CASCADE_TEST_HOOK_FAILURE_PERCENT:-10}
+            roll=$(((count * 37 + seed * 19) % 100))
+            [ "$roll" -lt "$percent" ] && exit 1
             exit 0
         "#},
     )

@@ -175,6 +175,9 @@ impl ReplayBackend for GitReplayBackend<'_> {
         let worktree = std::path::PathBuf::from(state.worktree.path());
         let worktree_git = Git::new(&worktree);
         if let Err(error) = worktree_git.cherry_pick(commit) {
+            let Error::Git { .. } = error else {
+                return Err(error);
+            };
             if is_empty_cherry_pick(&worktree_git)? {
                 worktree_git.cherry_pick_skip()?;
                 eprintln!(
