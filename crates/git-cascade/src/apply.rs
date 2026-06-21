@@ -7,8 +7,8 @@ use crate::replay_backend::{
     CherryPickOutcome, DryRunReplayBackend, GitReplayBackend, ReplayBackend,
 };
 use crate::state::{
-    ApplyState, InitialApplyStateInput, CurrentState, PausedState, Phase, ReplayMode,
-    RestoreState, StateFile, Strategy, WorktreeState, initial_apply_state,
+    ApplyState, CurrentState, InitialApplyStateInput, PausedState, Phase, ReplayMode, RestoreState,
+    StateFile, Strategy, WorktreeState, initial_apply_state,
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::Storage;
@@ -38,13 +38,15 @@ pub enum ApplyOutcome {
     },
 }
 
-struct ActualReplayContext<'a> {
-    nodes: &'a HashMap<&'a str, &'a Node>,
-    selected_bases: &'a HashMap<String, String>,
-    temp_tips: &'a HashMap<String, String>,
-    mappings: &'a BTreeMap<String, String>,
-    new_tip: &'a str,
-    strategy: Strategy,
+struct ReplayContext<'plan, 'state> {
+    plan: &'plan Plan,
+    state_writer: &'state mut dyn StateWriter,
+    backend: &'state mut dyn ReplayBackend,
+    state: &'state mut ApplyState,
+    nodes: HashMap<&'plan str, &'plan Node>,
+    temp_tips: HashMap<String, String>,
+    selected_bases: HashMap<String, String>,
+    total_branches: usize,
 }
 
 pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<String> {
@@ -84,7 +86,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     })?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
-    run_apply_state(plan, &mut state_writer, &mut backend, &mut state, false)?;
+    run_replay_context(plan, &mut state_writer, &mut backend, &mut state, false)?;
 
     Ok(backend.finish())
 }
@@ -144,7 +146,7 @@ pub fn execute(
     let mut state = state;
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    run_apply_state(plan, &mut state_writer, &mut backend, &mut state, true)
+    run_replay_context(plan, &mut state_writer, &mut backend, &mut state, true)
 }
 
 pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
@@ -163,7 +165,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
         // Branch refs are not re-checked here: they may legitimately already
         // point at rewritten tips when resuming a final update.
         validate_plan(git, &plan)?;
-        run_apply_state(&plan, &mut state_writer, &mut backend, &mut state, true)
+        run_replay_context(&plan, &mut state_writer, &mut backend, &mut state, true)
     }
 }
 
@@ -176,9 +178,7 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
     let mut state = state_file.read_state()?;
 
     if !matches!(state.phase, Phase::Deleting { .. }) {
-        state.phase = Phase::Deleting {
-            delete_plan: false
-        };
+        state.phase = Phase::Deleting { delete_plan: false };
         state_file.write_state(&mut state)?;
     }
 
@@ -196,52 +196,14 @@ fn restore_state(git: &Git) -> Result<RestoreState> {
     })
 }
 
-fn run_apply_state(
+fn run_replay_context(
     plan: &Plan,
     state_writer: &mut dyn StateWriter,
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
     stop_on_pause: bool,
 ) -> Result<ApplyOutcome> {
-    backend.start(state)?;
-    let mut resume_initial_pause = matches!(state.phase, Phase::Paused { .. });
-    loop {
-        match state.phase.clone() {
-            Phase::Replay { .. } => {
-                match replay_pending_branches(plan, state_writer, backend, state)? {
-                    ApplyOutcome::Complete => {
-                        state.phase = Phase::FinalUpdate;
-                        state_writer.write_state(state)?;
-                    }
-                    outcome @ (ApplyOutcome::Paused { .. } | ApplyOutcome::Conflict { .. }) => return Ok(outcome)
-                }
-            }
-            Phase::FinalUpdate => {
-                backend.final_update(plan, state)?;
-                test_hooks::run("after-final-update")?;
-                state.phase = Phase::Deleting {
-                    delete_plan: true,
-                };
-                state_writer.write_state(state)?;
-                test_hooks::run("after-deleting-state-written")?;
-            }
-            Phase::Conflict { current } => {
-                resolve_conflict(backend, state, current)?;
-                state_writer.write_state(state)?;
-            }
-            Phase::Paused { paused } => {
-                if stop_on_pause && !resume_initial_pause {
-                    return Ok(ApplyOutcome::Paused { paused });
-                }
-                resume_initial_pause = false;
-                resume_paused_branch(plan, state_writer, backend, state, paused)?;
-            }
-            Phase::Deleting { .. } => {
-                run_deleting_state(state_writer, backend, state)?;
-                return Ok(ApplyOutcome::Complete);
-            }
-        }
-    }
+    ReplayContext::new(plan, state_writer, backend, state)?.run(stop_on_pause)
 }
 
 fn replay_mode(options: &ApplyOptions) -> ReplayMode {
@@ -272,405 +234,467 @@ fn run_deleting_state(
     state_writer.remove_state()
 }
 
-fn resolve_conflict(
-    backend: &mut dyn ReplayBackend,
-    state: &mut ApplyState,
-    current: CurrentState,
-) -> Result<()> {
-    let rewritten_commit = backend.continue_cherry_pick(state, &current)?;
-    state
-        .mappings
-        .insert(current.commit.clone(), rewritten_commit);
-    state.phase = Phase::Replay {
-        current: Some(current),
-    };
-    Ok(())
-}
+impl<'plan, 'state> ReplayContext<'plan, 'state> {
+    fn new(
+        plan: &'plan Plan,
+        state_writer: &'state mut dyn StateWriter,
+        backend: &'state mut dyn ReplayBackend,
+        state: &'state mut ApplyState,
+    ) -> Result<Self> {
+        let nodes = plan
+            .nodes
+            .iter()
+            .map(|node| (node.branch.as_str(), node))
+            .collect::<HashMap<_, _>>();
+        let temp_tips = backend.temp_tips(&state.completed_temp_refs)?;
+        let selected_bases = selected_bases_from_mappings(plan, &state.mappings);
+        let total_branches = plan.nodes.len();
 
-fn resume_paused_branch(
-    plan: &Plan,
-    state_writer: &mut dyn StateWriter,
-    backend: &mut dyn ReplayBackend,
-    state: &mut ApplyState,
-    paused: PausedState,
-) -> Result<()> {
-    if !plan.nodes.iter().any(|node| node.branch == paused.branch()) {
-        return Err(Error::InvalidPlan(format!(
-            "paused branch `{}` is not in the active plan",
-            paused.branch()
-        )));
-    }
-
-    let rewritten_tip = backend.resume_paused_branch(state, &paused)?;
-    match paused {
-        PausedState::BranchEnd { mapped_commit, .. } => {
-            state.mappings.insert(mapped_commit, rewritten_tip);
-            state.phase = Phase::Replay { current: None };
-        }
-        PausedState::ChildBase {
-            branch,
-            commit,
-            worktree,
-            ..
-        } => {
-            state.mappings.insert(commit.clone(), rewritten_tip);
-            state.phase = Phase::Replay {
-                current: Some(CurrentState {
-                    branch,
-                    commit,
-                    worktree,
-                }),
-            };
-        }
-    }
-    state_writer.write_state(state)
-}
-
-fn replay_pending_branches(
-    plan: &Plan,
-    state_writer: &mut dyn StateWriter,
-    backend: &mut dyn ReplayBackend,
-    state: &mut ApplyState,
-) -> Result<ApplyOutcome> {
-    let nodes = plan
-        .nodes
-        .iter()
-        .map(|node| (node.branch.as_str(), node))
-        .collect::<HashMap<_, _>>();
-    let mut mappings = state.mappings.clone();
-    let mut temp_refs = state.completed_temp_refs.clone();
-    let mut temp_tips = backend.temp_tips(&temp_refs)?;
-    let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
-    let total_branches = plan.nodes.len();
-
-    if total_branches == 0 {
-        backend.no_branches()?;
-    }
-
-    while let Some(branch) = state.pending_branches.first().cloned() {
-        let node = nodes
-            .get(branch.as_str())
-            .ok_or_else(|| Error::InvalidPlan(format!("unknown pending branch `{branch}`")))?;
-        let branch_index = temp_refs.len() + 1;
-        let commits = replay_commits_from_extra(node, &state.extra_commits);
-        let replay_current = match &state.phase {
-            Phase::Replay { current } => current.clone(),
-            _ => None,
-        };
-        let was_resuming = replay_current.is_some();
-        let child_base_pause_commits = if state.replay_mode.pauses_at_checkpoints() {
-            child_base_pause_commits(plan, node, state.strategy, &commits)
-        } else {
-            BTreeSet::new()
-        };
-
-        let (start_commit_index, mut last_rewritten) = if was_resuming {
-            let current = replay_current.as_ref().expect("resume requires current");
-            let start = resume_start_commit_index(node, current, &mappings, &commits)?;
-            state.phase = Phase::Replay { current: None };
-            let head = commits
-                .get(start.wrapping_sub(1))
-                .and_then(|commit| mappings.get(&commit.oid))
-                .cloned()
-                .ok_or_else(|| {
-                    Error::InvalidPlan(format!(
-                        "branch `{}` has no rewritten commit to resume from",
-                        node.branch
-                    ))
-                })?;
-            (start, head)
-        } else {
-            let base = actual_replay_base(
-                node,
-                ActualReplayContext {
-                    nodes: &nodes,
-                    selected_bases: &selected_bases,
-                    temp_tips: &temp_tips,
-                    mappings: &mappings,
-                    new_tip: &state.new_tip,
-                    strategy: state.strategy,
-                },
-            )?;
-            selected_bases.insert(node.branch.clone(), base.clone());
-            mappings.insert(node.base().to_owned(), base.clone());
-
-            if base == node.base() {
-                // Already at its replay base; keep the existing commits.
-                for commit in &commits {
-                    mappings.insert(commit.oid.clone(), commit.oid.clone());
-                }
-                let current_tip =
-                    commits
-                        .last()
-                        .map(|commit| commit.oid.clone())
-                        .ok_or_else(|| {
-                            Error::InvalidPlan(format!("branch `{}` has no commits", node.branch))
-                        })?;
-                let (temp_ref, branch_tip) =
-                    backend.skip_replay(plan, node, branch_index, total_branches, &current_tip)?;
-                temp_tips.insert(node.branch.clone(), branch_tip);
-                if !temp_refs.contains(&temp_ref) {
-                    temp_refs.push(temp_ref);
-                }
-                remove_pending_branch(state, &branch)?;
-                checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, None)?;
-                continue;
-            }
-
-            backend.prepare_branch(state, branch_index, total_branches, node, &base)?;
-            (0, base)
-        };
-
-        backend.start_replay(
-            branch_index,
+        Ok(Self {
+            plan,
+            state_writer,
+            backend,
+            state,
+            nodes,
+            temp_tips,
+            selected_bases,
             total_branches,
-            node,
-            commits.len(),
-            start_commit_index,
-            was_resuming,
-        )?;
-        for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
-            if commit.is_merge() {
-                // The merged history is contained in the new base; flatten.
-                backend.flatten_merge(node, &commit.oid, commit_index, commits.len())?;
-                mappings.insert(commit.oid.clone(), last_rewritten.clone());
-                if child_base_pause_commits.contains(&commit.oid) {
-                    let paused = checkpoint_paused_child_base(
-                        state,
-                        state_writer,
-                        &mappings,
-                        &temp_refs,
-                        node,
-                        &commit.oid,
-                        &last_rewritten,
-                    )?;
-                    return Ok(ApplyOutcome::Paused {
-                        paused,
-                    });
-                }
-                continue;
-            }
+        })
+    }
 
-            let rewritten_commit =
-                match backend.cherry_pick(state, node, &commit.oid, commit_index, commits.len())? {
+    fn run(&mut self, stop_on_pause: bool) -> Result<ApplyOutcome> {
+        self.backend.start(self.state)?;
+        let mut resume_initial_pause = matches!(self.state.phase, Phase::Paused { .. });
+        loop {
+            match self.state.phase.clone() {
+                Phase::Replay { .. } => match self.replay_pending_branches()? {
+                    ApplyOutcome::Complete => {
+                        self.state.phase = Phase::FinalUpdate;
+                        self.write_state()?;
+                    }
+                    outcome @ (ApplyOutcome::Paused { .. } | ApplyOutcome::Conflict { .. }) => {
+                        return Ok(outcome);
+                    }
+                },
+                Phase::FinalUpdate => {
+                    self.backend.final_update(self.plan, self.state)?;
+                    test_hooks::run("after-final-update")?;
+                    self.state.phase = Phase::Deleting { delete_plan: true };
+                    self.write_state()?;
+                    test_hooks::run("after-deleting-state-written")?;
+                }
+                Phase::Conflict { current } => {
+                    self.resolve_conflict(current)?;
+                    self.write_state()?;
+                }
+                Phase::Paused { paused } => {
+                    if stop_on_pause && !resume_initial_pause {
+                        return Ok(ApplyOutcome::Paused { paused });
+                    }
+                    resume_initial_pause = false;
+                    self.resume_paused_branch(paused)?;
+                }
+                Phase::Deleting { .. } => {
+                    run_deleting_state(self.state_writer, self.backend, self.state)?;
+                    return Ok(ApplyOutcome::Complete);
+                }
+            }
+        }
+    }
+
+    fn replay_pending_branches(&mut self) -> Result<ApplyOutcome> {
+        if self.total_branches == 0 {
+            self.backend.no_branches()?;
+        }
+
+        while let Some(branch) = self.state.pending_branches.first().cloned() {
+            let node = *self
+                .nodes
+                .get(branch.as_str())
+                .ok_or_else(|| Error::InvalidPlan(format!("unknown pending branch `{branch}`")))?;
+            let branch_index = self.branch_index();
+            let commits = replay_commits_from_extra(node, &self.state.extra_commits);
+            let replay_current = self.replay_current();
+            let was_resuming = replay_current.is_some();
+            let child_base_pause_commits = if self.state.replay_mode.pauses_at_checkpoints() {
+                child_base_pause_commits(self.plan, node, self.state.strategy, &commits)
+            } else {
+                BTreeSet::new()
+            };
+
+            let (start_commit_index, mut last_rewritten) = if let Some(current) = replay_current {
+                let start = self.resume_start_commit_index(node, &current, &commits)?;
+                self.state.phase = Phase::Replay { current: None };
+                let head = commits
+                    .get(start.wrapping_sub(1))
+                    .and_then(|commit| self.state.mappings.get(&commit.oid))
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::InvalidPlan(format!(
+                            "branch `{}` has no rewritten commit to resume from",
+                            node.branch
+                        ))
+                    })?;
+                (start, head)
+            } else {
+                let base = self.actual_replay_base(node)?;
+                self.selected_bases
+                    .insert(node.branch.clone(), base.clone());
+                self.state
+                    .mappings
+                    .insert(node.base().to_owned(), base.clone());
+
+                if base == node.base() {
+                    self.skip_replay_at_existing_base(node, &branch, &commits)?;
+                    continue;
+                }
+
+                self.backend.prepare_branch(
+                    self.state,
+                    branch_index,
+                    self.total_branches,
+                    node,
+                    &base,
+                )?;
+                (0, base)
+            };
+
+            self.backend.start_replay(
+                branch_index,
+                self.total_branches,
+                node,
+                commits.len(),
+                start_commit_index,
+                was_resuming,
+            )?;
+            for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
+                if commit.is_merge() {
+                    // The merged history is contained in the new base; flatten.
+                    self.backend
+                        .flatten_merge(node, &commit.oid, commit_index, commits.len())?;
+                    self.state
+                        .mappings
+                        .insert(commit.oid.clone(), last_rewritten.clone());
+                    if child_base_pause_commits.contains(&commit.oid) {
+                        let paused =
+                            self.checkpoint_paused_child_base(node, &commit.oid, &last_rewritten)?;
+                        return Ok(ApplyOutcome::Paused { paused });
+                    }
+                    continue;
+                }
+
+                let rewritten_commit = match self.backend.cherry_pick(
+                    self.state,
+                    node,
+                    &commit.oid,
+                    commit_index,
+                    commits.len(),
+                )? {
                     CherryPickOutcome::Applied(rewritten_commit) => rewritten_commit,
                     CherryPickOutcome::Conflict { message } => {
                         let current = CurrentState {
                             branch: node.branch.clone(),
                             commit: commit.oid.clone(),
-                            worktree: state.worktree.path().to_owned(),
+                            worktree: self.state.worktree.path().to_owned(),
                         };
-                        state.phase = Phase::Conflict {
+                        self.state.phase = Phase::Conflict {
                             current: current.clone(),
                         };
-                        state.mappings = mappings.clone();
-                        state.completed_temp_refs = temp_refs.clone();
-                        state_writer.write_state(state)?;
-                        return Ok(ApplyOutcome::Conflict {
-                            current,
-                            message,
-                        });
+                        self.write_state()?;
+                        return Ok(ApplyOutcome::Conflict { current, message });
                     }
                 };
-            mappings.insert(commit.oid.clone(), rewritten_commit.clone());
-            last_rewritten = rewritten_commit;
-            if child_base_pause_commits.contains(&commit.oid) {
-                let paused = checkpoint_paused_child_base(
-                    state,
-                    state_writer,
-                    &mappings,
-                    &temp_refs,
-                    node,
-                    &commit.oid,
-                    &last_rewritten,
-                )?;
-                return Ok(ApplyOutcome::Paused {
-                    paused,
-                });
+                self.state
+                    .mappings
+                    .insert(commit.oid.clone(), rewritten_commit.clone());
+                last_rewritten = rewritten_commit;
+                if child_base_pause_commits.contains(&commit.oid) {
+                    let paused =
+                        self.checkpoint_paused_child_base(node, &commit.oid, &last_rewritten)?;
+                    return Ok(ApplyOutcome::Paused { paused });
+                }
+            }
+
+            let rewritten_tip = if let Some(commit) = commits.last() {
+                self.state
+                    .mappings
+                    .get(&commit.oid)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::InvalidPlan(format!(
+                            "commit `{}` for branch `{}` has no rewritten mapping",
+                            commit.oid, node.branch
+                        ))
+                    })?
+            } else {
+                self.selected_bases
+                    .get(&node.branch)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
+                    })?
+            };
+            let (temp_ref, branch_tip) = self.backend.write_temp_ref(
+                self.plan,
+                node,
+                branch_index,
+                self.total_branches,
+                &rewritten_tip,
+            )?;
+            self.record_temp_ref(&node.branch, temp_ref.clone(), branch_tip.clone());
+            self.remove_pending_branch(&branch)?;
+            let pause =
+                self.state
+                    .replay_mode
+                    .pauses_at_checkpoints()
+                    .then(|| PausedState::BranchEnd {
+                        branch: node.branch.clone(),
+                        rewritten_tip: branch_tip,
+                        temp_ref,
+                        mapped_commit: commits
+                            .last()
+                            .map(|commit| commit.oid.clone())
+                            .unwrap_or_else(|| node.base().to_owned()),
+                        worktree: self.state.worktree.path().to_owned(),
+                    });
+            self.checkpoint_completed_branch(pause.clone())?;
+            if let Some(paused) = pause {
+                return Ok(ApplyOutcome::Paused { paused });
             }
         }
 
-        let rewritten_tip = if let Some(commit) = commits.last() {
-            mappings.get(&commit.oid).cloned().ok_or_else(|| {
-                Error::InvalidPlan(format!(
-                    "commit `{}` for branch `{}` has no rewritten mapping",
-                    commit.oid, node.branch
-                ))
-            })?
-        } else {
-            selected_bases.get(&node.branch).cloned().ok_or_else(|| {
-                Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
-            })?
+        self.state.phase = Phase::Replay { current: None };
+        Ok(ApplyOutcome::Complete)
+    }
+
+    fn resolve_conflict(&mut self, current: CurrentState) -> Result<()> {
+        let rewritten_commit = self.backend.continue_cherry_pick(self.state, &current)?;
+        self.state
+            .mappings
+            .insert(current.commit.clone(), rewritten_commit);
+        self.state.phase = Phase::Replay {
+            current: Some(current),
         };
-        let (temp_ref, branch_tip) =
-            backend.write_temp_ref(plan, node, branch_index, total_branches, &rewritten_tip)?;
-        temp_tips.insert(node.branch.clone(), branch_tip.clone());
-        if !temp_refs.contains(&temp_ref) {
-            temp_refs.push(temp_ref.clone());
+        Ok(())
+    }
+
+    fn resume_paused_branch(&mut self, paused: PausedState) -> Result<()> {
+        if !self
+            .plan
+            .nodes
+            .iter()
+            .any(|node| node.branch == paused.branch())
+        {
+            return Err(Error::InvalidPlan(format!(
+                "paused branch `{}` is not in the active plan",
+                paused.branch()
+            )));
         }
-        remove_pending_branch(state, &branch)?;
-        let pause = state
-            .replay_mode
-            .pauses_at_checkpoints()
-            .then(|| PausedState::BranchEnd {
-                branch: node.branch.clone(),
-                rewritten_tip: branch_tip.clone(),
-                temp_ref: temp_ref.clone(),
-                mapped_commit: commits
-                    .last()
-                    .map(|commit| commit.oid.clone())
-                    .unwrap_or_else(|| node.base().to_owned()),
-                worktree: state.worktree.path().to_owned(),
-            });
-        checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, pause.clone())?;
-        if let Some(paused) = pause {
-            return Ok(ApplyOutcome::Paused {
-                paused,
-            });
+
+        let rewritten_tip = self.backend.resume_paused_branch(self.state, &paused)?;
+        match paused {
+            PausedState::BranchEnd {
+                branch,
+                mapped_commit,
+                temp_ref,
+                ..
+            } => {
+                self.record_temp_ref(&branch, temp_ref, rewritten_tip.clone());
+                self.state.mappings.insert(mapped_commit, rewritten_tip);
+                self.state.phase = Phase::Replay { current: None };
+            }
+            PausedState::ChildBase {
+                branch,
+                commit,
+                worktree,
+                ..
+            } => {
+                self.state.mappings.insert(commit.clone(), rewritten_tip);
+                self.state.phase = Phase::Replay {
+                    current: Some(CurrentState {
+                        branch,
+                        commit,
+                        worktree,
+                    }),
+                };
+            }
         }
+        self.write_state()
     }
 
-    state.phase = Phase::Replay { current: None };
-    state.mappings = mappings;
-    state.completed_temp_refs = temp_refs;
-
-    Ok(ApplyOutcome::Complete)
-}
-
-fn checkpoint_paused_child_base(
-    state: &mut ApplyState,
-    state_writer: &mut dyn StateWriter,
-    mappings: &BTreeMap<String, String>,
-    temp_refs: &[String],
-    node: &Node,
-    commit: &str,
-    rewritten_tip: &str,
-) -> Result<PausedState> {
-    let paused = PausedState::ChildBase {
-        branch: node.branch.clone(),
-        commit: commit.to_owned(),
-        rewritten_tip: rewritten_tip.to_owned(),
-        worktree: state.worktree.path().to_owned(),
-    };
-    state.mappings = mappings.clone();
-    state.completed_temp_refs = temp_refs.to_vec();
-    state.phase = Phase::Paused {
-        paused: paused.clone(),
-    };
-    state_writer.write_state(state)?;
-    Ok(paused)
-}
-
-/// Persists progress after a branch finished so a crashed apply can resume
-/// from the next pending branch.
-fn checkpoint_completed_branch(
-    state: &mut ApplyState,
-    state_writer: &mut dyn StateWriter,
-    mappings: &BTreeMap<String, String>,
-    temp_refs: &[String],
-    pause: Option<PausedState>,
-) -> Result<()> {
-    state.mappings = mappings.clone();
-    state.completed_temp_refs = temp_refs.to_vec();
-    state.phase = if let Some(paused) = pause {
-        Phase::Paused { paused }
-    } else {
-        Phase::Replay { current: None }
-    };
-    state_writer.write_state(state)
-}
-
-fn resume_start_commit_index(
-    node: &Node,
-    current: &CurrentState,
-    mappings: &BTreeMap<String, String>,
-    commits: &[PlanCommit],
-) -> Result<usize> {
-    if current.branch != node.branch {
-        return Err(Error::InvalidPlan(format!(
-            "current branch `{}` is not the next pending branch `{}`",
-            current.branch, node.branch
-        )));
-    }
-    if !mappings.contains_key(&current.commit) {
-        return Err(Error::InvalidPlan(format!(
-            "current commit `{}` for branch `{}` has no rewritten mapping",
-            current.commit, current.branch
-        )));
-    }
-
-    let start_commit_index = commits
-        .iter()
-        .position(|commit| commit.oid == current.commit)
-        .map(|index| index + 1)
-        .ok_or_else(|| {
-            Error::InvalidPlan(format!(
-                "current commit `{}` is not part of branch `{}`",
-                current.commit, current.branch
-            ))
-        })?;
-    Ok(start_commit_index)
-}
-
-fn remove_pending_branch(state: &mut ApplyState, branch: &str) -> Result<()> {
-    if state.pending_branches.first().map(String::as_str) != Some(branch) {
-        return Err(Error::InvalidPlan(format!(
-            "completed branch `{branch}` is not first in pending state"
-        )));
-    }
-    state.pending_branches.remove(0);
-    Ok(())
-}
-
-fn actual_replay_base(node: &Node, context: ActualReplayContext<'_>) -> Result<String> {
-    if node.is_root() {
-        return Ok(context.new_tip.to_owned());
-    }
-
-    let parent_branch = node.parent().ok_or_else(|| {
-        Error::InvalidPlan(format!("root node `{}` has no branch parent", node.branch))
-    })?;
-    let parent = context
-        .nodes
-        .get(parent_branch)
-        .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
-
-    if context.strategy == Strategy::MoveToPlannedTips {
-        return context.mappings.get(&parent.tip).cloned().ok_or_else(|| {
-            Error::InvalidPlan(format!(
-                "parent `{}` has no rewritten planned tip",
-                parent.branch
-            ))
-        });
-    }
-
-    if context.strategy == Strategy::MoveToCurrentTips {
-        return context
-            .temp_tips
-            .get(&parent.branch)
-            .cloned()
+    fn skip_replay_at_existing_base(
+        &mut self,
+        node: &Node,
+        branch: &str,
+        commits: &[PlanCommit],
+    ) -> Result<()> {
+        for commit in commits {
+            self.state
+                .mappings
+                .insert(commit.oid.clone(), commit.oid.clone());
+        }
+        let current_tip = commits
+            .last()
+            .map(|commit| commit.oid.clone())
             .ok_or_else(|| {
+                Error::InvalidPlan(format!("branch `{}` has no commits", node.branch))
+            })?;
+        let (temp_ref, branch_tip) = self.backend.skip_replay(
+            self.plan,
+            node,
+            self.branch_index(),
+            self.total_branches,
+            &current_tip,
+        )?;
+        self.record_temp_ref(&node.branch, temp_ref, branch_tip);
+        self.remove_pending_branch(branch)?;
+        self.checkpoint_completed_branch(None)
+    }
+
+    fn checkpoint_paused_child_base(
+        &mut self,
+        node: &Node,
+        commit: &str,
+        rewritten_tip: &str,
+    ) -> Result<PausedState> {
+        let paused = PausedState::ChildBase {
+            branch: node.branch.clone(),
+            commit: commit.to_owned(),
+            rewritten_tip: rewritten_tip.to_owned(),
+            worktree: self.state.worktree.path().to_owned(),
+        };
+        self.state.phase = Phase::Paused {
+            paused: paused.clone(),
+        };
+        self.write_state()?;
+        Ok(paused)
+    }
+
+    /// Persists progress after a branch finished so a crashed apply can resume
+    /// from the next pending branch.
+    fn checkpoint_completed_branch(&mut self, pause: Option<PausedState>) -> Result<()> {
+        self.state.phase = if let Some(paused) = pause {
+            Phase::Paused { paused }
+        } else {
+            Phase::Replay { current: None }
+        };
+        self.write_state()
+    }
+
+    fn resume_start_commit_index(
+        &self,
+        node: &Node,
+        current: &CurrentState,
+        commits: &[PlanCommit],
+    ) -> Result<usize> {
+        if current.branch != node.branch {
+            return Err(Error::InvalidPlan(format!(
+                "current branch `{}` is not the next pending branch `{}`",
+                current.branch, node.branch
+            )));
+        }
+        if !self.state.mappings.contains_key(&current.commit) {
+            return Err(Error::InvalidPlan(format!(
+                "current commit `{}` for branch `{}` has no rewritten mapping",
+                current.commit, current.branch
+            )));
+        }
+
+        commits
+            .iter()
+            .position(|commit| commit.oid == current.commit)
+            .map(|index| index + 1)
+            .ok_or_else(|| {
+                Error::InvalidPlan(format!(
+                    "current commit `{}` is not part of branch `{}`",
+                    current.commit, current.branch
+                ))
+            })
+    }
+
+    fn remove_pending_branch(&mut self, branch: &str) -> Result<()> {
+        if self.state.pending_branches.first().map(String::as_str) != Some(branch) {
+            return Err(Error::InvalidPlan(format!(
+                "completed branch `{branch}` is not first in pending state"
+            )));
+        }
+        self.state.pending_branches.remove(0);
+        Ok(())
+    }
+
+    fn actual_replay_base(&self, node: &Node) -> Result<String> {
+        if node.is_root() {
+            return Ok(self.state.new_tip.clone());
+        }
+
+        let parent_branch = node.parent().ok_or_else(|| {
+            Error::InvalidPlan(format!("root node `{}` has no branch parent", node.branch))
+        })?;
+        let parent = self
+            .nodes
+            .get(parent_branch)
+            .ok_or_else(|| Error::InvalidPlan(format!("unknown parent `{parent_branch}`")))?;
+
+        if self.state.strategy == Strategy::MoveToPlannedTips {
+            return self
+                .state
+                .mappings
+                .get(&parent.tip)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "parent `{}` has no rewritten planned tip",
+                        parent.branch
+                    ))
+                });
+        }
+
+        if self.state.strategy == Strategy::MoveToCurrentTips {
+            return self.temp_tips.get(&parent.branch).cloned().ok_or_else(|| {
                 Error::InvalidPlan(format!("parent `{}` has no rewritten tip", parent.branch))
             });
+        }
+
+        let base = node.base();
+        if base == parent.base() {
+            return self
+                .selected_bases
+                .get(&parent.branch)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!("parent `{}` has no selected base", parent.branch))
+                });
+        }
+
+        self.state.mappings.get(base).cloned().ok_or_else(|| {
+            Error::InvalidPlan(format!(
+                "base `{}` for branch `{}` was not mapped",
+                base, node.branch
+            ))
+        })
     }
 
-    let base = node.base();
-    if base == parent.base() {
-        return context
-            .selected_bases
-            .get(&parent.branch)
-            .cloned()
-            .ok_or_else(|| {
-                Error::InvalidPlan(format!("parent `{}` has no selected base", parent.branch))
-            });
+    fn record_temp_ref(&mut self, branch: &str, temp_ref: String, branch_tip: String) {
+        self.temp_tips.insert(branch.to_owned(), branch_tip);
+        if !self.state.completed_temp_refs.contains(&temp_ref) {
+            self.state.completed_temp_refs.push(temp_ref);
+        }
     }
 
-    context.mappings.get(base).cloned().ok_or_else(|| {
-        Error::InvalidPlan(format!(
-            "base `{}` for branch `{}` was not mapped",
-            base, node.branch
-        ))
-    })
+    fn replay_current(&self) -> Option<CurrentState> {
+        match &self.state.phase {
+            Phase::Replay { current } => current.clone(),
+            _ => None,
+        }
+    }
+
+    fn branch_index(&self) -> usize {
+        self.state.completed_temp_refs.len() + 1
+    }
+
+    fn write_state(&mut self) -> Result<()> {
+        self.state_writer.write_state(self.state)
+    }
 }
 
 fn ensure_target_branches_not_checked_out(git: &Git, branches: &[String]) -> Result<()> {
