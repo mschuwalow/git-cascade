@@ -51,12 +51,12 @@ fn status_output(storage: &Storage) -> Result<String> {
     output.push_str(&format!("worktree: {}\n", state.worktree.path()));
     output.push_str(&format!(
         "completed-temp-refs: {}\n",
-        state.completed.temp_refs.len()
+        state.completed_temp_refs.len()
     ));
-    if state.pending.branches.is_empty() {
+    if state.pending_branches.is_empty() {
         output.push_str("pending: none\n");
     } else {
-        output.push_str(&format!("pending: {}\n", state.pending.branches.join(", ")));
+        output.push_str(&format!("pending: {}\n", state.pending_branches.join(", ")));
     }
 
     Ok(output)

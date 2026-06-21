@@ -236,10 +236,8 @@ fn completions(shell: Shell) -> Result<()> {
 fn continue_operation() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    handle_apply_outcome(
-        continue_apply(&git, &storage)?,
-        "continued cascade operation",
-    )
+    let outcome = continue_apply(&git, &storage)?;
+    handle_apply_outcome(outcome, "continued cascade operation")
 }
 
 pub(super) fn handle_apply_outcome(outcome: ApplyOutcome, success_message: &str) -> Result<()> {

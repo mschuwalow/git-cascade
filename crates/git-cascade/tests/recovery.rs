@@ -2,7 +2,7 @@ mod common;
 
 use common::repo::TestRepo;
 use git_cascade::state::{
-    ApplyState, CleanupState, CurrentState, PausedState, Phase, ReplayMode, RestoreState,
+    ApplyState, CurrentState, PausedState, Phase, ReplayMode, RestoreState,
     WorktreeState,
 };
 use predicates::prelude::*;
@@ -284,7 +284,7 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
     assert!(matches!(state.phase, Phase::Paused { .. }));
     assert_eq!(state.replay_mode, ReplayMode::PauseAtCheckpoints);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert_eq!(state.pending.branches, vec!["pr-3"]);
+    assert_eq!(state.pending_branches, vec!["pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -312,7 +312,7 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
     assert_eq!(paused_state(&state).branch(), "pr-3");
-    assert!(state.pending.branches.is_empty());
+    assert!(state.pending_branches.is_empty());
     assert_eq!(
         repo.git_output(["-C", worktree.to_str().unwrap(), "show", "HEAD:fix.txt"]),
         "fix\n"
@@ -388,7 +388,7 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
     let first_pause = paused_state(&state);
     assert_eq!(first_pause.branch(), "pr-2");
     assert!(matches!(first_pause, PausedState::ChildBase { .. }));
-    assert_eq!(state.pending.branches, vec!["pr-2", "pr-3"]);
+    assert_eq!(state.pending_branches, vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -418,7 +418,7 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
         paused_state(&state),
         PausedState::BranchEnd { .. }
     ));
-    assert_eq!(state.pending.branches, vec!["pr-3"]);
+    assert_eq!(state.pending_branches, vec!["pr-3"]);
     std::fs::write(worktree.join("tip-fix.txt"), "tip fix\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "tip-fix.txt"]);
     repo.git_ok([
@@ -787,7 +787,7 @@ fn rewrite_anchor(repo: &TestRepo) {
 
 fn deleting_phase() -> Phase {
     Phase::Deleting {
-        cleanup: CleanupState::default(),
+        delete_plan: false,
     }
 }
 

@@ -160,7 +160,7 @@ fn continue_finishes_successful_deleting_state() {
 
     let state = read_state(&repo);
     match state.phase {
-        Phase::Deleting { cleanup } => assert!(cleanup.delete_plan),
+        Phase::Deleting { delete_plan } => assert!(delete_plan),
         phase => panic!("expected deleting phase, got {phase:?}"),
     }
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);

@@ -24,11 +24,11 @@ pub struct ApplyState {
     pub strategy: Strategy,
     pub replay_mode: ReplayMode,
     pub worktree: WorktreeState,
-    pub completed: CompletedState,
+    pub completed_temp_refs: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
     pub mappings: BTreeMap<String, String>,
-    pub pending: PendingState,
+    pub pending_branches: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,7 +46,7 @@ pub enum Phase {
     },
     FinalUpdate,
     Deleting {
-        cleanup: CleanupState,
+        delete_plan: bool,
     },
 }
 
@@ -213,21 +213,6 @@ pub enum RestoreState {
     Detached { head: String },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CompletedState {
-    pub temp_refs: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PendingState {
-    pub branches: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CleanupState {
-    pub delete_plan: bool,
-}
-
 pub struct StateFile {
     path: PathBuf,
     lock_file: File,
@@ -378,7 +363,7 @@ pub fn read_state(storage: &Storage) -> Result<Option<ApplyState>> {
     Ok(Some(serde_yaml::from_str(&content)?))
 }
 
-pub struct ApplyStateInput<'a> {
+pub struct InitialApplyStateInput<'a> {
     pub plan_name: &'a PlanName,
     pub plan_id: &'a PlanId,
     pub new_tip: &'a str,
@@ -391,7 +376,7 @@ pub struct ApplyStateInput<'a> {
     pub worktree: WorktreeState,
 }
 
-pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
+pub fn initial_apply_state(input: InitialApplyStateInput<'_>) -> Result<ApplyState> {
     let now = timestamp()?;
 
     Ok(ApplyState {
@@ -406,13 +391,11 @@ pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
         strategy: input.strategy,
         replay_mode: input.replay_mode,
         worktree: input.worktree,
-        completed: CompletedState::default(),
+        completed_temp_refs: Vec::new(),
         branch_tips: input.branch_tips,
         extra_commits: input.extra_commits,
         mappings: input.mappings,
-        pending: PendingState {
-            branches: input.pending_branches,
-        },
+        pending_branches: input.pending_branches
     })
 }
 

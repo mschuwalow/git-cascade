@@ -7,7 +7,7 @@ use crate::replay_backend::{
     CherryPickOutcome, DryRunReplayBackend, GitReplayBackend, ReplayBackend,
 };
 use crate::state::{
-    ApplyState, ApplyStateInput, CleanupState, CurrentState, PausedState, Phase, ReplayMode,
+    ApplyState, InitialApplyStateInput, CurrentState, PausedState, Phase, ReplayMode,
     RestoreState, StateFile, Strategy, WorktreeState, initial_apply_state,
 };
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
@@ -36,12 +36,6 @@ pub enum ApplyOutcome {
     Paused {
         paused: PausedState,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ReplayBranchesOutcome {
-    Complete,
-    Stopped(ApplyOutcome),
 }
 
 struct ActualReplayContext<'a> {
@@ -76,7 +70,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     };
     let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
     let mappings = BTreeMap::new();
-    let mut state = initial_apply_state(ApplyStateInput {
+    let mut state = initial_apply_state(InitialApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
@@ -129,7 +123,7 @@ pub fn execute(
     };
     let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
     let mappings = BTreeMap::new();
-    let state = initial_apply_state(ApplyStateInput {
+    let state = initial_apply_state(InitialApplyStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
@@ -183,7 +177,7 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
 
     if !matches!(state.phase, Phase::Deleting { .. }) {
         state.phase = Phase::Deleting {
-            cleanup: CleanupState { delete_plan: false },
+            delete_plan: false
         };
         state_file.write_state(&mut state)?;
     }
@@ -215,24 +209,18 @@ fn run_apply_state(
         match state.phase.clone() {
             Phase::Replay { .. } => {
                 match replay_pending_branches(plan, state_writer, backend, state)? {
-                    ReplayBranchesOutcome::Complete => {
+                    ApplyOutcome::Complete => {
                         state.phase = Phase::FinalUpdate;
                         state_writer.write_state(state)?;
                     }
-                    ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused { paused }) => {
-                        if stop_on_pause {
-                            return Ok(ApplyOutcome::Paused { paused });
-                        }
-                        resume_paused_branch(plan, state_writer, backend, state, paused)?;
-                    }
-                    ReplayBranchesOutcome::Stopped(outcome) => return Ok(outcome),
+                    outcome @ (ApplyOutcome::Paused { .. } | ApplyOutcome::Conflict { .. }) => return Ok(outcome)
                 }
             }
             Phase::FinalUpdate => {
                 backend.final_update(plan, state)?;
                 test_hooks::run("after-final-update")?;
                 state.phase = Phase::Deleting {
-                    cleanup: CleanupState { delete_plan: true },
+                    delete_plan: true,
                 };
                 state_writer.write_state(state)?;
                 test_hooks::run("after-deleting-state-written")?;
@@ -269,15 +257,15 @@ fn run_deleting_state(
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
 ) -> Result<()> {
-    let cleanup = match &state.phase {
-        Phase::Deleting { cleanup } => cleanup.clone(),
+    let delete_plan = match &state.phase {
+        Phase::Deleting { delete_plan } => *delete_plan,
         _ => {
             return Err(Error::InvalidInvocation(
                 "active apply state is not in deleting phase".to_owned(),
             ));
         }
     };
-    if cleanup.delete_plan {
+    if delete_plan {
         backend.delete_applied_plan(state)?;
     }
     backend.cleanup_deleting_state(state)?;
@@ -343,14 +331,14 @@ fn replay_pending_branches(
     state_writer: &mut dyn StateWriter,
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
-) -> Result<ReplayBranchesOutcome> {
+) -> Result<ApplyOutcome> {
     let nodes = plan
         .nodes
         .iter()
         .map(|node| (node.branch.as_str(), node))
         .collect::<HashMap<_, _>>();
     let mut mappings = state.mappings.clone();
-    let mut temp_refs = state.completed.temp_refs.clone();
+    let mut temp_refs = state.completed_temp_refs.clone();
     let mut temp_tips = backend.temp_tips(&temp_refs)?;
     let mut selected_bases = selected_bases_from_mappings(plan, &mappings);
     let total_branches = plan.nodes.len();
@@ -359,7 +347,7 @@ fn replay_pending_branches(
         backend.no_branches()?;
     }
 
-    while let Some(branch) = state.pending.branches.first().cloned() {
+    while let Some(branch) = state.pending_branches.first().cloned() {
         let node = nodes
             .get(branch.as_str())
             .ok_or_else(|| Error::InvalidPlan(format!("unknown pending branch `{branch}`")))?;
@@ -456,9 +444,9 @@ fn replay_pending_branches(
                         &commit.oid,
                         &last_rewritten,
                     )?;
-                    return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused {
+                    return Ok(ApplyOutcome::Paused {
                         paused,
-                    }));
+                    });
                 }
                 continue;
             }
@@ -476,12 +464,12 @@ fn replay_pending_branches(
                             current: current.clone(),
                         };
                         state.mappings = mappings.clone();
-                        state.completed.temp_refs = temp_refs.clone();
+                        state.completed_temp_refs = temp_refs.clone();
                         state_writer.write_state(state)?;
-                        return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Conflict {
+                        return Ok(ApplyOutcome::Conflict {
                             current,
                             message,
-                        }));
+                        });
                     }
                 };
             mappings.insert(commit.oid.clone(), rewritten_commit.clone());
@@ -496,9 +484,9 @@ fn replay_pending_branches(
                     &commit.oid,
                     &last_rewritten,
                 )?;
-                return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused {
+                return Ok(ApplyOutcome::Paused {
                     paused,
-                }));
+                });
             }
         }
 
@@ -536,17 +524,17 @@ fn replay_pending_branches(
             });
         checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, pause.clone())?;
         if let Some(paused) = pause {
-            return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused {
+            return Ok(ApplyOutcome::Paused {
                 paused,
-            }));
+            });
         }
     }
 
     state.phase = Phase::Replay { current: None };
     state.mappings = mappings;
-    state.completed.temp_refs = temp_refs;
+    state.completed_temp_refs = temp_refs;
 
-    Ok(ReplayBranchesOutcome::Complete)
+    Ok(ApplyOutcome::Complete)
 }
 
 fn checkpoint_paused_child_base(
@@ -565,7 +553,7 @@ fn checkpoint_paused_child_base(
         worktree: state.worktree.path().to_owned(),
     };
     state.mappings = mappings.clone();
-    state.completed.temp_refs = temp_refs.to_vec();
+    state.completed_temp_refs = temp_refs.to_vec();
     state.phase = Phase::Paused {
         paused: paused.clone(),
     };
@@ -583,7 +571,7 @@ fn checkpoint_completed_branch(
     pause: Option<PausedState>,
 ) -> Result<()> {
     state.mappings = mappings.clone();
-    state.completed.temp_refs = temp_refs.to_vec();
+    state.completed_temp_refs = temp_refs.to_vec();
     state.phase = if let Some(paused) = pause {
         Phase::Paused { paused }
     } else {
@@ -625,12 +613,12 @@ fn resume_start_commit_index(
 }
 
 fn remove_pending_branch(state: &mut ApplyState, branch: &str) -> Result<()> {
-    if state.pending.branches.first().map(String::as_str) != Some(branch) {
+    if state.pending_branches.first().map(String::as_str) != Some(branch) {
         return Err(Error::InvalidPlan(format!(
             "completed branch `{branch}` is not first in pending state"
         )));
     }
-    state.pending.branches.remove(0);
+    state.pending_branches.remove(0);
     Ok(())
 }
 

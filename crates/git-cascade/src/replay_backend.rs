@@ -122,7 +122,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         );
         let worktree = std::path::PathBuf::from(state.worktree.path());
         let worktree_git = Git::new(&worktree);
-        if state.worktree.is_in_place() && state.completed.temp_refs.is_empty() {
+        if state.worktree.is_in_place() && state.completed_temp_refs.is_empty() {
             // A stale cherry-pick can linger after a crashed replay.
             let _ = worktree_git.try_cherry_pick_abort();
             worktree_git.switch_detached(base)
@@ -326,7 +326,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         }
 
         let mut refs = BTreeSet::new();
-        refs.extend(state.completed.temp_refs.iter().cloned());
+        refs.extend(state.completed_temp_refs.iter().cloned());
         refs.extend(
             self.git
                 .refs_under(&format!("refs/cascade/tmp/{}", state.plan_id))?,
@@ -415,14 +415,14 @@ impl ReplayBackend for DryRunReplayBackend {
         writeln!(self.output).unwrap();
         writeln!(self.output, "# branch {}", node.branch).unwrap();
         writeln!(self.output, "replay-base {base}").unwrap();
-        if state.worktree.is_in_place() && state.completed.temp_refs.is_empty() {
+        if state.worktree.is_in_place() && state.completed_temp_refs.is_empty() {
             writeln!(
                 self.output,
                 "git -C {} switch --detach {base}",
                 worktree.display()
             )
             .unwrap();
-        } else if state.completed.temp_refs.is_empty() && state.worktree.is_temporary() {
+        } else if state.completed_temp_refs.is_empty() && state.worktree.is_temporary() {
             writeln!(
                 self.output,
                 "git worktree add --detach {} {base}",
@@ -609,7 +609,7 @@ fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()>
         .iter()
         .map(|node| node.branch.clone())
         .collect::<Vec<_>>();
-    let temp_tips = temp_tips_from_refs(git, &state.completed.temp_refs)?;
+    let temp_tips = temp_tips_from_refs(git, &state.completed_temp_refs)?;
     ensure_target_branches_not_checked_out(git, &branches)?;
     if final_update_already_applied(git, plan, &temp_tips, &state.branch_tips)? {
         return Ok(());
