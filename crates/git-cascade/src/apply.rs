@@ -46,7 +46,6 @@ struct ReplayContext<'state> {
     nodes: HashMap<String, usize>,
     temp_tips: HashMap<String, String>,
     selected_bases: HashMap<String, String>,
-    total_branches: usize,
 }
 
 pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<String> {
@@ -86,7 +85,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     })?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
-    run_replay_context(plan.clone(), &mut state_writer, &mut backend, state, false)?;
+    ReplayContext::new(plan.clone(), &mut state_writer, &mut backend, state)?.run(false)?;
 
     Ok(backend.finish())
 }
@@ -145,7 +144,7 @@ pub fn execute(
     }
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    run_replay_context(plan.clone(), &mut state_writer, &mut backend, state, true)
+    ReplayContext::new(plan.clone(), &mut state_writer, &mut backend, state)?.run(true)
 }
 
 pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
@@ -164,7 +163,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
         // Branch refs are not re-checked here: they may legitimately already
         // point at rewritten tips when resuming a final update.
         validate_plan(git, &plan)?;
-        run_replay_context(plan, &mut state_writer, &mut backend, state, true)
+        ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run(true)
     }
 }
 
@@ -193,16 +192,6 @@ fn restore_state(git: &Git) -> Result<RestoreState> {
     } else {
         RestoreState::Detached { head }
     })
-}
-
-fn run_replay_context(
-    plan: Plan,
-    state_writer: &mut dyn StateWriter,
-    backend: &mut dyn ReplayBackend,
-    state: ApplyState,
-    stop_on_pause: bool,
-) -> Result<ApplyOutcome> {
-    ReplayContext::new(plan, state_writer, backend, state)?.run(stop_on_pause)
 }
 
 fn replay_mode(options: &ApplyOptions) -> ReplayMode {
@@ -248,7 +237,6 @@ impl<'state> ReplayContext<'state> {
             .collect::<HashMap<_, _>>();
         let temp_tips = backend.temp_tips(&state.completed_temp_refs)?;
         let selected_bases = selected_bases_from_mappings(&plan, &state.mappings);
-        let total_branches = plan.nodes.len();
 
         Ok(Self {
             plan,
@@ -258,11 +246,10 @@ impl<'state> ReplayContext<'state> {
             nodes,
             temp_tips,
             selected_bases,
-            total_branches,
         })
     }
 
-    fn run(&mut self, stop_on_pause: bool) -> Result<ApplyOutcome> {
+    fn run(mut self, stop_on_pause: bool) -> Result<ApplyOutcome> {
         self.backend.start(&self.state)?;
         let mut resume_initial_pause = matches!(self.state.phase, Phase::Paused { .. });
         loop {
@@ -303,7 +290,7 @@ impl<'state> ReplayContext<'state> {
     }
 
     fn replay_pending_branches(&mut self) -> Result<ApplyOutcome> {
-        if self.total_branches == 0 {
+        if self.total_branches() == 0 {
             self.backend.no_branches()?;
         }
 
@@ -343,13 +330,15 @@ impl<'state> ReplayContext<'state> {
 
                 if base == node.base() {
                     self.skip_replay_at_existing_base(&node, &branch, &commits)?;
+                    self.state.phase = Phase::Replay { current: None };
+                    self.write_state()?;
                     continue;
                 }
 
                 self.backend.prepare_branch(
                     &self.state,
                     branch_index,
-                    self.total_branches,
+                    self.total_branches(),
                     &node,
                     &base,
                 )?;
@@ -358,7 +347,7 @@ impl<'state> ReplayContext<'state> {
 
             self.backend.start_replay(
                 branch_index,
-                self.total_branches,
+                self.total_branches(),
                 &node,
                 commits.len(),
                 start_commit_index,
@@ -373,8 +362,16 @@ impl<'state> ReplayContext<'state> {
                         .mappings
                         .insert(commit.oid.clone(), last_rewritten.clone());
                     if child_base_pause_commits.contains(&commit.oid) {
-                        let paused =
-                            self.checkpoint_paused_child_base(&node, &commit.oid, &last_rewritten)?;
+                        let paused = PausedState::ChildBase {
+                            branch: node.branch.clone(),
+                            commit: commit.oid.clone(),
+                            rewritten_tip: last_rewritten.clone(),
+                            worktree: self.state.worktree.path().to_owned(),
+                        };
+                        self.state.phase = Phase::Paused {
+                            paused: paused.clone(),
+                        };
+                        self.write_state()?;
                         return Ok(ApplyOutcome::Paused { paused });
                     }
                     continue;
@@ -406,8 +403,16 @@ impl<'state> ReplayContext<'state> {
                     .insert(commit.oid.clone(), rewritten_commit.clone());
                 last_rewritten = rewritten_commit;
                 if child_base_pause_commits.contains(&commit.oid) {
-                    let paused =
-                        self.checkpoint_paused_child_base(&node, &commit.oid, &last_rewritten)?;
+                    let paused = PausedState::ChildBase {
+                        branch: node.branch.clone(),
+                        commit: commit.oid.clone(),
+                        rewritten_tip: last_rewritten.clone(),
+                        worktree: self.state.worktree.path().to_owned(),
+                    };
+                    self.state.phase = Phase::Paused {
+                        paused: paused.clone(),
+                    };
+                    self.write_state()?;
                     return Ok(ApplyOutcome::Paused { paused });
                 }
             }
@@ -435,29 +440,30 @@ impl<'state> ReplayContext<'state> {
                 &self.plan,
                 &node,
                 branch_index,
-                self.total_branches,
+                self.total_branches(),
                 &rewritten_tip,
             )?;
             self.record_temp_ref(&node.branch, temp_ref.clone(), branch_tip.clone());
             self.remove_pending_branch(&branch)?;
-            let pause =
-                self.state
-                    .replay_mode
-                    .pauses_at_checkpoints()
-                    .then(|| PausedState::BranchEnd {
-                        branch: node.branch.clone(),
-                        rewritten_tip: branch_tip,
-                        temp_ref,
-                        mapped_commit: commits
-                            .last()
-                            .map(|commit| commit.oid.clone())
-                            .unwrap_or_else(|| node.base().to_owned()),
-                        worktree: self.state.worktree.path().to_owned(),
-                    });
-            self.checkpoint_completed_branch(pause.clone())?;
-            if let Some(paused) = pause {
+            if self.state.replay_mode.pauses_at_checkpoints() {
+                let paused = PausedState::BranchEnd {
+                    branch: node.branch.clone(),
+                    rewritten_tip: branch_tip,
+                    temp_ref,
+                    mapped_commit: commits
+                        .last()
+                        .map(|commit| commit.oid.clone())
+                        .unwrap_or_else(|| node.base().to_owned()),
+                    worktree: self.state.worktree.path().to_owned(),
+                };
+                self.state.phase = Phase::Paused {
+                    paused: paused.clone(),
+                };
+                self.write_state()?;
                 return Ok(ApplyOutcome::Paused { paused });
             }
+            self.state.phase = Phase::Replay { current: None };
+            self.write_state()?;
         }
 
         self.state.phase = Phase::Replay { current: None };
@@ -540,42 +546,12 @@ impl<'state> ReplayContext<'state> {
             &self.plan,
             node,
             self.branch_index(),
-            self.total_branches,
+            self.total_branches(),
             &current_tip,
         )?;
         self.record_temp_ref(&node.branch, temp_ref, branch_tip);
         self.remove_pending_branch(branch)?;
-        self.checkpoint_completed_branch(None)
-    }
-
-    fn checkpoint_paused_child_base(
-        &mut self,
-        node: &Node,
-        commit: &str,
-        rewritten_tip: &str,
-    ) -> Result<PausedState> {
-        let paused = PausedState::ChildBase {
-            branch: node.branch.clone(),
-            commit: commit.to_owned(),
-            rewritten_tip: rewritten_tip.to_owned(),
-            worktree: self.state.worktree.path().to_owned(),
-        };
-        self.state.phase = Phase::Paused {
-            paused: paused.clone(),
-        };
-        self.write_state()?;
-        Ok(paused)
-    }
-
-    /// Persists progress after a branch finished so a crashed apply can resume
-    /// from the next pending branch.
-    fn checkpoint_completed_branch(&mut self, pause: Option<PausedState>) -> Result<()> {
-        self.state.phase = if let Some(paused) = pause {
-            Phase::Paused { paused }
-        } else {
-            Phase::Replay { current: None }
-        };
-        self.write_state()
+        Ok(())
     }
 
     fn resume_start_commit_index(
@@ -695,6 +671,10 @@ impl<'state> ReplayContext<'state> {
 
     fn branch_index(&self) -> usize {
         self.state.completed_temp_refs.len() + 1
+    }
+
+    fn total_branches(&self) -> usize {
+        self.plan.nodes.len()
     }
 
     fn write_state(&mut self) -> Result<()> {
