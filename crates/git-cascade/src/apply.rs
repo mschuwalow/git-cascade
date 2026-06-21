@@ -38,8 +38,8 @@ pub enum ApplyOutcome {
     },
 }
 
-struct ReplayContext<'state> {
-    plan: Plan,
+struct ReplayContext<'plan, 'state> {
+    plan: &'plan Plan,
     state_writer: &'state mut dyn StateWriter,
     backend: &'state mut dyn ReplayBackend,
     state: ApplyState,
@@ -85,7 +85,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     })?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
-    ReplayContext::new(plan.clone(), &mut state_writer, &mut backend, state)?.run(false)?;
+    ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run(false)?;
 
     Ok(backend.finish())
 }
@@ -144,7 +144,7 @@ pub fn execute(
     }
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    ReplayContext::new(plan.clone(), &mut state_writer, &mut backend, state)?.run(true)
+    ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run(true)
 }
 
 pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
@@ -158,13 +158,22 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
         run_deleting_state(&mut state_writer, &mut backend, &mut state)?;
         Ok(ApplyOutcome::Complete)
     } else {
+        prepare_continue_phase(&mut state);
         let plan_name = state.plan_name.clone();
         let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
         // Branch refs are not re-checked here: they may legitimately already
         // point at rewritten tips when resuming a final update.
         validate_plan(git, &plan)?;
-        ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run(true)
+        ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?.run(true)
     }
+}
+
+fn prepare_continue_phase(state: &mut ApplyState) {
+    state.phase = match state.phase.clone() {
+        Phase::Conflict { current, .. } => Phase::ContinueAfterConflict { current },
+        Phase::Paused { paused } => Phase::ContinueAfterPause { paused },
+        phase => phase,
+    };
 }
 
 pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
@@ -222,9 +231,9 @@ fn run_deleting_state(
     state_writer.remove_state()
 }
 
-impl<'state> ReplayContext<'state> {
+impl<'plan, 'state> ReplayContext<'plan, 'state> {
     fn new(
-        plan: Plan,
+        plan: &'plan Plan,
         state_writer: &'state mut dyn StateWriter,
         backend: &'state mut dyn ReplayBackend,
         state: ApplyState,
@@ -251,18 +260,11 @@ impl<'state> ReplayContext<'state> {
 
     fn run(mut self, stop_on_pause: bool) -> Result<ApplyOutcome> {
         self.backend.start(&self.state)?;
-        let mut resume_initial_pause = matches!(self.state.phase, Phase::Paused { .. });
         loop {
             match self.state.phase.clone() {
-                Phase::Replay { .. } => match self.replay_pending_branches()? {
-                    ApplyOutcome::Complete => {
-                        self.state.phase = Phase::FinalUpdate;
-                        self.write_state()?;
-                    }
-                    outcome @ (ApplyOutcome::Paused { .. } | ApplyOutcome::Conflict { .. }) => {
-                        return Ok(outcome);
-                    }
-                },
+                Phase::Replay { .. } => {
+                    self.replay_pending_branches()?;
+                }
                 Phase::FinalUpdate => {
                     self.backend.final_update(&self.plan, &self.state)?;
                     test_hooks::run("after-final-update")?;
@@ -270,17 +272,21 @@ impl<'state> ReplayContext<'state> {
                     self.write_state()?;
                     test_hooks::run("after-deleting-state-written")?;
                 }
-                Phase::Conflict { current } => {
+                Phase::Conflict { current, message } => {
+                    return Ok(ApplyOutcome::Conflict { current, message });
+                }
+                Phase::ContinueAfterConflict { current } => {
                     self.resolve_conflict(current)?;
                     self.write_state()?;
                 }
                 Phase::Paused { paused } => {
-                    if stop_on_pause && !resume_initial_pause {
+                    if stop_on_pause {
                         return Ok(ApplyOutcome::Paused { paused });
+                    } else {
+                        self.state.phase = Phase::ContinueAfterPause { paused };
                     }
-                    resume_initial_pause = false;
-                    self.resume_paused_branch(paused)?;
                 }
+                Phase::ContinueAfterPause { paused } => self.resume_paused_branch(paused)?,
                 Phase::Deleting { .. } => {
                     run_deleting_state(self.state_writer, self.backend, &mut self.state)?;
                     return Ok(ApplyOutcome::Complete);
@@ -289,7 +295,7 @@ impl<'state> ReplayContext<'state> {
         }
     }
 
-    fn replay_pending_branches(&mut self) -> Result<ApplyOutcome> {
+    fn replay_pending_branches(&mut self) -> Result<()> {
         if self.total_branches() == 0 {
             self.backend.no_branches()?;
         }
@@ -372,7 +378,7 @@ impl<'state> ReplayContext<'state> {
                             paused: paused.clone(),
                         };
                         self.write_state()?;
-                        return Ok(ApplyOutcome::Paused { paused });
+                        return Ok(());
                     }
                     continue;
                 }
@@ -393,9 +399,10 @@ impl<'state> ReplayContext<'state> {
                         };
                         self.state.phase = Phase::Conflict {
                             current: current.clone(),
+                            message,
                         };
                         self.write_state()?;
-                        return Ok(ApplyOutcome::Conflict { current, message });
+                        return Ok(());
                     }
                 };
                 self.state
@@ -413,7 +420,7 @@ impl<'state> ReplayContext<'state> {
                         paused: paused.clone(),
                     };
                     self.write_state()?;
-                    return Ok(ApplyOutcome::Paused { paused });
+                    return Ok(());
                 }
             }
 
@@ -460,14 +467,15 @@ impl<'state> ReplayContext<'state> {
                     paused: paused.clone(),
                 };
                 self.write_state()?;
-                return Ok(ApplyOutcome::Paused { paused });
+                return Ok(());
             }
             self.state.phase = Phase::Replay { current: None };
             self.write_state()?;
         }
 
-        self.state.phase = Phase::Replay { current: None };
-        Ok(ApplyOutcome::Complete)
+        self.state.phase = Phase::FinalUpdate;
+        self.write_state()?;
+        Ok(())
     }
 
     fn resolve_conflict(&mut self, current: CurrentState) -> Result<()> {

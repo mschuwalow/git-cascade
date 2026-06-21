@@ -40,8 +40,15 @@ pub enum Phase {
     },
     Conflict {
         current: CurrentState,
+        message: String,
+    },
+    ContinueAfterConflict {
+        current: CurrentState,
     },
     Paused {
+        paused: PausedState,
+    },
+    ContinueAfterPause {
         paused: PausedState,
     },
     FinalUpdate,
@@ -55,7 +62,9 @@ impl Phase {
         match self {
             Self::Replay { .. } => "replay",
             Self::Conflict { .. } => "conflict",
+            Self::ContinueAfterConflict { .. } => "continue_after_conflict",
             Self::Paused { .. } => "paused",
+            Self::ContinueAfterPause { .. } => "continue_after_pause",
             Self::FinalUpdate => "final_update",
             Self::Deleting { .. } => "deleting",
         }

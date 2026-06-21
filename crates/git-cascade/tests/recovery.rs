@@ -2,8 +2,7 @@ mod common;
 
 use common::repo::TestRepo;
 use git_cascade::state::{
-    ApplyState, CurrentState, PausedState, Phase, ReplayMode, RestoreState,
-    WorktreeState,
+    ApplyState, CurrentState, PausedState, Phase, ReplayMode, RestoreState, WorktreeState,
 };
 use predicates::prelude::*;
 
@@ -786,14 +785,12 @@ fn rewrite_anchor(repo: &TestRepo) {
 }
 
 fn deleting_phase() -> Phase {
-    Phase::Deleting {
-        delete_plan: false,
-    }
+    Phase::Deleting { delete_plan: false }
 }
 
 fn conflict_current(state: &ApplyState) -> CurrentState {
     match &state.phase {
-        Phase::Conflict { current }
+        Phase::Conflict { current, .. }
         | Phase::Replay {
             current: Some(current),
         } => current.clone(),

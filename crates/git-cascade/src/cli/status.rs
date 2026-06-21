@@ -1,7 +1,7 @@
-use crate::Result;
 use crate::git::Git;
-use crate::state::{Phase, read_state};
+use crate::state::{read_state, Phase};
 use crate::storage::Storage;
+use crate::Result;
 
 pub(super) fn status() -> Result<()> {
     let git = Git::current_dir()?;
@@ -29,13 +29,14 @@ fn status_output(storage: &Storage) -> Result<String> {
         Phase::Replay {
             current: Some(current),
         }
-        | Phase::Conflict { current } => {
+        | Phase::Conflict { current, .. }
+        | Phase::ContinueAfterConflict { current } => {
             output.push_str(&format!("current-branch: {}\n", current.branch));
             output.push_str(&format!("current-commit: {}\n", current.commit));
         }
         _ => output.push_str("current: none\n"),
     }
-    if let Phase::Paused { paused } = &state.phase {
+    if let Phase::Paused { paused } | Phase::ContinueAfterPause { paused } = &state.phase {
         match paused {
             crate::state::PausedState::BranchEnd { .. } => {
                 output.push_str("paused-kind: branch-end\n");

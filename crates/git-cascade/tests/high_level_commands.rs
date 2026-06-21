@@ -28,10 +28,9 @@ fn restack_current_branch_moves_dependents_to_current_parent_tips() {
     assert_eq!(repo.merge_base("pr-2", "pr-3"), repo.rev_parse("pr-2"));
     assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
-    assert!(
-        repo.git_output(["for-each-ref", "refs/heads/generated"])
-            .is_empty()
-    );
+    assert!(repo
+        .git_output(["for-each-ref", "refs/heads/generated"])
+        .is_empty());
 }
 
 #[test]
@@ -476,7 +475,7 @@ fn stack_on_non_root_main_tip() -> TestRepo {
 
 fn conflict_worktree(state: &ApplyState) -> String {
     match &state.phase {
-        Phase::Conflict { current } => current.worktree.clone(),
+        Phase::Conflict { current, .. } => current.worktree.clone(),
         phase => panic!("expected conflict phase, got {phase:?}"),
     }
 }
