@@ -292,6 +292,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         self.state.phase = Phase::Replay {
             current: Some(current),
         };
+        self.write_state()?;
         Ok(())
     }
 
@@ -336,7 +337,8 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 };
             }
         }
-        self.write_state()
+        self.write_state()?;
+        Ok(())
     }
 
     fn skip_replay_at_existing_base(
