@@ -85,7 +85,16 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     })?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
-    ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run(false)?;
+    {
+        let mut replay = ReplayContext::new(plan, &mut state_writer, &mut backend, state)?;
+        loop {
+            match replay.run()? {
+                ApplyOutcome::Complete => break,
+                ApplyOutcome::Paused { paused } => replay.continue_after_pause(paused),
+                ApplyOutcome::Conflict { .. } => break,
+            }
+        }
+    }
 
     Ok(backend.finish())
 }
@@ -144,7 +153,7 @@ pub fn execute(
     }
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git, storage);
-    ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run(true)
+    ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run()
 }
 
 pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
@@ -164,7 +173,7 @@ pub fn continue_apply(git: &Git, storage: &Storage) -> Result<ApplyOutcome> {
         // Branch refs are not re-checked here: they may legitimately already
         // point at rewritten tips when resuming a final update.
         validate_plan(git, &plan)?;
-        ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?.run(true)
+        ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?.run()
     }
 }
 
@@ -258,7 +267,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         })
     }
 
-    fn run(mut self, stop_on_pause: bool) -> Result<ApplyOutcome> {
+    fn run(&mut self) -> Result<ApplyOutcome> {
         self.backend.start(&self.state)?;
         loop {
             match self.state.phase.clone() {
@@ -280,11 +289,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                     self.write_state()?;
                 }
                 Phase::Paused { paused } => {
-                    if stop_on_pause {
-                        return Ok(ApplyOutcome::Paused { paused });
-                    } else {
-                        self.state.phase = Phase::ContinueAfterPause { paused };
-                    }
+                    return Ok(ApplyOutcome::Paused { paused });
                 }
                 Phase::ContinueAfterPause { paused } => self.resume_paused_branch(paused)?,
                 Phase::Deleting { .. } => {
@@ -293,6 +298,10 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 }
             }
         }
+    }
+
+    fn continue_after_pause(&mut self, paused: PausedState) {
+        self.state.phase = Phase::ContinueAfterPause { paused };
     }
 
     fn replay_pending_branches(&mut self) -> Result<()> {
