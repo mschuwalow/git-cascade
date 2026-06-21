@@ -38,6 +38,12 @@ pub enum ApplyOutcome {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReplayBranchesOutcome {
+    Complete,
+    Stopped(ApplyOutcome),
+}
+
 struct ActualReplayContext<'a> {
     nodes: &'a HashMap<&'a str, &'a Node>,
     selected_bases: &'a HashMap<String, String>,
@@ -208,15 +214,19 @@ fn run_apply_state(
     loop {
         match state.phase.clone() {
             Phase::Replay { .. } => {
-                if let Some(outcome) = replay_pending_branches(plan, state_writer, backend, state)?
-                {
-                    return Ok(outcome);
+                match replay_pending_branches(plan, state_writer, backend, state)? {
+                    ReplayBranchesOutcome::Complete => {
+                        state.phase = Phase::FinalUpdate;
+                        state_writer.write_state(state)?;
+                    }
+                    ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused { paused }) => {
+                        if stop_on_pause {
+                            return Ok(ApplyOutcome::Paused { paused });
+                        }
+                        resume_paused_branch(plan, state_writer, backend, state, paused)?;
+                    }
+                    ReplayBranchesOutcome::Stopped(outcome) => return Ok(outcome),
                 }
-                if matches!(state.phase, Phase::Paused { .. }) {
-                    continue;
-                }
-                state.phase = Phase::FinalUpdate;
-                state_writer.write_state(state)?;
             }
             Phase::FinalUpdate => {
                 backend.final_update(plan, state)?;
@@ -333,7 +343,7 @@ fn replay_pending_branches(
     state_writer: &mut dyn StateWriter,
     backend: &mut dyn ReplayBackend,
     state: &mut ApplyState,
-) -> Result<Option<ApplyOutcome>> {
+) -> Result<ReplayBranchesOutcome> {
     let nodes = plan
         .nodes
         .iter()
@@ -437,7 +447,7 @@ fn replay_pending_branches(
                 backend.flatten_merge(node, &commit.oid, commit_index, commits.len())?;
                 mappings.insert(commit.oid.clone(), last_rewritten.clone());
                 if child_base_pause_commits.contains(&commit.oid) {
-                    checkpoint_paused_child_base(
+                    let paused = checkpoint_paused_child_base(
                         state,
                         state_writer,
                         &mappings,
@@ -446,7 +456,9 @@ fn replay_pending_branches(
                         &commit.oid,
                         &last_rewritten,
                     )?;
-                    return Ok(None);
+                    return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused {
+                        paused,
+                    }));
                 }
                 continue;
             }
@@ -466,13 +478,16 @@ fn replay_pending_branches(
                         state.mappings = mappings.clone();
                         state.completed.temp_refs = temp_refs.clone();
                         state_writer.write_state(state)?;
-                        return Ok(Some(ApplyOutcome::Conflict { current, message }));
+                        return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Conflict {
+                            current,
+                            message,
+                        }));
                     }
                 };
             mappings.insert(commit.oid.clone(), rewritten_commit.clone());
             last_rewritten = rewritten_commit;
             if child_base_pause_commits.contains(&commit.oid) {
-                checkpoint_paused_child_base(
+                let paused = checkpoint_paused_child_base(
                     state,
                     state_writer,
                     &mappings,
@@ -481,7 +496,9 @@ fn replay_pending_branches(
                     &commit.oid,
                     &last_rewritten,
                 )?;
-                return Ok(None);
+                return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused {
+                    paused,
+                }));
             }
         }
 
@@ -517,9 +534,11 @@ fn replay_pending_branches(
                     .unwrap_or_else(|| node.base().to_owned()),
                 worktree: state.worktree.path().to_owned(),
             });
-        checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, pause)?;
-        if matches!(state.phase, Phase::Paused { .. }) {
-            return Ok(None);
+        checkpoint_completed_branch(state, state_writer, &mappings, &temp_refs, pause.clone())?;
+        if let Some(paused) = pause {
+            return Ok(ReplayBranchesOutcome::Stopped(ApplyOutcome::Paused {
+                paused,
+            }));
         }
     }
 
@@ -527,7 +546,7 @@ fn replay_pending_branches(
     state.mappings = mappings;
     state.completed.temp_refs = temp_refs;
 
-    Ok(None)
+    Ok(ReplayBranchesOutcome::Complete)
 }
 
 fn checkpoint_paused_child_base(
@@ -538,18 +557,20 @@ fn checkpoint_paused_child_base(
     node: &Node,
     commit: &str,
     rewritten_tip: &str,
-) -> Result<()> {
+) -> Result<PausedState> {
+    let paused = PausedState::ChildBase {
+        branch: node.branch.clone(),
+        commit: commit.to_owned(),
+        rewritten_tip: rewritten_tip.to_owned(),
+        worktree: state.worktree.path().to_owned(),
+    };
     state.mappings = mappings.clone();
     state.completed.temp_refs = temp_refs.to_vec();
     state.phase = Phase::Paused {
-        paused: PausedState::ChildBase {
-            branch: node.branch.clone(),
-            commit: commit.to_owned(),
-            rewritten_tip: rewritten_tip.to_owned(),
-            worktree: state.worktree.path().to_owned(),
-        },
+        paused: paused.clone(),
     };
-    state_writer.write_state(state)
+    state_writer.write_state(state)?;
+    Ok(paused)
 }
 
 /// Persists progress after a branch finished so a crashed apply can resume
