@@ -25,5 +25,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+indoc = "2"
 predicates = "3"
 tempfile = "3"

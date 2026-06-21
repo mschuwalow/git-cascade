@@ -1,3 +1,4 @@
+use crate::test_hooks;
 use crate::{Error, Result};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -40,6 +41,7 @@ impl Git {
             .current_dir(&self.cwd)
             .args(&args)
             .output()?;
+        test_hooks::run("after-git-operation")?;
 
         if !output.status.success() {
             return Err(Error::Git {
@@ -79,6 +81,7 @@ impl Git {
             .current_dir(&self.cwd)
             .args(&args)
             .output()?;
+        test_hooks::run("after-git-operation")?;
 
         if !output.status.success() {
             if output
@@ -517,6 +520,7 @@ impl Git {
             .expect("stdin is piped")
             .write_all(commands.as_bytes())?;
         let output = child.wait_with_output()?;
+        test_hooks::run("after-git-operation")?;
 
         if output.status.success() {
             return Ok(());

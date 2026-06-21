@@ -2,8 +2,8 @@ mod common;
 
 use common::repo::TestRepo;
 use git_cascade::state::Phase;
+use indoc::indoc;
 use predicates::prelude::*;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -179,13 +179,71 @@ fn continue_finishes_successful_deleting_state() {
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
+#[test]
+fn continue_recovers_after_interruption_following_git_operations() {
+    let repo = clean_stack_with_rebased_root();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let hook = write_fail_active_git_operation_hook(&repo);
+    let count_path = repo.path().join("git-operation-hook-count");
+    let failures = 30;
+    let mut attempts = 0;
+
+    loop {
+        let mut command = repo.cascade();
+        if attempts == 0 {
+            command.args(["plan", "apply", "stack", "--new-tip", "pr-1"]);
+        } else {
+            command.arg("continue");
+        }
+        let output = command
+            .env("GIT_CASCADE_TEST_HOOK_AFTER_GIT_OPERATION", &hook)
+            .env("GIT_CASCADE_TEST_COMMON_DIR", repo.common_dir())
+            .env("GIT_CASCADE_TEST_HOOK_COUNT", &count_path)
+            .env("GIT_CASCADE_TEST_HOOK_FAILURES", failures.to_string())
+            .output()
+            .unwrap();
+
+        if output.status.success() {
+            break;
+        }
+
+        attempts += 1;
+        assert!(
+            attempts <= failures + 5,
+            "too many interrupted attempts\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("test hook `after-git-operation` failed"),
+            "unexpected failure\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(repo.common_dir().join("cascade/state.yaml").exists());
+    }
+
+    let count = std::fs::read_to_string(count_path)
+        .unwrap()
+        .trim()
+        .parse::<usize>()
+        .unwrap();
+    assert!(count > failures);
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
 fn write_move_anchor_hook(repo: &TestRepo) -> std::path::PathBuf {
     let path = repo.path().join("move-anchor-hook.sh");
-    let mut file = std::fs::File::create(&path).unwrap();
-    writeln!(file, "#!/bin/sh").unwrap();
-    writeln!(
-        file,
-        "git -C \"$GIT_CASCADE_TEST_REPO\" update-ref refs/heads/pr-1 refs/heads/main"
+    std::fs::write(
+        &path,
+        indoc! {r#"
+            #!/bin/sh
+            git -C "$GIT_CASCADE_TEST_REPO" update-ref refs/heads/pr-1 refs/heads/main
+        "#},
     )
     .unwrap();
 
@@ -197,11 +255,12 @@ fn write_move_anchor_hook(repo: &TestRepo) -> std::path::PathBuf {
 
 fn write_move_dependent_hook(repo: &TestRepo) -> std::path::PathBuf {
     let path = repo.path().join("move-dependent-hook.sh");
-    let mut file = std::fs::File::create(&path).unwrap();
-    writeln!(file, "#!/bin/sh").unwrap();
-    writeln!(
-        file,
-        "git -C \"$GIT_CASCADE_TEST_REPO\" update-ref refs/heads/pr-2 refs/heads/main"
+    std::fs::write(
+        &path,
+        indoc! {r#"
+            #!/bin/sh
+            git -C "$GIT_CASCADE_TEST_REPO" update-ref refs/heads/pr-2 refs/heads/main
+        "#},
     )
     .unwrap();
 
@@ -213,9 +272,38 @@ fn write_move_dependent_hook(repo: &TestRepo) -> std::path::PathBuf {
 
 fn write_failing_hook(repo: &TestRepo, name: &str) -> std::path::PathBuf {
     let path = repo.path().join(name);
-    let mut file = std::fs::File::create(&path).unwrap();
-    writeln!(file, "#!/bin/sh").unwrap();
-    writeln!(file, "exit 1").unwrap();
+    std::fs::write(
+        &path,
+        indoc! {r#"
+            #!/bin/sh
+            exit 1
+        "#},
+    )
+    .unwrap();
+
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+fn write_fail_active_git_operation_hook(repo: &TestRepo) -> std::path::PathBuf {
+    let path = repo.path().join("fail-active-git-operation-hook.sh");
+    std::fs::write(
+        &path,
+        indoc! {r#"
+            #!/bin/sh
+            state="$GIT_CASCADE_TEST_COMMON_DIR/cascade/state.yaml"
+            [ -f "$state" ] || exit 0
+            count=0
+            [ -f "$GIT_CASCADE_TEST_HOOK_COUNT" ] && count=$(cat "$GIT_CASCADE_TEST_HOOK_COUNT")
+            count=$((count + 1))
+            echo "$count" > "$GIT_CASCADE_TEST_HOOK_COUNT"
+            [ "$count" -le "$GIT_CASCADE_TEST_HOOK_FAILURES" ] && exit 1
+            exit 0
+        "#},
+    )
+    .unwrap();
 
     let mut permissions = std::fs::metadata(&path).unwrap().permissions();
     permissions.set_mode(0o755);
