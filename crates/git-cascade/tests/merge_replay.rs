@@ -441,7 +441,7 @@ fn double_merge_stack() -> TestRepo {
     repo
 }
 
-fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
+fn read_state(repo: &TestRepo) -> git_cascade::replay::ReplayState {
     let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }

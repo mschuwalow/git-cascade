@@ -2,8 +2,7 @@ use super::handle_apply_outcome;
 use super::landed as landed_inference;
 use crate::git::Git;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
-use crate::replay::{ApplyOptions, dry_run, execute};
-use crate::state::Strategy;
+use crate::replay::{ReplayOptions, Strategy, dry_run, execute};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -175,7 +174,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                 options.git,
                 options.storage,
                 &plan,
-                ApplyOptions {
+                ReplayOptions {
                     plan_name: options.generate.name,
                     new_tip_input: options.new_tip,
                     strategy: options.run.strategy,
@@ -193,7 +192,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
         options.git,
         options.storage,
         &plan,
-        ApplyOptions {
+        ReplayOptions {
             plan_name: options.generate.name.clone(),
             new_tip_input: options.new_tip,
             strategy: options.run.strategy,

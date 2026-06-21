@@ -1,7 +1,8 @@
-use crate::git::Git;
-use crate::state::{read_state, Phase};
-use crate::storage::Storage;
 use crate::Result;
+use crate::git::Git;
+use crate::replay::state::read_state;
+use crate::replay::{PausedState, Phase};
+use crate::storage::Storage;
 
 pub(super) fn status() -> Result<()> {
     let git = Git::current_dir()?;
@@ -38,10 +39,10 @@ fn status_output(storage: &Storage) -> Result<String> {
     }
     if let Phase::Paused { paused } | Phase::ContinueAfterPause { paused } = &state.phase {
         match paused {
-            crate::state::PausedState::BranchEnd { .. } => {
+            PausedState::BranchEnd { .. } => {
                 output.push_str("paused-kind: branch-end\n");
             }
-            crate::state::PausedState::ChildBase { commit, .. } => {
+            PausedState::ChildBase { commit, .. } => {
                 output.push_str("paused-kind: child-base\n");
                 output.push_str(&format!("paused-commit: {commit}\n"));
             }

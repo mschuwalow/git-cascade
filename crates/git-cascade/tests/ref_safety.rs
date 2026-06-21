@@ -1,7 +1,7 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::state::Phase;
+use git_cascade::replay::{Phase, ReplayState};
 use indoc::indoc;
 use predicates::prelude::*;
 use std::os::unix::fs::PermissionsExt;
@@ -259,7 +259,7 @@ fn clean_stack_with_rebased_root() -> TestRepo {
     repo
 }
 
-fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
+fn read_state(repo: &TestRepo) -> ReplayState {
     let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }

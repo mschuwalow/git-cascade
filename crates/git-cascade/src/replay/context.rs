@@ -1,7 +1,7 @@
-use super::{run_deleting_state, ReplayOutcome};
+use super::state::{CurrentState, PausedState, Phase, ReplayState, Strategy};
+use super::{ReplayOutcome, run_deleting_state};
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::replay_backend::{CherryPickOutcome, ReplayBackend};
-use crate::state::{ApplyState, CurrentState, PausedState, Phase, Strategy};
 use crate::state_writer::StateWriter;
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -11,7 +11,7 @@ pub(super) struct ReplayContext<'plan, 'state> {
     plan: &'plan Plan,
     state_writer: &'state mut dyn StateWriter,
     backend: &'state mut dyn ReplayBackend,
-    state: ApplyState,
+    state: ReplayState,
     nodes: HashMap<String, usize>,
     temp_tips: HashMap<String, String>,
     selected_bases: HashMap<String, String>,
@@ -22,7 +22,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         plan: &'plan Plan,
         state_writer: &'state mut dyn StateWriter,
         backend: &'state mut dyn ReplayBackend,
-        state: ApplyState,
+        state: ReplayState,
     ) -> Result<Self> {
         let nodes = plan
             .nodes
@@ -47,7 +47,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
     pub(super) fn run(&mut self) -> Result<ReplayOutcome> {
         self.backend.start(&self.state)?;
         loop {
-            match self.state.phase.clone() {
+            match &self.state.phase {
                 Phase::Replay { .. } => {
                     self.replay_pending_branches()?;
                 }
@@ -59,16 +59,23 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                     test_hooks::run("after-deleting-state-written")?;
                 }
                 Phase::Conflict { current, message } => {
-                    return Ok(ReplayOutcome::Conflict { current, message });
+                    return Ok(ReplayOutcome::Conflict {
+                        current: current.clone(),
+                        message: message.clone(),
+                    });
                 }
                 Phase::ContinueAfterConflict { current } => {
-                    self.resolve_conflict(current)?;
+                    self.resolve_conflict(current.clone())?;
                     self.state_writer.write_state(&mut self.state)?;
                 }
                 Phase::Paused { paused } => {
-                    return Ok(ReplayOutcome::Paused { paused });
+                    return Ok(ReplayOutcome::Paused {
+                        paused: paused.clone(),
+                    });
                 }
-                Phase::ContinueAfterPause { paused } => self.resume_paused_branch(paused)?,
+                Phase::ContinueAfterPause { paused } => {
+                    self.resume_paused_branch(paused.clone())?
+                }
                 Phase::Deleting { .. } => {
                     run_deleting_state(self.state_writer, self.backend, &mut self.state)?;
                     return Ok(ReplayOutcome::Complete);
@@ -80,12 +87,16 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
     pub(super) fn continue_after_pause(&mut self) {
         match &self.state.phase {
             Phase::Conflict { current, .. } => {
-                self.state.phase = Phase::ContinueAfterConflict { current: current.clone() };
+                self.state.phase = Phase::ContinueAfterConflict {
+                    current: current.clone(),
+                };
             }
             Phase::Paused { paused } => {
-                self.state.phase = Phase::ContinueAfterPause { paused: paused.clone() };
+                self.state.phase = Phase::ContinueAfterPause {
+                    paused: paused.clone(),
+                };
             }
-            _ => { },
+            _ => {}
         };
     }
 

@@ -1,7 +1,7 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::state::{ApplyState, Phase};
+use git_cascade::replay::{Phase, ReplayState};
 use predicates::prelude::*;
 
 #[test]
@@ -28,9 +28,10 @@ fn restack_current_branch_moves_dependents_to_current_parent_tips() {
     assert_eq!(repo.merge_base("pr-2", "pr-3"), repo.rev_parse("pr-2"));
     assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
-    assert!(repo
-        .git_output(["for-each-ref", "refs/heads/generated"])
-        .is_empty());
+    assert!(
+        repo.git_output(["for-each-ref", "refs/heads/generated"])
+            .is_empty()
+    );
 }
 
 #[test]
@@ -103,7 +104,7 @@ fn restack_conflict_keeps_generated_plan_for_continue() {
         ));
 
     let state_path = repo.common_dir().join("cascade/state.yaml");
-    let state: ApplyState =
+    let state: ReplayState =
         serde_yaml::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
     let plan_name = state.plan_name.clone();
     assert!(repo.plan_path(plan_name.as_str()).exists());
@@ -473,7 +474,7 @@ fn stack_on_non_root_main_tip() -> TestRepo {
     repo
 }
 
-fn conflict_worktree(state: &ApplyState) -> String {
+fn conflict_worktree(state: &ReplayState) -> String {
     match &state.phase {
         Phase::Conflict { current, .. } => current.worktree.clone(),
         phase => panic!("expected conflict phase, got {phase:?}"),

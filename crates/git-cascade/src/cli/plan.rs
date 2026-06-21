@@ -2,8 +2,8 @@ use super::handle_apply_outcome;
 use crate::Result;
 use crate::git::Git;
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
-use crate::replay::{ApplyOptions, dry_run, execute};
-use crate::state::{Strategy, read_state};
+use crate::replay::state::read_state;
+use crate::replay::{ReplayOptions, Strategy, dry_run, execute};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -120,7 +120,7 @@ fn apply(
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let plan = Plan::from_yaml(&storage.read_plan(&name)?)?;
-    let options = ApplyOptions {
+    let options = ReplayOptions {
         plan_name: name,
         new_tip_input: new_tip.to_owned(),
         strategy,

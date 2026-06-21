@@ -11,26 +11,6 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyState {
-    pub version: u32,
-    pub phase: Phase,
-    pub plan_name: PlanName,
-    pub plan_id: PlanId,
-    pub started_at: String,
-    pub updated_at: String,
-    pub pid: u32,
-    pub new_tip: String,
-    pub strategy: Strategy,
-    pub replay_mode: ReplayMode,
-    pub worktree: WorktreeState,
-    pub completed_temp_refs: Vec<String>,
-    pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
-    pub mappings: BTreeMap<String, String>,
-    pub pending_branches: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
@@ -222,6 +202,26 @@ pub enum RestoreState {
     Detached { head: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayState {
+    pub version: u32,
+    pub phase: Phase,
+    pub plan_name: PlanName,
+    pub plan_id: PlanId,
+    pub started_at: String,
+    pub updated_at: String,
+    pub pid: u32,
+    pub new_tip: String,
+    pub strategy: Strategy,
+    pub replay_mode: ReplayMode,
+    pub worktree: WorktreeState,
+    pub completed_temp_refs: Vec<String>,
+    pub branch_tips: BTreeMap<String, String>,
+    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
+    pub mappings: BTreeMap<String, String>,
+    pub pending_branches: Vec<String>,
+}
+
 pub struct StateFile {
     path: PathBuf,
     lock_file: File,
@@ -243,7 +243,7 @@ fn acquire_lock(lock_file: &File, lock_path: &Path) -> Result<()> {
 }
 
 impl StateFile {
-    pub fn create(storage: &Storage, state: &ApplyState) -> Result<Self> {
+    pub fn create(storage: &Storage, state: &ReplayState) -> Result<Self> {
         storage.ensure_cascade_dir()?;
         let path = storage.state_path();
         let lock_path = storage.state_lock_path();
@@ -298,7 +298,7 @@ impl StateFile {
         Ok(Some(Self { path, lock_file }))
     }
 
-    pub fn read_state(&mut self) -> Result<ApplyState> {
+    pub fn read_state(&mut self) -> Result<ReplayState> {
         let content = fs::read_to_string(&self.path).map_err(|source| Error::IoWithPath {
             path: self.path.clone(),
             source,
@@ -306,7 +306,7 @@ impl StateFile {
         Ok(serde_yaml::from_str(&content)?)
     }
 
-    pub fn write_state(&mut self, state: &mut ApplyState) -> Result<()> {
+    pub fn write_state(&mut self, state: &mut ReplayState) -> Result<()> {
         state.updated_at = timestamp()?;
         self.write_state_without_touching_timestamp(state)
     }
@@ -329,7 +329,7 @@ impl StateFile {
         }
     }
 
-    fn write_state_without_touching_timestamp(&mut self, state: &ApplyState) -> Result<()> {
+    fn write_state_without_touching_timestamp(&mut self, state: &ReplayState) -> Result<()> {
         let yaml = serde_yaml::to_string(state)?;
         let temp_path = self
             .path
@@ -361,7 +361,7 @@ impl StateFile {
     }
 }
 
-pub fn read_state(storage: &Storage) -> Result<Option<ApplyState>> {
+pub fn read_state(storage: &Storage) -> Result<Option<ReplayState>> {
     let path = storage.state_path();
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
@@ -372,7 +372,7 @@ pub fn read_state(storage: &Storage) -> Result<Option<ApplyState>> {
     Ok(Some(serde_yaml::from_str(&content)?))
 }
 
-pub struct InitialApplyStateInput<'a> {
+pub struct InitialReplayStateInput<'a> {
     pub plan_name: &'a PlanName,
     pub plan_id: &'a PlanId,
     pub new_tip: &'a str,
@@ -385,10 +385,10 @@ pub struct InitialApplyStateInput<'a> {
     pub worktree: WorktreeState,
 }
 
-pub fn initial_apply_state(input: InitialApplyStateInput<'_>) -> Result<ApplyState> {
+pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<ReplayState> {
     let now = timestamp()?;
 
-    Ok(ApplyState {
+    Ok(ReplayState {
         version: 1,
         phase: Phase::Replay { current: None },
         plan_name: input.plan_name.clone(),
@@ -404,7 +404,7 @@ pub fn initial_apply_state(input: InitialApplyStateInput<'_>) -> Result<ApplySta
         branch_tips: input.branch_tips,
         extra_commits: input.extra_commits,
         mappings: input.mappings,
-        pending_branches: input.pending_branches
+        pending_branches: input.pending_branches,
     })
 }
 

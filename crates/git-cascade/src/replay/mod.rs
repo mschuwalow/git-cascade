@@ -1,24 +1,26 @@
 use crate::git::Git;
 mod context;
+pub mod state;
 
 use crate::plan::{
-    branches_in_topological_order, validate_branch_refs, validate_merge_parents_for_apply,
-    validate_plan, BranchRef, Plan, PlanCommit, PlanName,
+    BranchRef, Plan, PlanCommit, PlanName, branches_in_topological_order, validate_branch_refs,
+    validate_merge_parents_for_apply, validate_plan,
 };
 use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
-use crate::state::{
-    initial_apply_state, ApplyState, CurrentState, InitialApplyStateInput, PausedState, Phase,
-    ReplayMode, RestoreState, StateFile, Strategy, WorktreeState,
-};
 use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::Storage;
 use crate::{Error, Result};
 use context::ReplayContext;
+pub use state::{
+    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, Strategy,
+    WorktreeState,
+};
+use state::{InitialReplayStateInput, StateFile, initial_replay_state};
 use std::collections::BTreeMap;
 use std::fs;
 
 #[derive(Debug, Clone)]
-pub struct ApplyOptions {
+pub struct ReplayOptions {
     pub plan_name: PlanName,
     pub new_tip_input: String,
     pub strategy: Strategy,
@@ -38,7 +40,12 @@ pub enum ReplayOutcome {
     },
 }
 
-pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions) -> Result<String> {
+pub fn dry_run(
+    git: &Git,
+    storage: &Storage,
+    plan: &Plan,
+    options: ReplayOptions,
+) -> Result<String> {
     validate_plan(git, plan)?;
     let branch_refs = validate_branch_refs(git, plan)?;
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
@@ -61,7 +68,7 @@ pub fn dry_run(git: &Git, storage: &Storage, plan: &Plan, options: ApplyOptions)
     };
     let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
     let mappings = BTreeMap::new();
-    let state = initial_apply_state(InitialApplyStateInput {
+    let state = initial_replay_state(InitialReplayStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
@@ -93,7 +100,7 @@ pub fn execute(
     git: &Git,
     storage: &Storage,
     plan: &Plan,
-    options: ApplyOptions,
+    options: ReplayOptions,
 ) -> Result<ReplayOutcome> {
     validate_plan(git, plan)?;
     let branch_refs = validate_branch_refs(git, plan)?;
@@ -123,7 +130,7 @@ pub fn execute(
     };
     let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
     let mappings = BTreeMap::new();
-    let state = initial_apply_state(InitialApplyStateInput {
+    let state = initial_replay_state(InitialReplayStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
@@ -195,7 +202,7 @@ fn restore_state(git: &Git) -> Result<RestoreState> {
     })
 }
 
-fn replay_mode(options: &ApplyOptions) -> ReplayMode {
+fn replay_mode(options: &ReplayOptions) -> ReplayMode {
     if options.pause_at_checkpoints {
         ReplayMode::PauseAtCheckpoints
     } else {
@@ -206,7 +213,7 @@ fn replay_mode(options: &ApplyOptions) -> ReplayMode {
 fn run_deleting_state(
     state_writer: &mut dyn StateWriter,
     backend: &mut dyn ReplayBackend,
-    state: &mut ApplyState,
+    state: &mut ReplayState,
 ) -> Result<()> {
     let delete_plan = match &state.phase {
         Phase::Deleting { delete_plan } => *delete_plan,

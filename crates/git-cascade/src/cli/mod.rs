@@ -5,8 +5,7 @@ mod status;
 
 use crate::Result;
 use crate::git::Git;
-use crate::replay::{ReplayOutcome, abort as abort_apply, continue_apply};
-use crate::state::{PausedState, Strategy};
+use crate::replay::{PausedState, ReplayOutcome, Strategy, abort as abort_apply, continue_apply};
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};

@@ -1,7 +1,7 @@
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
-use crate::state::{ApplyState, CurrentState, PausedState, RestoreState, WorktreeState};
+use crate::replay::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -11,12 +11,12 @@ use std::fs;
 use std::path::PathBuf;
 
 pub(crate) trait ReplayBackend {
-    fn start(&mut self, state: &ApplyState) -> Result<()>;
+    fn start(&mut self, state: &ReplayState) -> Result<()>;
     fn no_branches(&mut self) -> Result<()>;
     fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<String, String>>;
     fn prepare_branch(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         branch_index: usize,
         total_branches: usize,
         node: &Node,
@@ -33,7 +33,7 @@ pub(crate) trait ReplayBackend {
     ) -> Result<()>;
     fn cherry_pick(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         node: &Node,
         commit: &str,
         commit_index: usize,
@@ -49,10 +49,11 @@ pub(crate) trait ReplayBackend {
     ) -> Result<()>;
     fn continue_cherry_pick(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         current: &CurrentState,
     ) -> Result<String>;
-    fn resume_paused_branch(&mut self, state: &ApplyState, paused: &PausedState) -> Result<String>;
+    fn resume_paused_branch(&mut self, state: &ReplayState, paused: &PausedState)
+    -> Result<String>;
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -69,9 +70,9 @@ pub(crate) trait ReplayBackend {
         total_branches: usize,
         rewritten_tip: &str,
     ) -> Result<(String, String)>;
-    fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()>;
-    fn delete_applied_plan(&mut self, state: &ApplyState) -> Result<()>;
-    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()>;
+    fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
+    fn delete_applied_plan(&mut self, state: &ReplayState) -> Result<()>;
+    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()>;
 }
 
 pub(crate) enum CherryPickOutcome {
@@ -91,7 +92,7 @@ impl<'a> GitReplayBackend<'a> {
 }
 
 impl ReplayBackend for GitReplayBackend<'_> {
-    fn start(&mut self, state: &ApplyState) -> Result<()> {
+    fn start(&mut self, state: &ReplayState) -> Result<()> {
         eprintln!(
             "Applying cascade plan `{}` with strategy `{}` in {} worktree mode ({})",
             state.plan_name, state.strategy, state.worktree, state.replay_mode
@@ -110,7 +111,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn prepare_branch(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         branch_index: usize,
         total_branches: usize,
         node: &Node,
@@ -160,7 +161,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn cherry_pick(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         _node: &Node,
         commit: &str,
         commit_index: usize,
@@ -247,7 +248,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn continue_cherry_pick(
         &mut self,
-        _state: &ApplyState,
+        _state: &ReplayState,
         current: &CurrentState,
     ) -> Result<String> {
         let worktree = std::path::PathBuf::from(&current.worktree);
@@ -284,7 +285,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn resume_paused_branch(
         &mut self,
-        _state: &ApplyState,
+        _state: &ReplayState,
         paused: &PausedState,
     ) -> Result<String> {
         let worktree = std::path::PathBuf::from(paused.worktree());
@@ -315,16 +316,16 @@ impl ReplayBackend for GitReplayBackend<'_> {
         Ok(head)
     }
 
-    fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
+    fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()> {
         eprintln!("Updating branch refs");
         finish_final_update(self.git, plan, state)
     }
 
-    fn delete_applied_plan(&mut self, state: &ApplyState) -> Result<()> {
+    fn delete_applied_plan(&mut self, state: &ReplayState) -> Result<()> {
         self.storage.delete_plan_if_exists(state.plan_name.clone())
     }
 
-    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
+    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()> {
         eprintln!("Cleaning temporary cascade state");
         let worktree = worktree_path(self.storage, state);
         if worktree.exists() {
@@ -372,7 +373,7 @@ impl DryRunReplayBackend {
         git: &Git,
         storage: &Storage,
         plan: &Plan,
-        state: &ApplyState,
+        state: &ReplayState,
     ) -> Result<Self> {
         let mut output = String::new();
         writeln!(output, "# git-cascade apply --dry-run").unwrap();
@@ -404,7 +405,7 @@ impl DryRunReplayBackend {
 }
 
 impl ReplayBackend for DryRunReplayBackend {
-    fn start(&mut self, _state: &ApplyState) -> Result<()> {
+    fn start(&mut self, _state: &ReplayState) -> Result<()> {
         Ok(())
     }
 
@@ -418,7 +419,7 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn prepare_branch(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         _branch_index: usize,
         _total_branches: usize,
         node: &Node,
@@ -467,7 +468,7 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn cherry_pick(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         node: &Node,
         commit: &str,
         _commit_index: usize,
@@ -543,7 +544,7 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn continue_cherry_pick(
         &mut self,
-        _state: &ApplyState,
+        _state: &ReplayState,
         current: &CurrentState,
     ) -> Result<String> {
         Ok(format!("<rewritten {}:{}>", current.branch, current.commit))
@@ -551,7 +552,7 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn resume_paused_branch(
         &mut self,
-        _state: &ApplyState,
+        _state: &ReplayState,
         paused: &PausedState,
     ) -> Result<String> {
         writeln!(self.output).unwrap();
@@ -572,7 +573,7 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(paused.rewritten_tip().to_owned())
     }
 
-    fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
+    fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()> {
         writeln!(self.output).unwrap();
         writeln!(self.output, "# final ref transaction").unwrap();
         writeln!(self.output, "git update-ref --stdin <<'EOF'").unwrap();
@@ -585,11 +586,11 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn delete_applied_plan(&mut self, _state: &ApplyState) -> Result<()> {
+    fn delete_applied_plan(&mut self, _state: &ReplayState) -> Result<()> {
         Ok(())
     }
 
-    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
+    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()> {
         let WorktreeState::InPlace { path, restore } = &state.worktree else {
             return Ok(());
         };
@@ -616,7 +617,7 @@ fn is_empty_cherry_pick(worktree_git: &Git) -> Result<bool> {
         && !worktree_git.has_staged_changes()?)
 }
 
-fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()> {
+fn finish_final_update(git: &Git, plan: &Plan, state: &ReplayState) -> Result<()> {
     let branches = plan
         .nodes
         .iter()
@@ -746,7 +747,7 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
     )))
 }
 
-fn worktree_path(storage: &Storage, state: &ApplyState) -> PathBuf {
+fn worktree_path(storage: &Storage, state: &ReplayState) -> PathBuf {
     if state.worktree.path().is_empty() {
         storage.worktrees_dir().join(state.plan_id.to_string())
     } else {

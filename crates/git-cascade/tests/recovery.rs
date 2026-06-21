@@ -1,8 +1,8 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::state::{
-    ApplyState, CurrentState, PausedState, Phase, ReplayMode, RestoreState, WorktreeState,
+use git_cascade::replay::{
+    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
 };
 use predicates::prelude::*;
 
@@ -788,7 +788,7 @@ fn deleting_phase() -> Phase {
     Phase::Deleting { delete_plan: false }
 }
 
-fn conflict_current(state: &ApplyState) -> CurrentState {
+fn conflict_current(state: &ReplayState) -> CurrentState {
     match &state.phase {
         Phase::Conflict { current, .. }
         | Phase::Replay {
@@ -798,19 +798,19 @@ fn conflict_current(state: &ApplyState) -> CurrentState {
     }
 }
 
-fn paused_state(state: &ApplyState) -> &PausedState {
+fn paused_state(state: &ReplayState) -> &PausedState {
     match &state.phase {
         Phase::Paused { paused } => paused,
         phase => panic!("expected paused phase, got {phase:?}"),
     }
 }
 
-fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
+fn read_state(repo: &TestRepo) -> ReplayState {
     let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }
 
-fn write_state(repo: &TestRepo, state: &git_cascade::state::ApplyState) {
+fn write_state(repo: &TestRepo, state: &ReplayState) {
     let content = serde_yaml::to_string(state).unwrap();
     std::fs::write(repo.common_dir().join("cascade/state.yaml"), content).unwrap();
 }
