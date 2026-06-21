@@ -265,6 +265,16 @@ impl ReplayBackend for GitReplayBackend<'_> {
             return worktree_git.head_oid();
         }
 
+        if !worktree_git.cherry_pick_in_progress()? {
+            if worktree_git.has_staged_changes()? {
+                return Err(Error::InvalidInvocation(format!(
+                    "worktree {} has staged changes but no cherry-pick in progress; commit, stash, or discard them before continuing",
+                    worktree.display()
+                )));
+            }
+            return worktree_git.head_oid();
+        }
+
         worktree_git.cherry_pick_continue()?;
         worktree_git.head_oid()
     }
