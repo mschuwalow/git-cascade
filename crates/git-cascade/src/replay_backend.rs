@@ -124,10 +124,10 @@ impl ReplayBackend for GitReplayBackend<'_> {
         let worktree_git = Git::new(&worktree);
         if state.worktree.is_in_place() && state.completed_temp_refs.is_empty() {
             // A stale cherry-pick can linger after a crashed replay.
-            let _ = worktree_git.try_cherry_pick_abort();
+            worktree_git.try_cherry_pick_abort()?;
             worktree_git.switch_detached(base)
         } else if worktree.exists() {
-            let _ = worktree_git.try_cherry_pick_abort();
+            worktree_git.try_cherry_pick_abort()?;
             worktree_git.reset_hard(base)
         } else {
             self.git.worktree_add_detached(&worktree, base)
@@ -329,7 +329,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         let worktree = worktree_path(self.storage, state);
         if worktree.exists() {
             let worktree_git = Git::new(&worktree);
-            let _ = worktree_git.try_cherry_pick_abort();
+            worktree_git.try_cherry_pick_abort()?;
             if let WorktreeState::InPlace { restore, .. } = &state.worktree {
                 match restore {
                     RestoreState::Branch { name, .. } => worktree_git.switch_branch(name)?,
@@ -345,11 +345,11 @@ impl ReplayBackend for GitReplayBackend<'_> {
                 .refs_under(&format!("refs/cascade/tmp/{}", state.plan_id))?,
         );
         for temp_ref in refs {
-            let _ = self.git.delete_ref(&temp_ref);
+            self.git.delete_ref(&temp_ref)?;
         }
 
-        if state.worktree.is_temporary() {
-            let _ = self.git.worktree_remove_force(&worktree);
+        if state.worktree.is_temporary() && worktree.exists() {
+            self.git.worktree_remove_force(&worktree)?;
             if worktree.exists() {
                 fs::remove_dir_all(&worktree).map_err(|source| Error::IoWithPath {
                     path: worktree.clone(),
