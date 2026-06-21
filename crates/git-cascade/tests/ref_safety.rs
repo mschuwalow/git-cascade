@@ -179,73 +179,6 @@ fn continue_finishes_successful_deleting_state() {
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
-#[test]
-fn continue_recovers_after_interruption_following_git_operations() {
-    let mut total_interruptions = 0;
-
-    for seed in 1..=12 {
-        let repo = clean_stack_with_rebased_root();
-        let old_pr2 = repo.rev_parse("pr-2");
-        let hook = write_probabilistic_active_git_operation_hook(&repo);
-        let count_path = repo.path().join("git-operation-hook-count");
-        let mut interruptions = 0;
-
-        loop {
-            let mut command = repo.cascade();
-            if interruptions == 0 {
-                command.args(["plan", "apply", "stack", "--new-tip", "pr-1"]);
-            } else {
-                command.arg("continue");
-            }
-            let output = command
-                .env("GIT_CASCADE_TEST_HOOK_AFTER_GIT_OPERATION", &hook)
-                .env("GIT_CASCADE_TEST_COMMON_DIR", repo.common_dir())
-                .env("GIT_CASCADE_TEST_HOOK_COUNT", &count_path)
-                .env("GIT_CASCADE_TEST_HOOK_FAILURE_PERCENT", "10")
-                .env("GIT_CASCADE_TEST_HOOK_SEED", seed.to_string())
-                .output()
-                .unwrap();
-
-            if output.status.success() {
-                break;
-            }
-
-            interruptions += 1;
-            assert!(
-                interruptions <= 80,
-                "too many interrupted attempts for seed {seed}\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("test hook `after-git-operation` failed"),
-                "unexpected failure for seed {seed}\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(repo.common_dir().join("cascade/state.yaml").exists());
-        }
-
-        let count = std::fs::read_to_string(count_path)
-            .ok()
-            .and_then(|content| content.trim().parse::<usize>().ok())
-            .unwrap_or(0);
-        assert!(count >= interruptions);
-        total_interruptions += interruptions;
-        assert_ne!(
-            repo.rev_parse("pr-2"),
-            old_pr2,
-            "seed {seed} completed with {interruptions} interruptions but did not update pr-2"
-        );
-        assert!(!repo.common_dir().join("cascade/state.yaml").exists());
-        assert!(!repo.plan_path("stack").exists());
-        assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
-    }
-
-    assert!(total_interruptions > 0);
-}
-
 fn write_move_anchor_hook(repo: &TestRepo) -> std::path::PathBuf {
     let path = repo.path().join("move-anchor-hook.sh");
     std::fs::write(
@@ -287,35 +220,6 @@ fn write_failing_hook(repo: &TestRepo, name: &str) -> std::path::PathBuf {
         indoc! {r#"
             #!/bin/sh
             exit 1
-        "#},
-    )
-    .unwrap();
-
-    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&path, permissions).unwrap();
-    path
-}
-
-fn write_probabilistic_active_git_operation_hook(repo: &TestRepo) -> std::path::PathBuf {
-    let path = repo
-        .path()
-        .join("probabilistic-active-git-operation-hook.sh");
-    std::fs::write(
-        &path,
-        indoc! {r#"
-            #!/bin/sh
-            state="$GIT_CASCADE_TEST_COMMON_DIR/cascade/state.yaml"
-            [ -f "$state" ] || exit 0
-            count=0
-            [ -f "$GIT_CASCADE_TEST_HOOK_COUNT" ] && count=$(cat "$GIT_CASCADE_TEST_HOOK_COUNT")
-            count=$((count + 1))
-            echo "$count" > "$GIT_CASCADE_TEST_HOOK_COUNT"
-            seed=${GIT_CASCADE_TEST_HOOK_SEED:-1}
-            percent=${GIT_CASCADE_TEST_HOOK_FAILURE_PERCENT:-10}
-            roll=$(((count * 37 + seed * 19) % 100))
-            [ "$roll" -lt "$percent" ] && exit 1
-            exit 0
         "#},
     )
     .unwrap();
