@@ -1,21 +1,24 @@
-use crate::git::Git;
+mod backend;
 mod context;
 pub mod state;
+mod state_writer;
+
+use crate::git::Git;
 
 use crate::plan::{
     BranchRef, Plan, PlanCommit, PlanName, branches_in_topological_order, validate_branch_refs,
     validate_merge_parents_for_apply, validate_plan,
 };
-use crate::replay_backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
-use crate::state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use crate::storage::Storage;
+use crate::strategy::Strategy;
 use crate::{Error, Result};
+use backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use context::ReplayContext;
 pub use state::{
-    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, Strategy,
-    WorktreeState,
+    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
+use state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use std::collections::BTreeMap;
 use std::fs;
 

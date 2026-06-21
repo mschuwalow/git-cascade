@@ -1,7 +1,7 @@
+use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
-use crate::replay::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};

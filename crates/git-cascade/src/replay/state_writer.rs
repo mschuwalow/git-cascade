@@ -1,5 +1,5 @@
+use super::state::{ReplayState, StateFile};
 use crate::Result;
-use crate::replay::state::{ReplayState, StateFile};
 
 pub(crate) trait StateWriter {
     fn write_state(&mut self, state: &mut ReplayState) -> Result<()>;

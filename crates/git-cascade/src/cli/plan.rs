@@ -3,8 +3,9 @@ use crate::Result;
 use crate::git::Git;
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::replay::state::read_state;
-use crate::replay::{ReplayOptions, Strategy, dry_run, execute};
+use crate::replay::{ReplayOptions, dry_run, execute};
 use crate::storage::Storage;
+use crate::strategy::Strategy;
 use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]

@@ -1,8 +1,9 @@
-use super::state::{CurrentState, PausedState, Phase, ReplayState, Strategy};
+use super::backend::{CherryPickOutcome, ReplayBackend};
+use super::state::{CurrentState, PausedState, Phase, ReplayState};
+use super::state_writer::StateWriter;
 use super::{ReplayOutcome, run_deleting_state};
 use crate::plan::{Node, Plan, PlanCommit};
-use crate::replay_backend::{CherryPickOutcome, ReplayBackend};
-use crate::state_writer::StateWriter;
+use crate::strategy::Strategy;
 use crate::test_hooks;
 use crate::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -55,7 +56,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                     self.backend.final_update(self.plan, &self.state)?;
                     test_hooks::run("after-final-update")?;
                     self.state.phase = Phase::Deleting { delete_plan: true };
-                    self.state_writer.write_state(&mut self.state)?;
+                    self.write_state()?;
                     test_hooks::run("after-deleting-state-written")?;
                 }
                 Phase::Conflict { current, message } => {
@@ -66,7 +67,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 }
                 Phase::ContinueAfterConflict { current } => {
                     self.resolve_conflict(current.clone())?;
-                    self.state_writer.write_state(&mut self.state)?;
+                    self.write_state()?;
                 }
                 Phase::Paused { paused } => {
                     return Ok(ReplayOutcome::Paused {
@@ -142,7 +143,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 if base == node.base() {
                     self.skip_replay_at_existing_base(&node, &branch, &commits)?;
                     self.state.phase = Phase::Replay { current: None };
-                    self.state_writer.write_state(&mut self.state)?;
+                    self.write_state()?;
                     continue;
                 }
 
@@ -182,7 +183,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                         self.state.phase = Phase::Paused {
                             paused: paused.clone(),
                         };
-                        self.state_writer.write_state(&mut self.state)?;
+                        self.write_state()?;
                         return Ok(());
                     }
                     continue;
@@ -206,7 +207,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                             current: current.clone(),
                             message,
                         };
-                        self.state_writer.write_state(&mut self.state)?;
+                        self.write_state()?;
                         return Ok(());
                     }
                 };
@@ -224,7 +225,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                     self.state.phase = Phase::Paused {
                         paused: paused.clone(),
                     };
-                    self.state_writer.write_state(&mut self.state)?;
+                    self.write_state()?;
                     return Ok(());
                 }
             }
@@ -271,15 +272,15 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 self.state.phase = Phase::Paused {
                     paused: paused.clone(),
                 };
-                self.state_writer.write_state(&mut self.state)?;
+                self.write_state()?;
                 return Ok(());
             }
             self.state.phase = Phase::Replay { current: None };
-            self.state_writer.write_state(&mut self.state)?;
+            self.write_state()?;
         }
 
         self.state.phase = Phase::FinalUpdate;
-        self.state_writer.write_state(&mut self.state)?;
+        self.write_state()?;
         Ok(())
     }
 
@@ -335,7 +336,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 };
             }
         }
-        self.state_writer.write_state(&mut self.state)
+        self.write_state()
     }
 
     fn skip_replay_at_existing_base(
@@ -488,6 +489,10 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
 
     fn total_branches(&self) -> usize {
         self.plan.nodes.len()
+    }
+
+    fn write_state(&mut self) -> Result<()> {
+        self.state_writer.write_state(&mut self.state)
     }
 }
 
