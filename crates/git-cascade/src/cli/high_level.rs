@@ -1,10 +1,10 @@
 use super::handle_apply_outcome;
 use super::landed as landed_inference;
 use crate::git::Git;
+use crate::model::Strategy;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
 use crate::replay::{ReplayOptions, dry_run, execute};
 use crate::storage::Storage;
-use crate::strategy::Strategy;
 use crate::{Error, Result};
 
 pub(super) struct RunOptions {

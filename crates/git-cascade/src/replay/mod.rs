@@ -4,13 +4,13 @@ pub mod state;
 mod state_writer;
 
 use crate::git::Git;
+use crate::model::Strategy;
 
 use crate::plan::{
     BranchRef, Plan, PlanCommit, PlanName, branches_in_topological_order, validate_branch_refs,
     validate_merge_parents_for_apply, validate_plan,
 };
 use crate::storage::Storage;
-use crate::strategy::Strategy;
 use crate::{Error, Result};
 use backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
 use context::ReplayContext;

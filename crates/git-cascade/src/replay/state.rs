@@ -1,6 +1,6 @@
+use crate::model::Strategy;
 use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
-use crate::strategy::Strategy;
 use crate::{Error, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};

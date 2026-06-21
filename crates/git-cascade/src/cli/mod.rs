@@ -5,9 +5,9 @@ mod status;
 
 use crate::Result;
 use crate::git::Git;
+use crate::model::Strategy;
 use crate::replay::{PausedState, ReplayOutcome, abort as abort_apply, continue_apply};
 use crate::storage::Storage;
-use crate::strategy::Strategy;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use std::process::ExitCode;
