@@ -18,6 +18,11 @@ pub(super) struct ReplayContext<'plan, 'state> {
     selected_bases: HashMap<String, String>,
 }
 
+enum CommitReplay {
+    Continue(String),
+    Stop,
+}
+
 impl<'plan, 'state> ReplayContext<'plan, 'state> {
     pub(super) fn new(
         plan: &'plan Plan,
@@ -107,181 +112,216 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         }
 
         while let Some(branch) = self.state.pending_branches.first().cloned() {
-            let node = self.node(&branch)?.clone();
-            let branch_index = self.branch_index();
-            let commits = replay_commits_from_extra(&node, &self.state.extra_commits);
-            let replay_current = self.replay_current();
-            let was_resuming = replay_current.is_some();
-            let child_base_pause_commits = if self.state.replay_mode.pauses_at_checkpoints() {
-                child_base_pause_commits(self.plan, &node, self.state.strategy, &commits)
-            } else {
-                BTreeSet::new()
-            };
-
-            let (start_commit_index, mut last_rewritten) = if let Some(current) = replay_current {
-                let start = self.resume_start_commit_index(&node, &current, &commits)?;
-                self.state.phase = Phase::Replay { current: None };
-                let head = commits
-                    .get(start.wrapping_sub(1))
-                    .and_then(|commit| self.state.mappings.get(&commit.oid))
-                    .cloned()
-                    .ok_or_else(|| {
-                        Error::InvalidPlan(format!(
-                            "branch `{}` has no rewritten commit to resume from",
-                            node.branch
-                        ))
-                    })?;
-                (start, head)
-            } else {
-                let base = self.actual_replay_base(&node)?;
-                self.selected_bases
-                    .insert(node.branch.clone(), base.clone());
-                self.state
-                    .mappings
-                    .insert(node.base().to_owned(), base.clone());
-
-                if base == node.base() {
-                    self.skip_replay_at_existing_base(&node, &branch, &commits)?;
-                    self.state.phase = Phase::Replay { current: None };
-                    self.write_state()?;
-                    continue;
-                }
-
-                self.backend.prepare_branch(
-                    &self.state,
-                    branch_index,
-                    self.total_branches(),
-                    &node,
-                    &base,
-                )?;
-                (0, base)
-            };
-
-            self.backend.start_replay(
-                branch_index,
-                self.total_branches(),
-                &node,
-                commits.len(),
-                start_commit_index,
-                was_resuming,
-            )?;
-            for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
-                if commit.is_merge() {
-                    // The merged history is contained in the new base; flatten.
-                    self.backend
-                        .flatten_merge(&node, &commit.oid, commit_index, commits.len())?;
-                    self.state
-                        .mappings
-                        .insert(commit.oid.clone(), last_rewritten.clone());
-                    if child_base_pause_commits.contains(&commit.oid) {
-                        let paused = PausedState::ChildBase {
-                            branch: node.branch.clone(),
-                            commit: commit.oid.clone(),
-                            rewritten_tip: last_rewritten.clone(),
-                            worktree: self.state.worktree.path().to_owned(),
-                        };
-                        self.state.phase = Phase::Paused {
-                            paused: paused.clone(),
-                        };
-                        self.write_state()?;
-                        return Ok(());
-                    }
-                    continue;
-                }
-
-                let rewritten_commit = match self.backend.cherry_pick(
-                    &self.state,
-                    &node,
-                    &commit.oid,
-                    commit_index,
-                    commits.len(),
-                )? {
-                    CherryPickOutcome::Applied(rewritten_commit) => rewritten_commit,
-                    CherryPickOutcome::Conflict { message } => {
-                        let current = CurrentState {
-                            branch: node.branch.clone(),
-                            commit: commit.oid.clone(),
-                            worktree: self.state.worktree.path().to_owned(),
-                        };
-                        self.state.phase = Phase::Conflict {
-                            current: current.clone(),
-                            message,
-                        };
-                        self.write_state()?;
-                        return Ok(());
-                    }
-                };
-                self.state
-                    .mappings
-                    .insert(commit.oid.clone(), rewritten_commit.clone());
-                last_rewritten = rewritten_commit;
-                if child_base_pause_commits.contains(&commit.oid) {
-                    let paused = PausedState::ChildBase {
-                        branch: node.branch.clone(),
-                        commit: commit.oid.clone(),
-                        rewritten_tip: last_rewritten.clone(),
-                        worktree: self.state.worktree.path().to_owned(),
-                    };
-                    self.state.phase = Phase::Paused {
-                        paused: paused.clone(),
-                    };
-                    self.write_state()?;
-                    return Ok(());
-                }
-            }
-
-            let rewritten_tip = if let Some(commit) = commits.last() {
-                self.state
-                    .mappings
-                    .get(&commit.oid)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Error::InvalidPlan(format!(
-                            "commit `{}` for branch `{}` has no rewritten mapping",
-                            commit.oid, node.branch
-                        ))
-                    })?
-            } else {
-                self.selected_bases
-                    .get(&node.branch)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
-                    })?
-            };
-            let (temp_ref, branch_tip) = self.backend.write_temp_ref(
-                self.plan,
-                &node,
-                branch_index,
-                self.total_branches(),
-                &rewritten_tip,
-            )?;
-            self.record_temp_ref(&node.branch, temp_ref.clone(), branch_tip.clone());
-            self.remove_pending_branch(&branch)?;
-            if self.state.replay_mode.pauses_at_checkpoints() {
-                let paused = PausedState::BranchEnd {
-                    branch: node.branch.clone(),
-                    rewritten_tip: branch_tip,
-                    temp_ref,
-                    mapped_commit: commits
-                        .last()
-                        .map(|commit| commit.oid.clone())
-                        .unwrap_or_else(|| node.base().to_owned()),
-                    worktree: self.state.worktree.path().to_owned(),
-                };
-                self.state.phase = Phase::Paused {
-                    paused: paused.clone(),
-                };
-                self.write_state()?;
+            if self.replay_branch(branch)? {
                 return Ok(());
             }
-            self.state.phase = Phase::Replay { current: None };
-            self.write_state()?;
         }
 
         self.state.phase = Phase::FinalUpdate;
         self.write_state()?;
         Ok(())
+    }
+
+    fn replay_branch(&mut self, branch: String) -> Result<bool> {
+        let node = self.node(&branch)?.clone();
+        let branch_index = self.branch_index();
+        let commits = replay_commits_from_extra(&node, &self.state.extra_commits);
+        let replay_current = self.replay_current();
+        let was_resuming = replay_current.is_some();
+        let child_base_pause_commits = if self.state.replay_mode.pauses_at_checkpoints() {
+            child_base_pause_commits(self.plan, &node, self.state.strategy, &commits)
+        } else {
+            BTreeSet::new()
+        };
+
+        let (start_commit_index, mut last_rewritten) = if let Some(current) = replay_current {
+            let start = self.resume_start_commit_index(&node, &current, &commits)?;
+            self.state.phase = Phase::Replay { current: None };
+            let head = commits
+                .get(start.wrapping_sub(1))
+                .and_then(|commit| self.state.mappings.get(&commit.oid))
+                .cloned()
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "branch `{}` has no rewritten commit to resume from",
+                        node.branch
+                    ))
+                })?;
+            (start, head)
+        } else {
+            let base = self.actual_replay_base(&node)?;
+            self.selected_bases
+                .insert(node.branch.clone(), base.clone());
+            self.state
+                .mappings
+                .insert(node.base().to_owned(), base.clone());
+
+            if base == node.base() {
+                self.skip_replay_at_existing_base(&node, &branch, &commits)?;
+                self.state.phase = Phase::Replay { current: None };
+                self.write_state()?;
+                return Ok(false);
+            }
+
+            self.backend.prepare_branch(
+                &self.state,
+                branch_index,
+                self.total_branches(),
+                &node,
+                &base,
+            )?;
+            (0, base)
+        };
+
+        self.backend.start_replay(
+            branch_index,
+            self.total_branches(),
+            &node,
+            commits.len(),
+            start_commit_index,
+            was_resuming,
+        )?;
+        for (commit_index, commit) in commits.iter().enumerate().skip(start_commit_index) {
+            match self.replay_commit(
+                &node,
+                commit,
+                commit_index,
+                commits.len(),
+                &last_rewritten,
+                &child_base_pause_commits,
+            )? {
+                CommitReplay::Continue(rewritten_commit) => last_rewritten = rewritten_commit,
+                CommitReplay::Stop => return Ok(true),
+            }
+        }
+
+        self.finish_branch(&node, &branch, &commits, branch_index)
+    }
+
+    fn replay_commit(
+        &mut self,
+        node: &Node,
+        commit: &PlanCommit,
+        commit_index: usize,
+        total_commits: usize,
+        last_rewritten: &str,
+        child_base_pause_commits: &BTreeSet<String>,
+    ) -> Result<CommitReplay> {
+        if commit.is_merge() {
+            // The merged history is contained in the new base; flatten.
+            self.backend
+                .flatten_merge(node, &commit.oid, commit_index, total_commits)?;
+            self.state
+                .mappings
+                .insert(commit.oid.clone(), last_rewritten.to_owned());
+            if child_base_pause_commits.contains(&commit.oid) {
+                self.pause_at_child_base(node, &commit.oid, last_rewritten)?;
+                return Ok(CommitReplay::Stop);
+            }
+            return Ok(CommitReplay::Continue(last_rewritten.to_owned()));
+        }
+
+        let rewritten_commit = match self.backend.cherry_pick(
+            &self.state,
+            node,
+            &commit.oid,
+            commit_index,
+            total_commits,
+        )? {
+            CherryPickOutcome::Applied(rewritten_commit) => rewritten_commit,
+            CherryPickOutcome::Conflict { message } => {
+                let current = CurrentState {
+                    branch: node.branch.clone(),
+                    commit: commit.oid.clone(),
+                    worktree: self.state.worktree.path().to_owned(),
+                };
+                self.state.phase = Phase::Conflict {
+                    current: current.clone(),
+                    message,
+                };
+                self.write_state()?;
+                return Ok(CommitReplay::Stop);
+            }
+        };
+        self.state
+            .mappings
+            .insert(commit.oid.clone(), rewritten_commit.clone());
+        if child_base_pause_commits.contains(&commit.oid) {
+            self.pause_at_child_base(node, &commit.oid, &rewritten_commit)?;
+            return Ok(CommitReplay::Stop);
+        }
+        Ok(CommitReplay::Continue(rewritten_commit))
+    }
+
+    fn pause_at_child_base(
+        &mut self,
+        node: &Node,
+        commit: &str,
+        rewritten_tip: &str,
+    ) -> Result<()> {
+        let paused = PausedState::ChildBase {
+            branch: node.branch.clone(),
+            commit: commit.to_owned(),
+            rewritten_tip: rewritten_tip.to_owned(),
+            worktree: self.state.worktree.path().to_owned(),
+        };
+        self.state.phase = Phase::Paused { paused };
+        self.write_state()
+    }
+
+    fn finish_branch(
+        &mut self,
+        node: &Node,
+        branch: &str,
+        commits: &[PlanCommit],
+        branch_index: usize,
+    ) -> Result<bool> {
+        let rewritten_tip = if let Some(commit) = commits.last() {
+            self.state
+                .mappings
+                .get(&commit.oid)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "commit `{}` for branch `{}` has no rewritten mapping",
+                        commit.oid, node.branch
+                    ))
+                })?
+        } else {
+            self.selected_bases
+                .get(&node.branch)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
+                })?
+        };
+        let (temp_ref, branch_tip) = self.backend.write_temp_ref(
+            self.plan,
+            node,
+            branch_index,
+            self.total_branches(),
+            &rewritten_tip,
+        )?;
+        self.record_temp_ref(&node.branch, temp_ref.clone(), branch_tip.clone());
+        self.remove_pending_branch(branch)?;
+        if self.state.replay_mode.pauses_at_checkpoints() {
+            let paused = PausedState::BranchEnd {
+                branch: node.branch.clone(),
+                rewritten_tip: branch_tip,
+                temp_ref,
+                mapped_commit: commits
+                    .last()
+                    .map(|commit| commit.oid.clone())
+                    .unwrap_or_else(|| node.base().to_owned()),
+                worktree: self.state.worktree.path().to_owned(),
+            };
+            self.state.phase = Phase::Paused { paused };
+            self.write_state()?;
+            return Ok(true);
+        }
+        self.state.phase = Phase::Replay { current: None };
+        self.write_state()?;
+        Ok(false)
     }
 
     fn resolve_conflict(&mut self, current: CurrentState) -> Result<()> {
