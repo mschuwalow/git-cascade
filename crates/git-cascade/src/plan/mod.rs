@@ -3,6 +3,7 @@ mod topological;
 mod validate;
 
 use crate::encoding::{decode_component, encode_component};
+use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 pub use generate::{GenerateOptions, generate_plan, generate_stored_plan};
 use serde::{Deserialize, Serialize};
@@ -144,28 +145,28 @@ impl std::fmt::Display for PlanName {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Repository {
     pub git_dir: String,
-    pub head_at_generation: String,
+    pub head_at_generation: CommitId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Source {
     pub name: String,
-    pub base: String,
-    pub tip: String,
+    pub base: CommitId,
+    pub tip: CommitId,
 }
 
 /// A commit to replay, with its recorded parents.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlanCommit {
-    pub oid: String,
-    pub parents: Vec<String>,
+    pub oid: CommitId,
+    pub parents: Vec<CommitId>,
 }
 
 impl PlanCommit {
-    pub fn new(oid: impl Into<String>, parents: Vec<String>) -> Self {
+    pub fn new(oid: impl Into<CommitId>, parents: Vec<String>) -> Self {
         Self {
             oid: oid.into(),
-            parents,
+            parents: parents.into_iter().map(CommitId::from).collect(),
         }
     }
 
@@ -176,21 +177,21 @@ impl PlanCommit {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Node {
-    pub branch: String,
-    pub tip: String,
-    pub base: String,
+    pub branch: BranchName,
+    pub tip: CommitId,
+    pub base: CommitId,
     pub commits: Vec<PlanCommit>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub parent: Option<BranchName>,
 }
 
 impl Node {
     pub fn parent(&self) -> Option<&str> {
-        self.parent.as_deref()
+        self.parent.as_ref().map(BranchName::as_str)
     }
 
     pub fn base(&self) -> &str {
-        &self.base
+        self.base.as_str()
     }
 
     pub fn commits(&self) -> &[PlanCommit] {
@@ -201,7 +202,8 @@ impl Node {
         self.commits.iter().map(|commit| commit.oid.as_str())
     }
 
-    pub fn contains_commit(&self, oid: &str) -> bool {
+    pub fn contains_commit(&self, oid: impl AsRef<str>) -> bool {
+        let oid = oid.as_ref();
         self.commit_oids().any(|commit| commit == oid)
     }
 
@@ -212,6 +214,6 @@ impl Node {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Dependency {
-    pub parent: String,
-    pub child: String,
+    pub parent: BranchName,
+    pub child: BranchName,
 }

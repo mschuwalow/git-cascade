@@ -173,7 +173,7 @@ fn validation_rejects_dependency_parent_mismatch() {
     let mut plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
-    plan.dependencies[0].parent = "pr-3".to_owned();
+    plan.dependencies[0].parent = "pr-3".into();
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
@@ -205,7 +205,7 @@ fn validation_rejects_direct_child_at_anchor_base() {
         .unwrap();
     assert_eq!(node.parent(), None);
     node.base = plan.source.base.clone();
-    node.commits = linear_commits(&repo, &node.base, &node.tip);
+    node.commits = linear_commits(&repo, node.base.as_str(), node.tip.as_str());
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 

@@ -11,6 +11,7 @@ use crate::plan::{
     validate_merge_parents_for_apply, validate_plan,
 };
 use crate::storage::Storage;
+use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 use backend::{DryRunReplayBackend, GitReplayBackend};
 use cleanup::run_deleting_phase;
@@ -233,9 +234,14 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
 fn restore_state(git: &Git) -> Result<RestoreState> {
     let head = git.head_oid()?;
     Ok(if let Some(name) = git.current_branch()? {
-        RestoreState::Branch { name, head }
+        RestoreState::Branch {
+            name,
+            head: head.to_string(),
+        }
     } else {
-        RestoreState::Detached { head }
+        RestoreState::Detached {
+            head: head.to_string(),
+        }
     })
 }
 
@@ -247,25 +253,28 @@ fn replay_mode(options: &ReplayOptions) -> ReplayMode {
     }
 }
 
-fn ensure_target_branches_not_checked_out(git: &Git, branches: &[String]) -> Result<()> {
+fn ensure_target_branches_not_checked_out(git: &Git, branches: &[BranchName]) -> Result<()> {
     let checked_out = git.checked_out_branches()?;
     ensure_branches_not_checked_out(branches, &checked_out)
 }
 
 fn ensure_target_branches_not_checked_out_except(
     git: &Git,
-    branches: &[String],
+    branches: &[BranchName],
     excluded_path: &std::path::Path,
 ) -> Result<()> {
     let checked_out = git.checked_out_branches_except(excluded_path)?;
     ensure_branches_not_checked_out(branches, &checked_out)
 }
 
-fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) -> Result<()> {
+fn ensure_branches_not_checked_out(
+    branches: &[BranchName],
+    checked_out: &[BranchName],
+) -> Result<()> {
     let blocked = branches
         .iter()
         .filter(|branch| checked_out.contains(branch))
-        .cloned()
+        .map(BranchName::as_str)
         .collect::<Vec<_>>();
     if blocked.is_empty() {
         return Ok(());
@@ -278,8 +287,11 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
 }
 
 fn branch_tips_and_extra_commits(
-    branch_refs: BTreeMap<String, BranchRef>,
-) -> (BTreeMap<String, String>, BTreeMap<String, Vec<PlanCommit>>) {
+    branch_refs: BTreeMap<BranchName, BranchRef>,
+) -> (
+    BTreeMap<BranchName, CommitId>,
+    BTreeMap<BranchName, Vec<PlanCommit>>,
+) {
     let mut branch_tips = BTreeMap::new();
     let mut extra_commits = BTreeMap::new();
     for (branch, branch_ref) in branch_refs {

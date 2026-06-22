@@ -4,6 +4,7 @@ use crate::git::Git;
 use crate::plan::{Node, Plan};
 use crate::storage::Storage;
 use crate::test_hooks;
+use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -11,14 +12,14 @@ use std::fmt::Write as _;
 pub(crate) trait ReplayBackend {
     fn start(&mut self, state: &ReplayState) -> Result<()>;
     fn no_branches(&mut self) -> Result<()>;
-    fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<String, String>>;
+    fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>>;
     fn prepare_branch(
         &mut self,
         state: &ReplayState,
         branch_index: usize,
         total_branches: usize,
         node: &Node,
-        base: &str,
+        base: &CommitId,
     ) -> Result<()>;
     fn start_replay(
         &mut self,
@@ -33,7 +34,7 @@ pub(crate) trait ReplayBackend {
         &mut self,
         state: &ReplayState,
         node: &Node,
-        commit: &str,
+        commit: &CommitId,
         commit_index: usize,
         total_commits: usize,
     ) -> Result<CherryPickOutcome>;
@@ -41,7 +42,7 @@ pub(crate) trait ReplayBackend {
     fn flatten_merge(
         &mut self,
         node: &Node,
-        commit: &str,
+        commit: &CommitId,
         commit_index: usize,
         total_commits: usize,
     ) -> Result<()>;
@@ -49,40 +50,40 @@ pub(crate) trait ReplayBackend {
         &mut self,
         state: &ReplayState,
         current: &CurrentState,
-    ) -> Result<String>;
+    ) -> Result<CommitId>;
     fn resume_paused_branch(
         &mut self,
         state: &ReplayState,
         paused: &PausedState,
         required_ancestors: &[RequiredAncestor],
-    ) -> Result<String>;
+    ) -> Result<CommitId>;
     fn skip_replay(
         &mut self,
         plan: &Plan,
         node: &Node,
         branch_index: usize,
         total_branches: usize,
-        current_tip: &str,
-    ) -> Result<(String, String)>;
+        current_tip: &CommitId,
+    ) -> Result<(String, CommitId)>;
     fn write_temp_ref(
         &mut self,
         plan: &Plan,
         node: &Node,
         branch_index: usize,
         total_branches: usize,
-        rewritten_tip: &str,
-    ) -> Result<(String, String)>;
+        rewritten_tip: &CommitId,
+    ) -> Result<(String, CommitId)>;
     fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
     fn restore_checkout(&mut self, state: &ReplayState, force_checkout: bool) -> Result<()>;
 }
 
 pub(crate) enum CherryPickOutcome {
-    Applied(String),
+    Applied(CommitId),
     Conflict { message: String },
 }
 
 pub(crate) struct RequiredAncestor {
-    pub(crate) commit: String,
+    pub(crate) commit: CommitId,
     pub(crate) reason: String,
 }
 
@@ -110,7 +111,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         Ok(())
     }
 
-    fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<String, String>> {
+    fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>> {
         temp_tips_from_refs(self.git, temp_refs)
     }
 
@@ -120,7 +121,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         branch_index: usize,
         total_branches: usize,
         node: &Node,
-        base: &str,
+        base: &CommitId,
     ) -> Result<()> {
         eprintln!(
             "Preparing branch {branch_index}/{total_branches} `{}`",
@@ -168,7 +169,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         &mut self,
         state: &ReplayState,
         _node: &Node,
-        commit: &str,
+        commit: &CommitId,
         commit_index: usize,
         total_commits: usize,
     ) -> Result<CherryPickOutcome> {
@@ -202,7 +203,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
     fn flatten_merge(
         &mut self,
         _node: &Node,
-        commit: &str,
+        commit: &CommitId,
         commit_index: usize,
         total_commits: usize,
     ) -> Result<()> {
@@ -221,16 +222,16 @@ impl ReplayBackend for GitReplayBackend<'_> {
         node: &Node,
         branch_index: usize,
         total_branches: usize,
-        current_tip: &str,
-    ) -> Result<(String, String)> {
-        let temp_ref = temp_ref(plan, &node.branch);
+        current_tip: &CommitId,
+    ) -> Result<(String, CommitId)> {
+        let temp_ref = temp_ref(plan, node.branch.as_str());
         self.git.update_ref(&temp_ref, current_tip)?;
         eprintln!(
             "Branch {branch_index}/{total_branches} `{}` already starts at its replay base; keeping {}",
             node.branch,
             short_oid(current_tip)
         );
-        Ok((temp_ref, current_tip.to_owned()))
+        Ok((temp_ref, current_tip.clone()))
     }
 
     fn write_temp_ref(
@@ -239,23 +240,23 @@ impl ReplayBackend for GitReplayBackend<'_> {
         node: &Node,
         branch_index: usize,
         total_branches: usize,
-        rewritten_tip: &str,
-    ) -> Result<(String, String)> {
-        let temp_ref = temp_ref(plan, &node.branch);
+        rewritten_tip: &CommitId,
+    ) -> Result<(String, CommitId)> {
+        let temp_ref = temp_ref(plan, node.branch.as_str());
         self.git.update_ref(&temp_ref, rewritten_tip)?;
         eprintln!(
             "Finished branch {branch_index}/{total_branches} `{}` -> {}",
             node.branch,
             short_oid(rewritten_tip)
         );
-        Ok((temp_ref, rewritten_tip.to_owned()))
+        Ok((temp_ref, rewritten_tip.clone()))
     }
 
     fn continue_cherry_pick(
         &mut self,
         _state: &ReplayState,
         current: &CurrentState,
-    ) -> Result<String> {
+    ) -> Result<CommitId> {
         let worktree = std::path::PathBuf::from(&current.worktree);
         let worktree_git = Git::new(&worktree);
         if !worktree_git.unmerged_entries()?.is_empty() {
@@ -293,7 +294,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         _state: &ReplayState,
         paused: &PausedState,
         required_ancestors: &[RequiredAncestor],
-    ) -> Result<String> {
+    ) -> Result<CommitId> {
         let worktree = std::path::PathBuf::from(paused.worktree());
         let worktree_git = Git::new(&worktree);
         if !worktree_git.is_clean_worktree()? {
@@ -357,7 +358,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
 pub(crate) struct DryRunReplayBackend {
     output: String,
-    temp_tips: HashMap<String, String>,
+    temp_tips: HashMap<BranchName, CommitId>,
 }
 
 impl DryRunReplayBackend {
@@ -405,7 +406,7 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn temp_tips(&mut self, _temp_refs: &[String]) -> Result<HashMap<String, String>> {
+    fn temp_tips(&mut self, _temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>> {
         Ok(self.temp_tips.clone())
     }
 
@@ -415,7 +416,7 @@ impl ReplayBackend for DryRunReplayBackend {
         _branch_index: usize,
         _total_branches: usize,
         node: &Node,
-        base: &str,
+        base: &CommitId,
     ) -> Result<()> {
         let worktree = std::path::Path::new(state.worktree.path());
         writeln!(self.output).unwrap();
@@ -462,7 +463,7 @@ impl ReplayBackend for DryRunReplayBackend {
         &mut self,
         state: &ReplayState,
         node: &Node,
-        commit: &str,
+        commit: &CommitId,
         _commit_index: usize,
         _total_commits: usize,
     ) -> Result<CherryPickOutcome> {
@@ -472,23 +473,23 @@ impl ReplayBackend for DryRunReplayBackend {
             state.worktree.path()
         )
         .unwrap();
-        if commit == node.tip {
-            Ok(CherryPickOutcome::Applied(format!(
+        if commit == &node.tip {
+            Ok(CherryPickOutcome::Applied(CommitId::new(format!(
                 "<rewritten {} planned tip>",
                 node.branch
-            )))
+            ))))
         } else {
-            Ok(CherryPickOutcome::Applied(format!(
+            Ok(CherryPickOutcome::Applied(CommitId::new(format!(
                 "<rewritten {}:{commit}>",
                 node.branch
-            )))
+            ))))
         }
     }
 
     fn flatten_merge(
         &mut self,
         _node: &Node,
-        commit: &str,
+        commit: &CommitId,
         _commit_index: usize,
         _total_commits: usize,
     ) -> Result<()> {
@@ -502,9 +503,9 @@ impl ReplayBackend for DryRunReplayBackend {
         node: &Node,
         _branch_index: usize,
         _total_branches: usize,
-        current_tip: &str,
-    ) -> Result<(String, String)> {
-        let temp_ref = temp_ref(plan, &node.branch);
+        current_tip: &CommitId,
+    ) -> Result<(String, CommitId)> {
+        let temp_ref = temp_ref(plan, node.branch.as_str());
         writeln!(self.output).unwrap();
         writeln!(self.output, "# branch {}", node.branch).unwrap();
         writeln!(
@@ -514,8 +515,8 @@ impl ReplayBackend for DryRunReplayBackend {
         .unwrap();
         writeln!(self.output, "git update-ref {temp_ref} {current_tip}").unwrap();
         self.temp_tips
-            .insert(node.branch.clone(), current_tip.to_owned());
-        Ok((temp_ref, current_tip.to_owned()))
+            .insert(node.branch.clone(), current_tip.clone());
+        Ok((temp_ref, current_tip.clone()))
     }
 
     fn write_temp_ref(
@@ -524,11 +525,11 @@ impl ReplayBackend for DryRunReplayBackend {
         node: &Node,
         _branch_index: usize,
         _total_branches: usize,
-        _rewritten_tip: &str,
-    ) -> Result<(String, String)> {
-        let temp_ref = temp_ref(plan, &node.branch);
-        let rewritten_tip = format!("<rewritten {} tip>", node.branch);
-        let current_tip = format!("<rewritten {} current tip>", node.branch);
+        _rewritten_tip: &CommitId,
+    ) -> Result<(String, CommitId)> {
+        let temp_ref = temp_ref(plan, node.branch.as_str());
+        let rewritten_tip = CommitId::new(format!("<rewritten {} tip>", node.branch));
+        let current_tip = CommitId::new(format!("<rewritten {} current tip>", node.branch));
         writeln!(self.output, "git update-ref {temp_ref} HEAD").unwrap();
         self.temp_tips.insert(node.branch.clone(), rewritten_tip);
         Ok((temp_ref, current_tip))
@@ -538,8 +539,11 @@ impl ReplayBackend for DryRunReplayBackend {
         &mut self,
         _state: &ReplayState,
         current: &CurrentState,
-    ) -> Result<String> {
-        Ok(format!("<rewritten {}:{}>", current.branch, current.commit))
+    ) -> Result<CommitId> {
+        Ok(CommitId::new(format!(
+            "<rewritten {}:{}>",
+            current.branch, current.commit
+        )))
     }
 
     fn resume_paused_branch(
@@ -547,7 +551,7 @@ impl ReplayBackend for DryRunReplayBackend {
         _state: &ReplayState,
         paused: &PausedState,
         _required_ancestors: &[RequiredAncestor],
-    ) -> Result<String> {
+    ) -> Result<CommitId> {
         writeln!(self.output).unwrap();
         match paused {
             PausedState::BranchEnd { branch, .. } => {
@@ -563,7 +567,7 @@ impl ReplayBackend for DryRunReplayBackend {
             paused.worktree()
         )
         .unwrap();
-        Ok(paused.rewritten_tip().to_owned())
+        Ok(CommitId::new(paused.rewritten_tip()))
     }
 
     fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()> {
@@ -646,8 +650,8 @@ fn finish_final_update(git: &Git, plan: &Plan, state: &ReplayState) -> Result<()
 fn final_update_already_applied(
     git: &Git,
     plan: &Plan,
-    temp_tips: &HashMap<String, String>,
-    branch_tips: &BTreeMap<String, String>,
+    temp_tips: &HashMap<BranchName, CommitId>,
+    branch_tips: &BTreeMap<BranchName, CommitId>,
 ) -> Result<bool> {
     let mut saw_updated = false;
     let mut saw_pending = false;
@@ -658,7 +662,7 @@ fn final_update_already_applied(
         let expected_tip = branch_tips.get(&node.branch).ok_or_else(|| {
             Error::InvalidPlan(format!("branch `{}` has no expected tip", node.branch))
         })?;
-        let current_tip = git.local_branch_tip(&node.branch)?;
+        let current_tip = git.local_branch_tip(node.branch.as_str())?;
         if &current_tip == expected_tip {
             if expected_tip != rewritten_tip {
                 saw_pending = true;
@@ -685,13 +689,13 @@ fn final_update_already_applied(
     Ok(saw_updated && !saw_pending)
 }
 
-fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<String, String>> {
+fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>> {
     let mut temp_tips = HashMap::new();
     for temp_ref in temp_refs {
         let Some(encoded_branch) = temp_ref.rsplit('/').next() else {
             continue;
         };
-        let branch = decode_component(encoded_branch)?;
+        let branch = BranchName::new(decode_component(encoded_branch)?);
         temp_tips.insert(branch, git.resolve_commit(temp_ref)?);
     }
 
@@ -708,8 +712,8 @@ fn temp_ref(plan: &Plan, branch: &str) -> String {
 
 fn final_ref_transaction(
     plan: &Plan,
-    temp_tips: &HashMap<String, String>,
-    branch_tips: &BTreeMap<String, String>,
+    temp_tips: &HashMap<BranchName, CommitId>,
+    branch_tips: &BTreeMap<BranchName, CommitId>,
 ) -> Result<String> {
     let mut transaction = String::new();
     writeln!(transaction, "start").unwrap();
@@ -733,16 +737,19 @@ fn final_ref_transaction(
     Ok(transaction)
 }
 
-fn ensure_target_branches_not_checked_out(git: &Git, branches: &[String]) -> Result<()> {
+fn ensure_target_branches_not_checked_out(git: &Git, branches: &[BranchName]) -> Result<()> {
     let checked_out = git.checked_out_branches()?;
     ensure_branches_not_checked_out(branches, &checked_out)
 }
 
-fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) -> Result<()> {
+fn ensure_branches_not_checked_out(
+    branches: &[BranchName],
+    checked_out: &[BranchName],
+) -> Result<()> {
     let blocked = branches
         .iter()
         .filter(|branch| checked_out.contains(branch))
-        .cloned()
+        .map(BranchName::as_str)
         .collect::<Vec<_>>();
     if blocked.is_empty() {
         return Ok(());
@@ -754,6 +761,7 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
     )))
 }
 
-fn short_oid(oid: &str) -> &str {
-    oid.get(..12).unwrap_or(oid)
+fn short_oid(oid: impl AsRef<str>) -> String {
+    let oid = oid.as_ref();
+    oid.get(..12).unwrap_or(oid).to_owned()
 }

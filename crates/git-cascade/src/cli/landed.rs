@@ -1,4 +1,5 @@
 use crate::git::Git;
+use crate::types::CommitId;
 use crate::{Error, Result};
 
 pub(super) struct Inference {
@@ -46,7 +47,11 @@ struct LandingMerge {
     first_parent: String,
 }
 
-fn find_landing_merge(git: &Git, old_tip: &str, onto: &str) -> Result<Option<LandingMerge>> {
+fn find_landing_merge(
+    git: &Git,
+    old_tip: &CommitId,
+    onto: &CommitId,
+) -> Result<Option<LandingMerge>> {
     for commit in git.rev_list_first_parent_merges(onto)? {
         let parents = git.commit_parents(&commit)?;
         let Some(first_parent) = parents.first() else {
@@ -72,7 +77,7 @@ fn find_landing_merge(git: &Git, old_tip: &str, onto: &str) -> Result<Option<Lan
         if matching_parents.len() == 1 {
             return Ok(Some(LandingMerge {
                 commit,
-                first_parent: first_parent.clone(),
+                first_parent: first_parent.to_string(),
             }));
         }
     }

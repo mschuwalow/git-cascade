@@ -380,7 +380,7 @@ fn branch_end_pause_allows_squashing_before_replaying_child_to_current_tip() {
         worktree.to_str().unwrap(),
         "merge-base",
         "--is-ancestor",
-        &rewritten_tip,
+        rewritten_tip.as_str(),
         "HEAD",
     ]);
     let squashed_pr2 = repo

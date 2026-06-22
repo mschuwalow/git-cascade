@@ -138,7 +138,7 @@ fn infer_old_base_from_branch(git: &Git, onto: &str, oldest_branch: &str) -> Res
             ))
         })?;
 
-    git.commit_parents(&fork_point)?.first().cloned().ok_or_else(|| {
+    git.commit_parents(&fork_point)?.first().cloned().map(String::from).ok_or_else(|| {
         Error::InvalidInvocation(format!(
             "cannot infer old base for sync; oldest fork point `{fork_point}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
         ))
@@ -148,10 +148,14 @@ fn infer_old_base_from_branch(git: &Git, onto: &str, oldest_branch: &str) -> Res
 fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String> {
     let onto_tip = git.resolve_commit(onto)?;
     let excluded_branches = excluded_target_branches(git, onto)?;
-    let mut oldest_fork_point = None::<String>;
+    let mut oldest_fork_point = None;
 
     for branch in git.local_branches()? {
-        if excluded_branches.contains(&branch.name) || git.is_ancestor(&branch.tip, &onto_tip)? {
+        if excluded_branches
+            .iter()
+            .any(|excluded| excluded == branch.name.as_str())
+            || git.is_ancestor(&branch.tip, &onto_tip)?
+        {
             continue;
         }
 
@@ -175,7 +179,7 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
     }
 
     let base = oldest_fork_point.unwrap_or_else(|| onto_tip.clone());
-    git.commit_parents(&base)?.first().cloned().ok_or_else(|| {
+    git.commit_parents(&base)?.first().cloned().map(String::from).ok_or_else(|| {
         Error::InvalidInvocation(format!(
             "cannot infer old base for sync; oldest fork point `{base}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
         ))
@@ -236,11 +240,11 @@ fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {
 
 fn infer_old_base_from_default_branch(git: &Git, old_tip: &str) -> Result<String> {
     if let Some(default_tip) = git.origin_default_branch_tip()? {
-        return Ok(default_tip);
+        return Ok(default_tip.to_string());
     }
 
     if let Some(default_tip) = git.local_default_branch_tip()? {
-        return Ok(default_tip);
+        return Ok(default_tip.to_string());
     }
 
     Err(Error::InvalidInvocation(format!(

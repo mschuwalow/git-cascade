@@ -1,5 +1,6 @@
 use super::{Dependency, Node, PLAN_VERSION, Plan, PlanCommit, branches_in_topological_order};
 use crate::git::Git;
+use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -7,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Clone)]
 pub struct BranchRef {
     /// The branch's current tip commit.
-    pub expected_tip: String,
+    pub expected_tip: CommitId,
     /// Commits added to the branch after plan generation, oldest first.
     pub extra_commits: Vec<PlanCommit>,
 }
@@ -36,8 +37,8 @@ pub fn validate_plan_for_apply(git: &Git, plan: &Plan) -> Result<()> {
 pub fn validate_merge_parents_for_apply(
     git: &Git,
     plan: &Plan,
-    branch_refs: &BTreeMap<String, BranchRef>,
-    new_tip: &str,
+    branch_refs: &BTreeMap<BranchName, BranchRef>,
+    new_tip: &CommitId,
 ) -> Result<()> {
     for node in &plan.nodes {
         let extras = branch_refs
@@ -62,12 +63,12 @@ pub fn validate_merge_parents_for_apply(
 
 /// Checks that planned branches were not rewritten since plan generation and
 /// returns each branch's current tip plus any commits added after planning.
-pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<String, BranchRef>> {
+pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<BranchName, BranchRef>> {
     let mut branch_refs = BTreeMap::new();
 
     for node in &plan.nodes {
         let tip = node.tip.as_str();
-        let actual = git.local_branch_tip(&node.branch)?;
+        let actual = git.local_branch_tip(node.branch.as_str())?;
         if !git.is_ancestor(tip, &actual)? {
             return invalid(format!(
                 "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{actual}`",
@@ -83,7 +84,7 @@ pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<String, B
         // first-parent walk, and its last commit is `actual`, so checking the
         // oldest commit suffices.
         if let Some(first) = extra_commits.first()
-            && first.parents.first().map(String::as_str) != Some(tip)
+            && first.parents.first().map(CommitId::as_str) != Some(tip)
         {
             return invalid(format!(
                 "branch `{}` no longer extends planned tip `{}` by first parent: commit `{}` added after plan generation starts elsewhere",
@@ -214,7 +215,11 @@ fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
 
 /// The first-parent chain of `base..tip`. Commits off the chain are reached
 /// through merge second parents and are never replayed.
-fn first_parent_chain(git: &Git, base: &str, tip: &str) -> Result<Vec<PlanCommit>> {
+fn first_parent_chain(
+    git: &Git,
+    base: impl AsRef<str>,
+    tip: impl AsRef<str>,
+) -> Result<Vec<PlanCommit>> {
     Ok(git
         .rev_list_first_parent_with_parents(base, tip)?
         .into_iter()
@@ -234,7 +239,7 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
         let base = node.base();
         if node.is_root() {
-            if base == plan.source.base
+            if base == plan.source.base.as_str()
                 || !git.is_ancestor(&plan.source.base, base)?
                 || !git.is_ancestor(base, &plan.source.tip)?
             {
