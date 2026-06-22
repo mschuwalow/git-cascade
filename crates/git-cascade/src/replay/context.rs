@@ -1,7 +1,7 @@
 use super::backend::{CherryPickOutcome, ReplayBackend, RequiredAncestor};
 use super::state::{CurrentState, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
-use super::strategy::ReplayBranchStrategy;
+use super::strategy;
 use super::{ReplayOutcome, replay_commits_from_extra};
 use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{Node, Plan, PlanCommit};
@@ -21,7 +21,6 @@ where
     nodes: HashMap<BranchName, usize>,
     temp_tips: HashMap<BranchName, CommitId>,
     selected_bases: HashMap<BranchName, CommitId>,
-    branch_strategy: ReplayBranchStrategy,
 }
 
 struct BranchReplayStart {
@@ -49,7 +48,6 @@ where
             .collect::<HashMap<_, _>>();
         let temp_tips = backend.temp_tips(&state.completed_temp_refs)?;
         let selected_bases = selected_bases_from_mappings(plan, &state.mappings);
-        let branch_strategy = ReplayBranchStrategy::new(state.strategy);
 
         Ok(Self {
             plan,
@@ -59,7 +57,6 @@ where
             nodes,
             temp_tips,
             selected_bases,
-            branch_strategy,
         })
     }
 
@@ -348,7 +345,8 @@ where
 
         let branch_replay_base = self.branch_replay_base(node)?.clone();
         let total_branches = self.total_branches();
-        let rewritten_tip = self.branch_strategy.finalize_branch_tip(
+        let rewritten_tip = strategy::finalize_branch_tip(
+            self.state.strategy,
             self.backend,
             &self.state,
             &branch_replay_base,
@@ -562,7 +560,8 @@ where
         parent: &Node,
         child: &Node,
     ) -> Result<Option<(CommitId, String)>> {
-        self.branch_strategy.required_child_replay_base(
+        strategy::required_child_replay_base(
+            self.state.strategy,
             parent,
             child,
             &self.selected_bases,
@@ -611,7 +610,8 @@ where
         })?;
         let parent = self.node(parent_branch)?;
 
-        self.branch_strategy.actual_child_base(
+        strategy::actual_child_base(
+            self.state.strategy,
             parent,
             node,
             &self.selected_bases,

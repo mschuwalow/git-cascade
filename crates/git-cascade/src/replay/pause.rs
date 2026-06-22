@@ -1,6 +1,6 @@
 use super::replay_commits_from_extra;
 use super::state::ReplayPauseMode;
-use super::strategy::ReplayBranchStrategy;
+use super::strategy as branch_strategy;
 use crate::model::Strategy;
 use crate::model::{BranchName, CommitId};
 use crate::plan::{Plan, PlanCommit};
@@ -20,7 +20,6 @@ impl PausePlan {
         plan: &Plan,
         extra_commits: &BTreeMap<BranchName, Vec<PlanCommit>>,
     ) -> Self {
-        let branch_strategy = ReplayBranchStrategy::new(strategy);
         let mut replay_commits = BTreeSet::new();
         let mut checkpoint_commits = BTreeSet::new();
         let mut branch_end_branches = BTreeSet::new();
@@ -29,10 +28,12 @@ impl PausePlan {
         for node in &plan.nodes {
             let commits = replay_commits_from_extra(node, extra_commits);
             replay_commits.extend(commits.iter().map(|commit| commit.oid.clone()));
-            checkpoint_commits.extend(branch_strategy.checkpoint_commits(plan, node, &commits));
+            checkpoint_commits.extend(branch_strategy::checkpoint_commits(
+                strategy, plan, node, &commits,
+            ));
 
             branch_end_branches.insert(node.branch.clone());
-            if branch_strategy.finalizes_branch_at_end(&commits) {
+            if branch_strategy::finalizes_branch_at_end(strategy, &commits) {
                 branch_end_finalization_branches.insert(node.branch.clone());
             }
         }
