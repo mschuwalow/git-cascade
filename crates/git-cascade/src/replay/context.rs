@@ -1,5 +1,5 @@
 use super::ReplayOutcome;
-use super::backend::{CherryPickOutcome, ReplayBackend};
+use super::backend::{CherryPickOutcome, ReplayBackend, RequiredAncestor};
 use super::state::{CurrentState, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
 use crate::model::Strategy;
@@ -363,7 +363,10 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
             )));
         }
 
-        let rewritten_tip = self.backend.resume_paused_branch(&self.state, &paused)?;
+        let required_ancestors = self.resume_requirements(&paused)?;
+        let rewritten_tip =
+            self.backend
+                .resume_paused_branch(&self.state, &paused, &required_ancestors)?;
         match paused {
             PausedState::BranchEnd {
                 branch,
@@ -393,6 +396,82 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         }
         self.write_state()?;
         Ok(())
+    }
+
+    fn resume_requirements(&self, paused: &PausedState) -> Result<Vec<RequiredAncestor>> {
+        let node = self.node(paused.branch())?;
+        match paused {
+            PausedState::ChildBase { rewritten_tip, .. } => Ok(vec![RequiredAncestor {
+                commit: rewritten_tip.clone(),
+                reason: format!("rewritten child-base checkpoint for `{}`", node.branch),
+            }]),
+            PausedState::BranchEnd { .. } => self.branch_end_resume_requirements(node),
+        }
+    }
+
+    fn branch_end_resume_requirements(&self, node: &Node) -> Result<Vec<RequiredAncestor>> {
+        let mut required = BTreeMap::<String, String>::new();
+        let branch_base = self.selected_bases.get(&node.branch).ok_or_else(|| {
+            Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
+        })?;
+        required.insert(
+            branch_base.clone(),
+            format!("replay base for branch `{}`", node.branch),
+        );
+
+        for child in self
+            .plan
+            .nodes
+            .iter()
+            .filter(|child| child.parent() == Some(node.branch.as_str()))
+        {
+            let Some((commit, reason)) = self.required_child_replay_base(node, child)? else {
+                continue;
+            };
+            required.entry(commit).or_insert(reason);
+        }
+
+        Ok(required
+            .into_iter()
+            .map(|(commit, reason)| RequiredAncestor { commit, reason })
+            .collect())
+    }
+
+    fn required_child_replay_base(
+        &self,
+        parent: &Node,
+        child: &Node,
+    ) -> Result<Option<(String, String)>> {
+        let base = match self.state.strategy {
+            Strategy::MoveToCurrentTips => return Ok(None),
+            Strategy::MoveToPlannedTips => {
+                self.state.mappings.get(&parent.tip).ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "parent `{}` has no rewritten planned tip",
+                        parent.branch
+                    ))
+                })?
+            }
+            Strategy::PreserveForkPoints if child.base() == parent.base() => {
+                self.selected_bases.get(&parent.branch).ok_or_else(|| {
+                    Error::InvalidPlan(format!("parent `{}` has no selected base", parent.branch))
+                })?
+            }
+            Strategy::PreserveForkPoints => {
+                self.state.mappings.get(child.base()).ok_or_else(|| {
+                    Error::InvalidPlan(format!(
+                        "base `{}` for branch `{}` was not mapped",
+                        child.base(),
+                        child.branch
+                    ))
+                })?
+            }
+        };
+
+        Ok(Some((
+            base.clone(),
+            format!("replay base for child branch `{}`", child.branch),
+        )))
     }
 
     fn skip_replay_at_existing_base(

@@ -50,8 +50,12 @@ pub(crate) trait ReplayBackend {
         state: &ReplayState,
         current: &CurrentState,
     ) -> Result<String>;
-    fn resume_paused_branch(&mut self, state: &ReplayState, paused: &PausedState)
-    -> Result<String>;
+    fn resume_paused_branch(
+        &mut self,
+        state: &ReplayState,
+        paused: &PausedState,
+        required_ancestors: &[RequiredAncestor],
+    ) -> Result<String>;
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -75,6 +79,11 @@ pub(crate) trait ReplayBackend {
 pub(crate) enum CherryPickOutcome {
     Applied(String),
     Conflict { message: String },
+}
+
+pub(crate) struct RequiredAncestor {
+    pub(crate) commit: String,
+    pub(crate) reason: String,
 }
 
 pub(crate) struct GitReplayBackend<'a> {
@@ -283,6 +292,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         &mut self,
         _state: &ReplayState,
         paused: &PausedState,
+        required_ancestors: &[RequiredAncestor],
     ) -> Result<String> {
         let worktree = std::path::PathBuf::from(paused.worktree());
         let worktree_git = Git::new(&worktree);
@@ -293,12 +303,16 @@ impl ReplayBackend for GitReplayBackend<'_> {
             )));
         }
         let head = worktree_git.head_oid()?;
-        if !worktree_git.is_ancestor(paused.rewritten_tip(), &head)? {
+        for required in required_ancestors {
+            if worktree_git.is_ancestor(&required.commit, &head)? {
+                continue;
+            }
             return Err(Error::InvalidInvocation(format!(
-                "paused branch `{}` HEAD `{}` is not a descendant of rewritten tip `{}`; restore the paused branch tip or abort the cascade operation",
+                "paused branch `{}` HEAD `{}` does not preserve {} `{}`; restore that commit as an ancestor of HEAD or abort the cascade operation",
                 paused.branch(),
                 head,
-                paused.rewritten_tip()
+                required.reason,
+                required.commit
             )));
         }
         if let PausedState::BranchEnd { temp_ref, .. } = paused {
@@ -532,6 +546,7 @@ impl ReplayBackend for DryRunReplayBackend {
         &mut self,
         _state: &ReplayState,
         paused: &PausedState,
+        _required_ancestors: &[RequiredAncestor],
     ) -> Result<String> {
         writeln!(self.output).unwrap();
         match paused {

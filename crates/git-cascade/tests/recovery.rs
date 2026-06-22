@@ -334,6 +334,82 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
 }
 
 #[test]
+fn branch_end_pause_allows_squashing_before_replaying_child_to_current_tip() {
+    let repo = paused_multi_commit_branch_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-current-tips",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    let PausedState::BranchEnd { rewritten_tip, .. } = paused_state(&state) else {
+        panic!("expected branch-end pause");
+    };
+    let rewritten_tip = rewritten_tip.clone();
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "reset",
+        "--soft",
+        "HEAD~2",
+    ]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "squash pr-2",
+    ]);
+    repo.git_fails([
+        "-C",
+        worktree.to_str().unwrap(),
+        "merge-base",
+        "--is-ancestor",
+        &rewritten_tip,
+        "HEAD",
+    ]);
+    let squashed_pr2 = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    assert_eq!(repo.rev_parse("pr-2"), squashed_pr2);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), squashed_pr2);
+    assert_eq!(repo.show("pr-2:pr2-a.txt"), "b\n");
+    assert_eq!(repo.show("pr-2:pr2-b.txt"), "c\n");
+    assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
+}
+
+#[test]
 fn continue_refuses_dirty_paused_worktree() {
     let repo = paused_linear_stack();
     rewrite_anchor(&repo);
@@ -483,6 +559,65 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
     assert_eq!(repo.show("pr-2:tip-fix.txt"), "tip fix\n");
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!repo.plan_path("stack").exists());
+}
+
+#[test]
+fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
+    let repo = paused_intermediate_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at child base"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    assert!(matches!(
+        paused_state(&state),
+        PausedState::BranchEnd { .. }
+    ));
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "reset",
+        "--soft",
+        "HEAD~2",
+    ]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "squash pr-2",
+    ]);
+
+    repo.cascade().arg("continue").assert().failure().stderr(
+        predicate::str::contains("does not preserve").and(predicate::str::contains(
+            "replay base for child branch `pr-3`",
+        )),
+    );
+
+    let state = read_state(&repo);
+    assert!(matches!(
+        paused_state(&state),
+        PausedState::BranchEnd { .. }
+    ));
+    assert_eq!(state.pending_branches, vec!["pr-3"]);
 }
 
 #[test]
@@ -789,6 +924,33 @@ fn paused_intermediate_stack() -> TestRepo {
     let pr2_first = repo.commit_file("pr2-a.txt", "b\n", "pr-2 a");
     repo.commit_file("pr2-b.txt", "c\n", "pr-2 b");
     repo.switch_new_at("pr-3", &pr2_first);
+    repo.commit_file("pr3.txt", "d\n", "pr-3");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    repo
+}
+
+fn paused_multi_commit_branch_stack() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2-a.txt", "b\n", "pr-2 a");
+    repo.commit_file("pr2-b.txt", "c\n", "pr-2 b");
+    repo.switch_new("pr-3");
     repo.commit_file("pr3.txt", "d\n", "pr-3");
     repo.switch("main");
 
