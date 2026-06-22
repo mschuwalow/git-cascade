@@ -214,12 +214,16 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
         return run_deleting_phase(git, storage, &mut state_writer, &mut state);
     }
 
-    state.phase = Phase::RestoreCheckout { delete_plan: false };
-    state_writer.write_state(&mut state)?;
-
     let plan_name = state.plan_name.clone();
     let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
     let mut backend = GitReplayBackend::new(git);
+
+    state.phase = Phase::RestoreCheckout {
+        delete_plan: false,
+        force_checkout: true,
+    };
+    state_writer.write_state(&mut state)?;
+
     let mut context = ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?;
     match context.run()? {
         ReplayOutcome::Complete => {

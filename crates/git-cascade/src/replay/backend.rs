@@ -69,7 +69,7 @@ pub(crate) trait ReplayBackend {
         rewritten_tip: &str,
     ) -> Result<(String, String)>;
     fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
-    fn restore_checkout(&mut self, state: &ReplayState) -> Result<()>;
+    fn restore_checkout(&mut self, state: &ReplayState, force_checkout: bool) -> Result<()>;
 }
 
 pub(crate) enum CherryPickOutcome {
@@ -317,7 +317,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         finish_final_update(self.git, plan, state)
     }
 
-    fn restore_checkout(&mut self, state: &ReplayState) -> Result<()> {
+    fn restore_checkout(&mut self, state: &ReplayState, force_checkout: bool) -> Result<()> {
         let worktree = std::path::PathBuf::from(state.worktree.path());
         if !worktree.exists() {
             return Ok(());
@@ -327,7 +327,13 @@ impl ReplayBackend for GitReplayBackend<'_> {
         worktree_git.try_cherry_pick_abort()?;
         if let WorktreeState::InPlace { restore, .. } = &state.worktree {
             match restore {
+                RestoreState::Branch { name, .. } if force_checkout => {
+                    worktree_git.switch_branch_discarding_changes(name)?
+                }
                 RestoreState::Branch { name, .. } => worktree_git.switch_branch(name)?,
+                RestoreState::Detached { head } if force_checkout => {
+                    worktree_git.switch_detached_discarding_changes(head)?
+                }
                 RestoreState::Detached { head } => worktree_git.switch_detached(head)?,
             }
         }
@@ -558,7 +564,7 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn restore_checkout(&mut self, state: &ReplayState) -> Result<()> {
+    fn restore_checkout(&mut self, state: &ReplayState, force_checkout: bool) -> Result<()> {
         let WorktreeState::InPlace { path, restore } = &state.worktree else {
             return Ok(());
         };
@@ -567,10 +573,28 @@ impl ReplayBackend for DryRunReplayBackend {
         writeln!(self.output, "# restore checkout").unwrap();
         match restore {
             RestoreState::Branch { name, .. } => {
-                writeln!(self.output, "git -C {} switch {name}", path).unwrap();
+                if force_checkout {
+                    writeln!(
+                        self.output,
+                        "git -C {} switch --discard-changes {name}",
+                        path
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(self.output, "git -C {} switch {name}", path).unwrap();
+                }
             }
             RestoreState::Detached { head } => {
-                writeln!(self.output, "git -C {} switch --detach {head}", path).unwrap();
+                if force_checkout {
+                    writeln!(
+                        self.output,
+                        "git -C {} switch --discard-changes --detach {head}",
+                        path
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(self.output, "git -C {} switch --detach {head}", path).unwrap();
+                }
             }
         }
         Ok(())

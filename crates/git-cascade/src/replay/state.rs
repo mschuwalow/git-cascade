@@ -34,6 +34,7 @@ pub enum Phase {
     FinalUpdate,
     RestoreCheckout {
         delete_plan: bool,
+        force_checkout: bool,
     },
     Deleting {
         delete_plan: bool,
