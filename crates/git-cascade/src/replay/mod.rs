@@ -156,17 +156,14 @@ pub fn execute(
     let mut state_writer = LockedStateWriter::new(state_file);
     let mut backend = GitReplayBackend::new(git);
     let mut context = ReplayContext::new(plan, &mut state_writer, &mut backend, state)?;
-    match context.run()? {
-        ReplayOutcome::Complete => {
-            let mut state = context.into_state();
-            run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
-            Ok(ReplayOutcome::Complete)
-        }
-        ReplayOutcome::Conflict { current, message } => {
-            Ok(ReplayOutcome::Conflict { current, message })
-        }
-        ReplayOutcome::Paused { paused } => Ok(ReplayOutcome::Paused { paused }),
-    }
+    let outcome = context.run()?;
+
+    if matches!(outcome, ReplayOutcome::Complete) {
+        let mut state = context.into_state();
+        run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
+    };
+
+    Ok(outcome)
 }
 
 pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
@@ -187,17 +184,14 @@ pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
         validate_plan(git, &plan)?;
         let mut context = ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?;
         context.continue_after_pause_or_conflict();
-        match context.run()? {
-            ReplayOutcome::Complete => {
-                let mut state = context.into_state();
-                run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
-                Ok(ReplayOutcome::Complete)
-            }
-            ReplayOutcome::Conflict { current, message } => {
-                Ok(ReplayOutcome::Conflict { current, message })
-            }
-            ReplayOutcome::Paused { paused } => Ok(ReplayOutcome::Paused { paused }),
-        }
+        let outcome = context.run()?;
+
+        if matches!(outcome, ReplayOutcome::Complete) {
+            let mut state = context.into_state();
+            run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
+        };
+
+        Ok(outcome)
     }
 }
 
