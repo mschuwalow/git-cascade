@@ -1,7 +1,9 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::state::{Phase, RestoreState, WorktreeState};
+use git_cascade::replay::{
+    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
+};
 use predicates::prelude::*;
 
 #[test]
@@ -23,7 +25,7 @@ fn status_reports_conflict_state() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     let worktree = std::path::PathBuf::from(state.worktree.path());
     assert_eq!(
@@ -57,7 +59,7 @@ fn abort_cleans_conflict_state_without_moving_refs() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     repo.git_ok([
         "update-ref",
@@ -91,7 +93,7 @@ fn abort_in_place_conflict_restores_original_checkout() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--in-place"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     assert!(matches!(
         &state.worktree,
@@ -125,7 +127,7 @@ fn abort_succeeds_when_recorded_worktree_was_already_deleted() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let state = read_state(&repo);
     std::fs::remove_dir_all(state.worktree.path()).unwrap();
 
@@ -145,9 +147,9 @@ fn abort_succeeds_when_plan_was_already_deleted() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
-    state.phase = Phase::Deleting;
+    state.phase = deleting_phase();
     write_state(&repo, &state);
     std::fs::remove_file(repo.plan_path("stack")).unwrap();
 
@@ -169,9 +171,9 @@ fn status_reports_deleting_state_without_cleanup() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
-    state.phase = Phase::Deleting;
+    state.phase = deleting_phase();
     write_state(&repo, &state);
 
     repo.cascade().arg("status").assert().success().stdout(
@@ -191,9 +193,9 @@ fn continue_finishes_deleting_state() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
-    state.phase = Phase::Deleting;
+    state.phase = deleting_phase();
     write_state(&repo, &state);
 
     repo.cascade()
@@ -214,9 +216,9 @@ fn abort_finishes_cleanup_for_deleting_state() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let mut state = read_state(&repo);
-    state.phase = Phase::Deleting;
+    state.phase = deleting_phase();
     write_state(&repo, &state);
 
     repo.cascade()
@@ -256,13 +258,210 @@ fn continue_without_active_operation_fails_clearly() {
 }
 
 #[test]
+fn pause_at_checkpoints_allows_fix_before_replaying_child() {
+    let repo = paused_linear_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-current-tips",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    assert!(matches!(state.phase, Phase::Paused { .. }));
+    assert_eq!(state.replay_mode, ReplayMode::PauseAtCheckpoints);
+    assert_eq!(paused_state(&state).branch(), "pr-2");
+    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    std::fs::write(worktree.join("fix.txt"), "fix\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "fix.txt"]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "fix pr-2 after replay",
+    ]);
+    let fixed_pr2 = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    let state = read_state(&repo);
+    assert!(matches!(state.phase, Phase::Paused { .. }));
+    assert_eq!(paused_state(&state).branch(), "pr-3");
+    assert!(state.pending_branches.is_empty());
+    assert_eq!(
+        repo.git_output(["-C", worktree.to_str().unwrap(), "show", "HEAD:fix.txt"]),
+        "fix\n"
+    );
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_eq!(repo.rev_parse("pr-2"), fixed_pr2);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    repo.git_ok(["merge-base", "--is-ancestor", "pr-2", "pr-3"]);
+    assert_eq!(repo.show("pr-3:fix.txt"), "fix\n");
+    assert_eq!(repo.show("pr-3:pr3.txt"), "c\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn continue_refuses_dirty_paused_worktree() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success();
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    std::fs::write(worktree.join("dirty.txt"), "dirty\n").unwrap();
+
+    repo.cascade().arg("continue").assert().failure().stderr(
+        predicate::str::contains("paused worktree")
+            .and(predicate::str::contains("has uncommitted changes")),
+    );
+
+    let state = read_state(&repo);
+    assert!(matches!(state.phase, Phase::Paused { .. }));
+    assert_eq!(paused_state(&state).branch(), "pr-2");
+}
+
+#[test]
+fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
+    let repo = paused_intermediate_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at child base"));
+
+    let state = read_state(&repo);
+    let first_pause = paused_state(&state);
+    assert_eq!(first_pause.branch(), "pr-2");
+    assert!(matches!(first_pause, PausedState::ChildBase { .. }));
+    assert_eq!(state.pending_branches, vec!["pr-2", "pr-3"]);
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    std::fs::write(worktree.join("base-fix.txt"), "base fix\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "base-fix.txt"]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "fix child base",
+    ]);
+    let fixed_child_base = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    assert!(matches!(
+        paused_state(&state),
+        PausedState::BranchEnd { .. }
+    ));
+    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    std::fs::write(worktree.join("tip-fix.txt"), "tip fix\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "tip-fix.txt"]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "fix branch tip",
+    ]);
+    let fixed_pr2_tip = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_eq!(repo.rev_parse("pr-2"), fixed_pr2_tip);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_child_base);
+    assert_eq!(repo.show("pr-3:base-fix.txt"), "base fix\n");
+    repo.git_fails(["show", "pr-3:tip-fix.txt"]);
+    assert_eq!(repo.show("pr-2:tip-fix.txt"), "tip fix\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+}
+
+#[test]
 fn continue_refuses_unresolved_conflicts() {
     let repo = conflicting_stack();
 
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     repo.cascade()
         .arg("continue")
@@ -280,10 +479,10 @@ fn continue_after_conflict_finishes_apply() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     let state = read_state(&repo);
-    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
     std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -309,10 +508,10 @@ fn continue_after_conflict_continues_to_child_branch() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     let state = read_state(&repo);
-    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
     std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -338,13 +537,12 @@ fn continue_resumes_replay_phase_after_crash() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     // Simulate a crash mid-replay: the persisted phase is `replay` with no
     // current commit, and the worktree still has a cherry-pick in progress.
     let mut state = read_state(&repo);
-    state.phase = Phase::Replay;
-    state.current = None;
+    state.phase = Phase::Replay { current: None };
     state.mappings.clear();
     write_state(&repo, &state);
 
@@ -353,14 +551,14 @@ fn continue_resumes_replay_phase_after_crash() {
     repo.cascade()
         .arg("continue")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "apply stopped while replaying branch `pr-2`",
+        .success()
+        .stdout(predicate::str::contains(
+            "stopped on conflict while replaying branch `pr-2`",
         ));
 
     let state = read_state(&repo);
-    assert_eq!(state.phase, Phase::Conflict);
-    let worktree = std::path::PathBuf::from(state.current.unwrap().worktree);
+    assert!(matches!(state.phase, Phase::Conflict { .. }));
+    let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
     std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -382,7 +580,7 @@ fn continue_rejects_tampered_plan_but_abort_recovers() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
 
     // Tamper with the stored plan: duplicate a planned commit.
     let plan_path = repo.plan_path("stack");
@@ -415,22 +613,21 @@ fn continue_can_stop_again_on_later_conflict() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .failure();
+        .success();
     let first_state = read_state(&repo);
-    let first_conflict = first_state.current.unwrap().commit;
+    let first_conflict = conflict_current(&first_state).commit;
     let worktree = std::path::PathBuf::from(first_state.worktree.path());
     std::fs::write(worktree.join("a.txt"), "resolved a\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "a.txt"]);
 
-    repo.cascade().arg("continue").assert().failure().stderr(
-        predicate::str::contains("apply stopped while replaying branch `pr-2`")
-            .and(predicate::str::contains("git cascade continue"))
-            .and(predicate::str::contains("Do not run")),
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("stopped on conflict while replaying branch `pr-2`")
+            .and(predicate::str::contains("git cascade continue")),
     );
 
     let second_state = read_state(&repo);
-    assert_eq!(second_state.phase, Phase::Conflict);
-    let second_conflict = second_state.current.unwrap().commit;
+    assert!(matches!(second_state.phase, Phase::Conflict { .. }));
+    let second_conflict = conflict_current(&second_state).commit;
     assert_ne!(second_conflict, first_conflict);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
 }
@@ -526,12 +723,94 @@ fn repeated_conflict_stack() -> TestRepo {
     repo
 }
 
-fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
+fn paused_linear_stack() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch_new("pr-3");
+    repo.commit_file("pr3.txt", "c\n", "pr-3");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    repo
+}
+
+fn paused_intermediate_stack() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    let pr2_first = repo.commit_file("pr2-a.txt", "b\n", "pr-2 a");
+    repo.commit_file("pr2-b.txt", "c\n", "pr-2 b");
+    repo.switch_new_at("pr-3", &pr2_first);
+    repo.commit_file("pr3.txt", "d\n", "pr-3");
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+    repo
+}
+
+fn rewrite_anchor(repo: &TestRepo) {
+    repo.switch("main");
+    repo.commit_file("main2.txt", "new base\n", "new base");
+    repo.switch("pr-1");
+    repo.git_ok(["rebase", "main"]);
+    repo.switch("main");
+}
+
+fn deleting_phase() -> Phase {
+    Phase::Deleting { delete_plan: false }
+}
+
+fn conflict_current(state: &ReplayState) -> CurrentState {
+    match &state.phase {
+        Phase::Conflict { current, .. }
+        | Phase::Replay {
+            current: Some(current),
+        } => current.clone(),
+        phase => panic!("expected conflict or replay current phase, got {phase:?}"),
+    }
+}
+
+fn paused_state(state: &ReplayState) -> &PausedState {
+    match &state.phase {
+        Phase::Paused { paused } => paused,
+        phase => panic!("expected paused phase, got {phase:?}"),
+    }
+}
+
+fn read_state(repo: &TestRepo) -> ReplayState {
     let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }
 
-fn write_state(repo: &TestRepo, state: &git_cascade::state::ApplyState) {
+fn write_state(repo: &TestRepo, state: &ReplayState) {
     let content = serde_yaml::to_string(state).unwrap();
     std::fs::write(repo.common_dir().join("cascade/state.yaml"), content).unwrap();
 }

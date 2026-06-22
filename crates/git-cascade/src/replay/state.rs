@@ -1,7 +1,7 @@
+use crate::model::Strategy;
 use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
 use crate::{Error, Result};
-use clap::ValueEnum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -11,43 +11,42 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyState {
-    pub version: u32,
-    pub phase: Phase,
-    pub plan_name: PlanName,
-    pub plan_id: PlanId,
-    pub started_at: String,
-    pub updated_at: String,
-    pub pid: u32,
-    pub new_tip: String,
-    pub strategy: Strategy,
-    pub current: Option<CurrentState>,
-    pub worktree: WorktreeState,
-    pub completed: CompletedState,
-    pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
-    pub mappings: BTreeMap<String, String>,
-    pub pending: PendingState,
-    pub cleanup: CleanupState,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
-    Replay,
-    Conflict,
+    Replay {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<CurrentState>,
+    },
+    Conflict {
+        current: CurrentState,
+        message: String,
+    },
+    ContinueAfterConflict {
+        current: CurrentState,
+    },
+    Paused {
+        paused: PausedState,
+    },
+    ContinueAfterPause {
+        paused: PausedState,
+    },
     FinalUpdate,
-    Deleting,
+    Deleting {
+        delete_plan: bool,
+    },
 }
 
 impl Phase {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Replay => "replay",
-            Self::Conflict => "conflict",
+            Self::Replay { .. } => "replay",
+            Self::Conflict { .. } => "conflict",
+            Self::ContinueAfterConflict { .. } => "continue_after_conflict",
+            Self::Paused { .. } => "paused",
+            Self::ContinueAfterPause { .. } => "continue_after_pause",
             Self::FinalUpdate => "final_update",
-            Self::Deleting => "deleting",
+            Self::Deleting { .. } => "deleting",
         }
     }
 }
@@ -58,39 +57,78 @@ impl std::fmt::Display for Phase {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum Strategy {
-    /// Preserve old fork points between dependent branches.
-    PreserveForkPoints,
-    /// Replay each dependent branch onto its parent's rewritten planned tip.
-    MoveToPlannedTips,
-    /// Replay each dependent branch onto its parent's rewritten apply-time tip.
-    MoveToCurrentTips,
+pub enum ReplayMode {
+    #[default]
+    RunToCompletion,
+    PauseAtCheckpoints,
 }
 
-impl Strategy {
+impl ReplayMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::PreserveForkPoints => "preserve-fork-points",
-            Self::MoveToPlannedTips => "move-to-planned-tips",
-            Self::MoveToCurrentTips => "move-to-current-tips",
+            Self::RunToCompletion => "run-to-completion",
+            Self::PauseAtCheckpoints => "pause-at-checkpoints",
         }
+    }
+
+    pub fn pauses_at_checkpoints(self) -> bool {
+        self == Self::PauseAtCheckpoints
     }
 }
 
-impl std::fmt::Display for Strategy {
+impl std::fmt::Display for ReplayMode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CurrentState {
     pub branch: String,
     pub commit: String,
     pub worktree: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PausedState {
+    BranchEnd {
+        branch: String,
+        rewritten_tip: String,
+        temp_ref: String,
+        mapped_commit: String,
+        worktree: String,
+    },
+    ChildBase {
+        branch: String,
+        commit: String,
+        rewritten_tip: String,
+        worktree: String,
+    },
+}
+
+impl PausedState {
+    pub fn branch(&self) -> &str {
+        match self {
+            Self::BranchEnd { branch, .. } | Self::ChildBase { branch, .. } => branch,
+        }
+    }
+
+    pub fn rewritten_tip(&self) -> &str {
+        match self {
+            Self::BranchEnd { rewritten_tip, .. } | Self::ChildBase { rewritten_tip, .. } => {
+                rewritten_tip
+            }
+        }
+    }
+
+    pub fn worktree(&self) -> &str {
+        match self {
+            Self::BranchEnd { worktree, .. } | Self::ChildBase { worktree, .. } => worktree,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -136,19 +174,23 @@ pub enum RestoreState {
     Detached { head: String },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CompletedState {
-    pub temp_refs: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingState {
-    pub branches: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CleanupState {
-    pub delete_plan: bool,
+pub struct ReplayState {
+    pub version: u32,
+    pub phase: Phase,
+    pub plan_name: PlanName,
+    pub plan_id: PlanId,
+    pub started_at: String,
+    pub updated_at: String,
+    pub new_tip: String,
+    pub strategy: Strategy,
+    pub replay_mode: ReplayMode,
+    pub worktree: WorktreeState,
+    pub completed_temp_refs: Vec<String>,
+    pub branch_tips: BTreeMap<String, String>,
+    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
+    pub mappings: BTreeMap<String, String>,
+    pub pending_branches: Vec<String>,
 }
 
 pub struct StateFile {
@@ -172,7 +214,7 @@ fn acquire_lock(lock_file: &File, lock_path: &Path) -> Result<()> {
 }
 
 impl StateFile {
-    pub fn create(storage: &Storage, state: &ApplyState) -> Result<Self> {
+    pub fn create(storage: &Storage, state: &ReplayState) -> Result<Self> {
         storage.ensure_cascade_dir()?;
         let path = storage.state_path();
         let lock_path = storage.state_lock_path();
@@ -227,7 +269,7 @@ impl StateFile {
         Ok(Some(Self { path, lock_file }))
     }
 
-    pub fn read_state(&mut self) -> Result<ApplyState> {
+    pub fn read_state(&mut self) -> Result<ReplayState> {
         let content = fs::read_to_string(&self.path).map_err(|source| Error::IoWithPath {
             path: self.path.clone(),
             source,
@@ -235,7 +277,7 @@ impl StateFile {
         Ok(serde_yaml::from_str(&content)?)
     }
 
-    pub fn write_state(&mut self, state: &mut ApplyState) -> Result<()> {
+    pub fn write_state(&mut self, state: &mut ReplayState) -> Result<()> {
         state.updated_at = timestamp()?;
         self.write_state_without_touching_timestamp(state)
     }
@@ -258,7 +300,7 @@ impl StateFile {
         }
     }
 
-    fn write_state_without_touching_timestamp(&mut self, state: &ApplyState) -> Result<()> {
+    fn write_state_without_touching_timestamp(&mut self, state: &ReplayState) -> Result<()> {
         let yaml = serde_yaml::to_string(state)?;
         let temp_path = self
             .path
@@ -290,7 +332,7 @@ impl StateFile {
     }
 }
 
-pub fn read_state(storage: &Storage) -> Result<Option<ApplyState>> {
+pub fn read_state(storage: &Storage) -> Result<Option<ReplayState>> {
     let path = storage.state_path();
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
@@ -301,11 +343,12 @@ pub fn read_state(storage: &Storage) -> Result<Option<ApplyState>> {
     Ok(Some(serde_yaml::from_str(&content)?))
 }
 
-pub struct ApplyStateInput<'a> {
+pub struct InitialReplayStateInput<'a> {
     pub plan_name: &'a PlanName,
     pub plan_id: &'a PlanId,
     pub new_tip: &'a str,
     pub strategy: Strategy,
+    pub replay_mode: ReplayMode,
     pub pending_branches: Vec<String>,
     pub branch_tips: BTreeMap<String, String>,
     pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
@@ -313,29 +356,25 @@ pub struct ApplyStateInput<'a> {
     pub worktree: WorktreeState,
 }
 
-pub fn initial_apply_state(input: ApplyStateInput<'_>) -> Result<ApplyState> {
+pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<ReplayState> {
     let now = timestamp()?;
 
-    Ok(ApplyState {
+    Ok(ReplayState {
         version: 1,
-        phase: Phase::Replay,
+        phase: Phase::Replay { current: None },
         plan_name: input.plan_name.clone(),
         plan_id: *input.plan_id,
         started_at: now.clone(),
         updated_at: now,
-        pid: std::process::id(),
         new_tip: input.new_tip.to_owned(),
         strategy: input.strategy,
-        current: None,
+        replay_mode: input.replay_mode,
         worktree: input.worktree,
-        completed: CompletedState::default(),
+        completed_temp_refs: Vec::new(),
         branch_tips: input.branch_tips,
         extra_commits: input.extra_commits,
         mappings: input.mappings,
-        pending: PendingState {
-            branches: input.pending_branches,
-        },
-        cleanup: CleanupState::default(),
+        pending_branches: input.pending_branches,
     })
 }
 

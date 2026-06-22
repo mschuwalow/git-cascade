@@ -1,9 +1,9 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::state::Phase;
+use git_cascade::replay::{Phase, ReplayState};
+use indoc::indoc;
 use predicates::prelude::*;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -159,8 +159,10 @@ fn continue_finishes_successful_deleting_state() {
         ));
 
     let state = read_state(&repo);
-    assert_eq!(state.phase, Phase::Deleting);
-    assert!(state.cleanup.delete_plan);
+    match state.phase {
+        Phase::Deleting { delete_plan } => assert!(delete_plan),
+        phase => panic!("expected deleting phase, got {phase:?}"),
+    }
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     assert!(repo.common_dir().join("cascade/state.yaml").exists());
     assert!(repo.plan_path("stack").exists());
@@ -179,11 +181,12 @@ fn continue_finishes_successful_deleting_state() {
 
 fn write_move_anchor_hook(repo: &TestRepo) -> std::path::PathBuf {
     let path = repo.path().join("move-anchor-hook.sh");
-    let mut file = std::fs::File::create(&path).unwrap();
-    writeln!(file, "#!/bin/sh").unwrap();
-    writeln!(
-        file,
-        "git -C \"$GIT_CASCADE_TEST_REPO\" update-ref refs/heads/pr-1 refs/heads/main"
+    std::fs::write(
+        &path,
+        indoc! {r#"
+            #!/bin/sh
+            git -C "$GIT_CASCADE_TEST_REPO" update-ref refs/heads/pr-1 refs/heads/main
+        "#},
     )
     .unwrap();
 
@@ -195,11 +198,12 @@ fn write_move_anchor_hook(repo: &TestRepo) -> std::path::PathBuf {
 
 fn write_move_dependent_hook(repo: &TestRepo) -> std::path::PathBuf {
     let path = repo.path().join("move-dependent-hook.sh");
-    let mut file = std::fs::File::create(&path).unwrap();
-    writeln!(file, "#!/bin/sh").unwrap();
-    writeln!(
-        file,
-        "git -C \"$GIT_CASCADE_TEST_REPO\" update-ref refs/heads/pr-2 refs/heads/main"
+    std::fs::write(
+        &path,
+        indoc! {r#"
+            #!/bin/sh
+            git -C "$GIT_CASCADE_TEST_REPO" update-ref refs/heads/pr-2 refs/heads/main
+        "#},
     )
     .unwrap();
 
@@ -211,9 +215,14 @@ fn write_move_dependent_hook(repo: &TestRepo) -> std::path::PathBuf {
 
 fn write_failing_hook(repo: &TestRepo, name: &str) -> std::path::PathBuf {
     let path = repo.path().join(name);
-    let mut file = std::fs::File::create(&path).unwrap();
-    writeln!(file, "#!/bin/sh").unwrap();
-    writeln!(file, "exit 1").unwrap();
+    std::fs::write(
+        &path,
+        indoc! {r#"
+            #!/bin/sh
+            exit 1
+        "#},
+    )
+    .unwrap();
 
     let mut permissions = std::fs::metadata(&path).unwrap().permissions();
     permissions.set_mode(0o755);
@@ -250,7 +259,7 @@ fn clean_stack_with_rebased_root() -> TestRepo {
     repo
 }
 
-fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
+fn read_state(repo: &TestRepo) -> ReplayState {
     let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }

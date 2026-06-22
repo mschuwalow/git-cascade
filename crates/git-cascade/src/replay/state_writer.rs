@@ -1,8 +1,8 @@
+use super::state::{ReplayState, StateFile};
 use crate::Result;
-use crate::state::{ApplyState, StateFile};
 
 pub(crate) trait StateWriter {
-    fn write_state(&mut self, state: &mut ApplyState) -> Result<()>;
+    fn write_state(&mut self, state: &mut ReplayState) -> Result<()>;
     fn remove_state(&mut self) -> Result<()>;
 }
 
@@ -19,7 +19,7 @@ impl LockedStateWriter {
 }
 
 impl StateWriter for LockedStateWriter {
-    fn write_state(&mut self, state: &mut ApplyState) -> Result<()> {
+    fn write_state(&mut self, state: &mut ReplayState) -> Result<()> {
         self.state_file
             .as_mut()
             .expect("locked state writer has state file")
@@ -37,7 +37,7 @@ impl StateWriter for LockedStateWriter {
 pub(crate) struct NoopStateWriter;
 
 impl StateWriter for NoopStateWriter {
-    fn write_state(&mut self, _state: &mut ApplyState) -> Result<()> {
+    fn write_state(&mut self, _state: &mut ReplayState) -> Result<()> {
         Ok(())
     }
 

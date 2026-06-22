@@ -1,3 +1,4 @@
+use crate::test_hooks;
 use crate::{Error, Result};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -36,25 +37,7 @@ impl Git {
         S: AsRef<OsStr>,
     {
         let args = collect_args(args);
-        let output = Command::new("git")
-            .current_dir(&self.cwd)
-            .args(&args)
-            .output()?;
-
-        if !output.status.success() {
-            return Err(Error::Git {
-                args: display_args(&args),
-                status: output
-                    .status
-                    .code()
-                    .map_or_else(|| "signal".to_owned(), |code| code.to_string()),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            });
-        }
-
-        String::from_utf8(output.stdout).map_err(|_| Error::GitUtf8 {
-            args: display_args(&args),
-        })
+        self.output_collected(&args)
     }
 
     pub fn run<I, S>(&self, args: I) -> Result<()>
@@ -75,9 +58,39 @@ impl Git {
         S: AsRef<OsStr>,
     {
         let args = collect_args(args);
+        self.output_allowing_status_collected(&args, allowed_statuses)
+    }
+
+    fn output_collected(&self, args: &[OsString]) -> Result<String> {
         let output = Command::new("git")
             .current_dir(&self.cwd)
-            .args(&args)
+            .args(args)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(Error::Git {
+                args: display_args(args),
+                status: output
+                    .status
+                    .code()
+                    .map_or_else(|| "signal".to_owned(), |code| code.to_string()),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
+        }
+
+        String::from_utf8(output.stdout).map_err(|_| Error::GitUtf8 {
+            args: display_args(args),
+        })
+    }
+
+    fn output_allowing_status_collected(
+        &self,
+        args: &[OsString],
+        allowed_statuses: &[i32],
+    ) -> Result<Option<String>> {
+        let output = Command::new("git")
+            .current_dir(&self.cwd)
+            .args(args)
             .output()?;
 
         if !output.status.success() {
@@ -89,7 +102,7 @@ impl Git {
                 return Ok(None);
             }
             return Err(Error::Git {
-                args: display_args(&args),
+                args: display_args(args),
                 status: output
                     .status
                     .code()
@@ -101,8 +114,36 @@ impl Git {
         String::from_utf8(output.stdout)
             .map(Some)
             .map_err(|_| Error::GitUtf8 {
-                args: display_args(&args),
+                args: display_args(args),
             })
+    }
+
+    fn run_mutating<I, S>(&self, args: I) -> Result<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
+        test_hooks::run("before-git-operation")?;
+        let result = self.output_collected(&args).map(|_| ());
+        let hook_result = test_hooks::run("after-git-operation");
+        result?;
+        hook_result
+    }
+
+    fn run_mutating_allowing_status<I, S>(&self, args: I, allowed_statuses: &[i32]) -> Result<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect_args(args);
+        test_hooks::run("before-git-operation")?;
+        let result = self
+            .output_allowing_status_collected(&args, allowed_statuses)
+            .map(|_| ());
+        let hook_result = test_hooks::run("after-git-operation");
+        result?;
+        hook_result
     }
 
     pub fn git_common_dir(&self) -> Result<PathBuf> {
@@ -261,14 +302,17 @@ impl Git {
     }
 
     pub fn ensure_clean_worktree(&self) -> Result<()> {
-        let status = self.output(["status", "--porcelain"])?;
-        if status.is_empty() {
+        if self.is_clean_worktree()? {
             return Ok(());
         }
 
         Err(Error::InvalidInvocation(
             "cannot apply in-place with a dirty worktree; commit, stash, or discard local changes first".to_owned(),
         ))
+    }
+
+    pub fn is_clean_worktree(&self) -> Result<bool> {
+        Ok(self.output(["status", "--porcelain"])?.is_empty())
     }
 
     pub fn checked_out_branches_except(&self, excluded_path: &Path) -> Result<Vec<String>> {
@@ -415,48 +459,46 @@ impl Git {
     }
 
     pub fn worktree_add_detached(&self, path: &Path, commit: &str) -> Result<()> {
-        self.output([
+        self.run_mutating([
             OsString::from("worktree"),
             OsString::from("add"),
             OsString::from("--detach"),
             path.as_os_str().to_owned(),
             OsString::from(commit),
         ])
-        .map(|_| ())
     }
 
     pub fn worktree_remove_force(&self, path: &Path) -> Result<()> {
-        self.output([
+        self.run_mutating([
             OsString::from("worktree"),
             OsString::from("remove"),
             OsString::from("--force"),
             path.as_os_str().to_owned(),
         ])
-        .map(|_| ())
     }
 
     pub fn reset_hard(&self, commit: &str) -> Result<()> {
-        self.run(["reset", "--hard", commit])
+        self.run_mutating(["reset", "--hard", commit])
     }
 
     pub fn switch_detached(&self, commit: &str) -> Result<()> {
-        self.run(["switch", "--detach", commit])
+        self.run_mutating(["switch", "--detach", commit])
     }
 
     pub fn switch_branch(&self, branch: &str) -> Result<()> {
-        self.run(["switch", branch])
+        self.run_mutating(["switch", branch])
     }
 
     pub fn cherry_pick(&self, commit: &str) -> Result<()> {
-        self.run(["cherry-pick", commit])
+        self.run_mutating(["cherry-pick", commit])
     }
 
     pub fn cherry_pick_continue(&self) -> Result<()> {
-        self.run(["cherry-pick", "--continue"])
+        self.run_mutating(["cherry-pick", "--continue"])
     }
 
     pub fn cherry_pick_skip(&self) -> Result<()> {
-        self.run(["cherry-pick", "--skip"])
+        self.run_mutating(["cherry-pick", "--skip"])
     }
 
     pub fn cherry_pick_in_progress(&self) -> Result<bool> {
@@ -470,8 +512,7 @@ impl Git {
     }
 
     pub fn try_cherry_pick_abort(&self) -> Result<()> {
-        self.output_allowing_status(["cherry-pick", "--abort"], &[1, 128])
-            .map(|_| ())
+        self.run_mutating_allowing_status(["cherry-pick", "--abort"], &[1, 128])
     }
 
     pub fn unmerged_entries(&self) -> Result<Vec<String>> {
@@ -483,11 +524,11 @@ impl Git {
     }
 
     pub fn update_ref(&self, refname: &str, new_value: &str) -> Result<()> {
-        self.run(["update-ref", refname, new_value])
+        self.run_mutating(["update-ref", refname, new_value])
     }
 
     pub fn delete_ref(&self, refname: &str) -> Result<()> {
-        self.run(["update-ref", "-d", refname])
+        self.run_mutating(["update-ref", "-d", refname])
     }
 
     pub fn refs_under(&self, namespace: &str) -> Result<Vec<String>> {
@@ -500,6 +541,7 @@ impl Git {
 
     pub fn update_ref_transaction(&self, commands: &str) -> Result<()> {
         let args = [OsString::from("update-ref"), OsString::from("--stdin")];
+        test_hooks::run("before-git-operation")?;
         let mut child = Command::new("git")
             .current_dir(&self.cwd)
             .args(&args)
@@ -514,6 +556,7 @@ impl Git {
             .expect("stdin is piped")
             .write_all(commands.as_bytes())?;
         let output = child.wait_with_output()?;
+        test_hooks::run("after-git-operation")?;
 
         if output.status.success() {
             return Ok(());

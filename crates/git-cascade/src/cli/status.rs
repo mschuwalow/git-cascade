@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::git::Git;
-use crate::state::read_state;
+use crate::replay::state::read_state;
+use crate::replay::{PausedState, Phase};
 use crate::storage::Storage;
 
 pub(super) fn status() -> Result<()> {
@@ -23,22 +24,41 @@ fn status_output(storage: &Storage) -> Result<String> {
     output.push_str(&format!("plan-id: {}\n", state.plan_id));
     output.push_str(&format!("new-tip: {}\n", state.new_tip));
     output.push_str(&format!("strategy: {}\n", state.strategy.as_str()));
+    output.push_str(&format!("replay-mode: {}\n", state.replay_mode));
     output.push_str(&format!("worktree-mode: {}\n", state.worktree));
-    if let Some(current) = &state.current {
-        output.push_str(&format!("current-branch: {}\n", current.branch));
-        output.push_str(&format!("current-commit: {}\n", current.commit));
-    } else {
-        output.push_str("current: none\n");
+    match &state.phase {
+        Phase::Replay {
+            current: Some(current),
+        }
+        | Phase::Conflict { current, .. }
+        | Phase::ContinueAfterConflict { current } => {
+            output.push_str(&format!("current-branch: {}\n", current.branch));
+            output.push_str(&format!("current-commit: {}\n", current.commit));
+        }
+        _ => output.push_str("current: none\n"),
+    }
+    if let Phase::Paused { paused } | Phase::ContinueAfterPause { paused } = &state.phase {
+        match paused {
+            PausedState::BranchEnd { .. } => {
+                output.push_str("paused-kind: branch-end\n");
+            }
+            PausedState::ChildBase { commit, .. } => {
+                output.push_str("paused-kind: child-base\n");
+                output.push_str(&format!("paused-commit: {commit}\n"));
+            }
+        }
+        output.push_str(&format!("paused-branch: {}\n", paused.branch()));
+        output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip()));
     }
     output.push_str(&format!("worktree: {}\n", state.worktree.path()));
     output.push_str(&format!(
         "completed-temp-refs: {}\n",
-        state.completed.temp_refs.len()
+        state.completed_temp_refs.len()
     ));
-    if state.pending.branches.is_empty() {
+    if state.pending_branches.is_empty() {
         output.push_str("pending: none\n");
     } else {
-        output.push_str(&format!("pending: {}\n", state.pending.branches.join(", ")));
+        output.push_str(&format!("pending: {}\n", state.pending_branches.join(", ")));
     }
 
     Ok(output)

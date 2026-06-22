@@ -86,8 +86,10 @@ fn flatten_reconflicts_through_normal_conflict_flow() {
     repo.cascade()
         .arg("sync")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("apply stopped while replaying"));
+        .success()
+        .stdout(predicate::str::contains(
+            "stopped on conflict while replaying",
+        ));
 
     let state = read_state(&repo);
     let worktree = std::path::PathBuf::from(state.worktree.path());
@@ -439,7 +441,7 @@ fn double_merge_stack() -> TestRepo {
     repo
 }
 
-fn read_state(repo: &TestRepo) -> git_cascade::state::ApplyState {
+fn read_state(repo: &TestRepo) -> git_cascade::replay::ReplayState {
     let content = std::fs::read_to_string(repo.common_dir().join("cascade/state.yaml")).unwrap();
     serde_yaml::from_str(&content).unwrap()
 }

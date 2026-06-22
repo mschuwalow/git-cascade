@@ -1,8 +1,9 @@
+use super::handle_replay_outcome;
 use super::landed as landed_inference;
-use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
+use crate::model::Strategy;
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
-use crate::state::Strategy;
+use crate::replay::{ReplayOptions, dry_run, execute};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -10,6 +11,7 @@ pub(super) struct RunOptions {
     pub(super) strategy: Strategy,
     pub(super) is_dry_run: bool,
     pub(super) in_place: bool,
+    pub(super) pause_at_checkpoints: bool,
 }
 
 pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOptions) -> Result<()> {
@@ -173,11 +175,12 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                 options.git,
                 options.storage,
                 &plan,
-                ApplyOptions {
+                ReplayOptions {
                     plan_name: options.generate.name,
                     new_tip_input: options.new_tip,
                     strategy: options.run.strategy,
                     in_place: options.run.in_place,
+                    pause_at_checkpoints: options.run.pause_at_checkpoints,
                 },
             )?
         );
@@ -186,20 +189,20 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
 
     let plan = generate_stored_plan(options.git, options.storage, &options.generate, false)?;
 
-    execute(
+    let outcome = execute(
         options.git,
         options.storage,
         &plan,
-        ApplyOptions {
+        ReplayOptions {
             plan_name: options.generate.name.clone(),
             new_tip_input: options.new_tip,
             strategy: options.run.strategy,
             in_place: options.run.in_place,
+            pause_at_checkpoints: options.run.pause_at_checkpoints,
         },
     )?;
 
-    println!("{}", options.success_message);
-    Ok(())
+    handle_replay_outcome(outcome, options.success_message)
 }
 
 fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {

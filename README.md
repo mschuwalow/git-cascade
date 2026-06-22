@@ -279,6 +279,27 @@ git cascade abort
 
 Abort cleans temporary state and leaves the stored plan intact so it can be retried.
 
+## Pause For Checks
+
+Pass `--pause-at-checkpoints` when you want to run tests or make manual fixes at every point later replay depends on:
+
+```sh
+git cascade restack pr-1 --pause-at-checkpoints
+```
+
+Replay pauses after each rewritten branch. It also pauses at any rewritten commit that a child branch will use as its replay base, such as an intermediate preserved fork point or a planned parent tip before extra parent commits are replayed.
+
+When replay pauses, permanent branch refs are still unchanged. Run checks in the reported worktree. If a branch needs fixes, commit them in that worktree, then continue:
+
+```sh
+git -C <worktree> status
+git -C <worktree> add <files>
+git -C <worktree> commit -m "fix after replay"
+git cascade continue
+```
+
+`continue` records the paused worktree's current `HEAD` as the paused branch tip or child-base mapping, then replays dependent work using the selected strategy. It refuses to continue if the paused worktree has uncommitted changes or if `HEAD` no longer descends from the paused rewritten commit.
+
 ## Power-User Plan Commands
 
 Use `git cascade plan ...` when you need to snapshot topology before a destructive rewrite, inspect a plan before applying it, or script the lower-level workflow directly.
@@ -341,6 +362,12 @@ git cascade plan apply stack --new-tip pr-1 --in-place
 ```
 
 `--in-place` requires a clean worktree. If replay conflicts, the conflict is left in the current worktree and `git cascade abort` restores the checkout that was active before apply started.
+
+Pause after each replayed branch when applying a stored plan:
+
+```sh
+git cascade plan apply stack --new-tip pr-1 --pause-at-checkpoints
+```
 
 Replace an existing plan:
 

@@ -1,8 +1,10 @@
+use super::handle_replay_outcome;
 use crate::Result;
-use crate::apply::{ApplyOptions, dry_run, execute};
 use crate::git::Git;
+use crate::model::Strategy;
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
-use crate::state::{Strategy, read_state};
+use crate::replay::state::read_state;
+use crate::replay::{ReplayOptions, dry_run, execute};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -40,6 +42,9 @@ pub(super) enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
+        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
+        #[arg(long)]
+        pause_at_checkpoints: bool,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -71,7 +76,15 @@ pub(super) fn run(command: Command) -> Result<()> {
             strategy,
             dry_run,
             in_place,
-        } => apply(name, &new_tip, strategy, dry_run, in_place),
+            pause_at_checkpoints,
+        } => apply(
+            name,
+            &new_tip,
+            strategy,
+            dry_run,
+            in_place,
+            pause_at_checkpoints,
+        ),
         Command::List => list(),
         Command::Show { name } => show(&name),
         Command::Remove { name } => remove(name),
@@ -103,22 +116,26 @@ fn apply(
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
+    pause_at_checkpoints: bool,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let plan = Plan::from_yaml(&storage.read_plan(&name)?)?;
-    let options = ApplyOptions {
+    let options = ReplayOptions {
         plan_name: name,
         new_tip_input: new_tip.to_owned(),
         strategy,
         in_place,
+        pause_at_checkpoints,
     };
 
     if is_dry_run {
         print!("{}", dry_run(&git, &storage, &plan, options)?);
     } else {
-        execute(&git, &storage, &plan, options)?;
-        println!("applied cascade plan");
+        handle_replay_outcome(
+            execute(&git, &storage, &plan, options)?,
+            "applied cascade plan",
+        )?;
     }
 
     Ok(())

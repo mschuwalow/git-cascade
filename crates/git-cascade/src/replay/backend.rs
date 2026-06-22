@@ -1,7 +1,7 @@
+use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
-use crate::state::{ApplyState, CurrentState, RestoreState, WorktreeState};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -11,12 +11,12 @@ use std::fs;
 use std::path::PathBuf;
 
 pub(crate) trait ReplayBackend {
-    fn start(&mut self, state: &ApplyState) -> Result<()>;
+    fn start(&mut self, state: &ReplayState) -> Result<()>;
     fn no_branches(&mut self) -> Result<()>;
     fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<String, String>>;
     fn prepare_branch(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         branch_index: usize,
         total_branches: usize,
         node: &Node,
@@ -33,12 +33,12 @@ pub(crate) trait ReplayBackend {
     ) -> Result<()>;
     fn cherry_pick(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         node: &Node,
         commit: &str,
         commit_index: usize,
         total_commits: usize,
-    ) -> Result<String>;
+    ) -> Result<CherryPickOutcome>;
     /// Reports that a merge commit was flattened away.
     fn flatten_merge(
         &mut self,
@@ -49,9 +49,11 @@ pub(crate) trait ReplayBackend {
     ) -> Result<()>;
     fn continue_cherry_pick(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         current: &CurrentState,
     ) -> Result<String>;
+    fn resume_paused_branch(&mut self, state: &ReplayState, paused: &PausedState)
+    -> Result<String>;
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -68,9 +70,14 @@ pub(crate) trait ReplayBackend {
         total_branches: usize,
         rewritten_tip: &str,
     ) -> Result<(String, String)>;
-    fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()>;
-    fn delete_applied_plan(&mut self, state: &ApplyState) -> Result<()>;
-    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()>;
+    fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
+    fn delete_applied_plan(&mut self, state: &ReplayState) -> Result<()>;
+    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()>;
+}
+
+pub(crate) enum CherryPickOutcome {
+    Applied(String),
+    Conflict { message: String },
 }
 
 pub(crate) struct GitReplayBackend<'a> {
@@ -85,10 +92,10 @@ impl<'a> GitReplayBackend<'a> {
 }
 
 impl ReplayBackend for GitReplayBackend<'_> {
-    fn start(&mut self, state: &ApplyState) -> Result<()> {
+    fn start(&mut self, state: &ReplayState) -> Result<()> {
         eprintln!(
-            "Applying cascade plan `{}` with strategy `{}` in {} worktree mode",
-            state.plan_name, state.strategy, state.worktree
+            "Applying cascade plan `{}` with strategy `{}` in {} worktree mode ({})",
+            state.plan_name, state.strategy, state.worktree, state.replay_mode
         );
         Ok(())
     }
@@ -104,7 +111,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn prepare_branch(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         branch_index: usize,
         total_branches: usize,
         node: &Node,
@@ -116,12 +123,12 @@ impl ReplayBackend for GitReplayBackend<'_> {
         );
         let worktree = std::path::PathBuf::from(state.worktree.path());
         let worktree_git = Git::new(&worktree);
-        if state.worktree.is_in_place() && state.completed.temp_refs.is_empty() {
+        if state.worktree.is_in_place() && state.completed_temp_refs.is_empty() {
             // A stale cherry-pick can linger after a crashed replay.
-            let _ = worktree_git.try_cherry_pick_abort();
+            worktree_git.try_cherry_pick_abort()?;
             worktree_git.switch_detached(base)
         } else if worktree.exists() {
-            let _ = worktree_git.try_cherry_pick_abort();
+            worktree_git.try_cherry_pick_abort()?;
             worktree_git.reset_hard(base)
         } else {
             self.git.worktree_add_detached(&worktree, base)
@@ -154,12 +161,12 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn cherry_pick(
         &mut self,
-        state: &ApplyState,
-        node: &Node,
+        state: &ReplayState,
+        _node: &Node,
         commit: &str,
         commit_index: usize,
         total_commits: usize,
-    ) -> Result<String> {
+    ) -> Result<CherryPickOutcome> {
         eprintln!(
             "  cherry-pick {}/{} {}",
             commit_index + 1,
@@ -169,22 +176,22 @@ impl ReplayBackend for GitReplayBackend<'_> {
         let worktree = std::path::PathBuf::from(state.worktree.path());
         let worktree_git = Git::new(&worktree);
         if let Err(error) = worktree_git.cherry_pick(commit) {
+            let Error::Git { .. } = error else {
+                return Err(error);
+            };
             if is_empty_cherry_pick(&worktree_git)? {
                 worktree_git.cherry_pick_skip()?;
                 eprintln!(
                     "  skipped empty commit {}; its changes are already applied",
                     short_oid(commit)
                 );
-                return worktree_git.head_oid();
+                return worktree_git.head_oid().map(CherryPickOutcome::Applied);
             }
-            return Err(Error::ApplyStopped {
-                branch: node.branch.clone(),
-                commit: commit.to_owned(),
-                worktree,
+            return Ok(CherryPickOutcome::Conflict {
                 message: error.to_string(),
             });
         }
-        worktree_git.head_oid()
+        worktree_git.head_oid().map(CherryPickOutcome::Applied)
     }
 
     fn flatten_merge(
@@ -241,7 +248,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn continue_cherry_pick(
         &mut self,
-        _state: &ApplyState,
+        _state: &ReplayState,
         current: &CurrentState,
     ) -> Result<String> {
         let worktree = std::path::PathBuf::from(&current.worktree);
@@ -262,25 +269,68 @@ impl ReplayBackend for GitReplayBackend<'_> {
             return worktree_git.head_oid();
         }
 
+        if !worktree_git.cherry_pick_in_progress()? {
+            if worktree_git.has_staged_changes()? {
+                return Err(Error::InvalidInvocation(format!(
+                    "worktree {} has staged changes but no cherry-pick in progress; commit, stash, or discard them before continuing",
+                    worktree.display()
+                )));
+            }
+            return worktree_git.head_oid();
+        }
+
         worktree_git.cherry_pick_continue()?;
         worktree_git.head_oid()
     }
 
-    fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
+    fn resume_paused_branch(
+        &mut self,
+        _state: &ReplayState,
+        paused: &PausedState,
+    ) -> Result<String> {
+        let worktree = std::path::PathBuf::from(paused.worktree());
+        let worktree_git = Git::new(&worktree);
+        if !worktree_git.is_clean_worktree()? {
+            return Err(Error::InvalidInvocation(format!(
+                "paused worktree {} has uncommitted changes; commit, stash, or discard them before continuing",
+                worktree.display()
+            )));
+        }
+        let head = worktree_git.head_oid()?;
+        if !worktree_git.is_ancestor(paused.rewritten_tip(), &head)? {
+            return Err(Error::InvalidInvocation(format!(
+                "paused branch `{}` HEAD `{}` is not a descendant of rewritten tip `{}`; restore the paused branch tip or abort the cascade operation",
+                paused.branch(),
+                head,
+                paused.rewritten_tip()
+            )));
+        }
+        if let PausedState::BranchEnd { temp_ref, .. } = paused {
+            self.git.update_ref(temp_ref, &head)?;
+        }
+        eprintln!(
+            "Continuing after paused branch `{}` at {}",
+            paused.branch(),
+            short_oid(&head)
+        );
+        Ok(head)
+    }
+
+    fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()> {
         eprintln!("Updating branch refs");
         finish_final_update(self.git, plan, state)
     }
 
-    fn delete_applied_plan(&mut self, state: &ApplyState) -> Result<()> {
+    fn delete_applied_plan(&mut self, state: &ReplayState) -> Result<()> {
         self.storage.delete_plan_if_exists(state.plan_name.clone())
     }
 
-    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
+    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()> {
         eprintln!("Cleaning temporary cascade state");
         let worktree = worktree_path(self.storage, state);
         if worktree.exists() {
             let worktree_git = Git::new(&worktree);
-            let _ = worktree_git.try_cherry_pick_abort();
+            worktree_git.try_cherry_pick_abort()?;
             if let WorktreeState::InPlace { restore, .. } = &state.worktree {
                 match restore {
                     RestoreState::Branch { name, .. } => worktree_git.switch_branch(name)?,
@@ -290,17 +340,17 @@ impl ReplayBackend for GitReplayBackend<'_> {
         }
 
         let mut refs = BTreeSet::new();
-        refs.extend(state.completed.temp_refs.iter().cloned());
+        refs.extend(state.completed_temp_refs.iter().cloned());
         refs.extend(
             self.git
                 .refs_under(&format!("refs/cascade/tmp/{}", state.plan_id))?,
         );
         for temp_ref in refs {
-            let _ = self.git.delete_ref(&temp_ref);
+            self.git.delete_ref(&temp_ref)?;
         }
 
-        if state.worktree.is_temporary() {
-            let _ = self.git.worktree_remove_force(&worktree);
+        if state.worktree.is_temporary() && worktree.exists() {
+            self.git.worktree_remove_force(&worktree)?;
             if worktree.exists() {
                 fs::remove_dir_all(&worktree).map_err(|source| Error::IoWithPath {
                     path: worktree.clone(),
@@ -323,12 +373,13 @@ impl DryRunReplayBackend {
         git: &Git,
         storage: &Storage,
         plan: &Plan,
-        state: &ApplyState,
+        state: &ReplayState,
     ) -> Result<Self> {
         let mut output = String::new();
         writeln!(output, "# git-cascade apply --dry-run").unwrap();
         writeln!(output, "new-tip {}", state.new_tip).unwrap();
         writeln!(output, "strategy {}", state.strategy).unwrap();
+        writeln!(output, "replay-mode {}", state.replay_mode).unwrap();
         writeln!(output, "worktree-mode {}", state.worktree).unwrap();
         let worktree = if state.worktree.path().is_empty() {
             storage.worktrees_dir().join(plan.plan_id.to_string())
@@ -354,7 +405,7 @@ impl DryRunReplayBackend {
 }
 
 impl ReplayBackend for DryRunReplayBackend {
-    fn start(&mut self, _state: &ApplyState) -> Result<()> {
+    fn start(&mut self, _state: &ReplayState) -> Result<()> {
         Ok(())
     }
 
@@ -368,7 +419,7 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn prepare_branch(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         _branch_index: usize,
         _total_branches: usize,
         node: &Node,
@@ -378,14 +429,14 @@ impl ReplayBackend for DryRunReplayBackend {
         writeln!(self.output).unwrap();
         writeln!(self.output, "# branch {}", node.branch).unwrap();
         writeln!(self.output, "replay-base {base}").unwrap();
-        if state.worktree.is_in_place() && state.completed.temp_refs.is_empty() {
+        if state.worktree.is_in_place() && state.completed_temp_refs.is_empty() {
             writeln!(
                 self.output,
                 "git -C {} switch --detach {base}",
                 worktree.display()
             )
             .unwrap();
-        } else if state.completed.temp_refs.is_empty() && state.worktree.is_temporary() {
+        } else if state.completed_temp_refs.is_empty() && state.worktree.is_temporary() {
             writeln!(
                 self.output,
                 "git worktree add --detach {} {base}",
@@ -417,12 +468,12 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn cherry_pick(
         &mut self,
-        state: &ApplyState,
+        state: &ReplayState,
         node: &Node,
         commit: &str,
         _commit_index: usize,
         _total_commits: usize,
-    ) -> Result<String> {
+    ) -> Result<CherryPickOutcome> {
         writeln!(
             self.output,
             "git -C {} cherry-pick {commit}",
@@ -430,9 +481,15 @@ impl ReplayBackend for DryRunReplayBackend {
         )
         .unwrap();
         if commit == node.tip {
-            Ok(format!("<rewritten {} planned tip>", node.branch))
+            Ok(CherryPickOutcome::Applied(format!(
+                "<rewritten {} planned tip>",
+                node.branch
+            )))
         } else {
-            Ok(format!("<rewritten {}:{commit}>", node.branch))
+            Ok(CherryPickOutcome::Applied(format!(
+                "<rewritten {}:{commit}>",
+                node.branch
+            )))
         }
     }
 
@@ -487,13 +544,36 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn continue_cherry_pick(
         &mut self,
-        _state: &ApplyState,
+        _state: &ReplayState,
         current: &CurrentState,
     ) -> Result<String> {
         Ok(format!("<rewritten {}:{}>", current.branch, current.commit))
     }
 
-    fn final_update(&mut self, plan: &Plan, state: &ApplyState) -> Result<()> {
+    fn resume_paused_branch(
+        &mut self,
+        _state: &ReplayState,
+        paused: &PausedState,
+    ) -> Result<String> {
+        writeln!(self.output).unwrap();
+        match paused {
+            PausedState::BranchEnd { branch, .. } => {
+                writeln!(self.output, "# pause after branch {branch}").unwrap();
+            }
+            PausedState::ChildBase { branch, commit, .. } => {
+                writeln!(self.output, "# pause at child base {branch}:{commit}").unwrap();
+            }
+        }
+        writeln!(
+            self.output,
+            "# run checks in {}, commit fixes, then git cascade continue",
+            paused.worktree()
+        )
+        .unwrap();
+        Ok(paused.rewritten_tip().to_owned())
+    }
+
+    fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()> {
         writeln!(self.output).unwrap();
         writeln!(self.output, "# final ref transaction").unwrap();
         writeln!(self.output, "git update-ref --stdin <<'EOF'").unwrap();
@@ -506,11 +586,11 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn delete_applied_plan(&mut self, _state: &ApplyState) -> Result<()> {
+    fn delete_applied_plan(&mut self, _state: &ReplayState) -> Result<()> {
         Ok(())
     }
 
-    fn cleanup_deleting_state(&mut self, state: &mut ApplyState) -> Result<()> {
+    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()> {
         let WorktreeState::InPlace { path, restore } = &state.worktree else {
             return Ok(());
         };
@@ -537,13 +617,13 @@ fn is_empty_cherry_pick(worktree_git: &Git) -> Result<bool> {
         && !worktree_git.has_staged_changes()?)
 }
 
-fn finish_final_update(git: &Git, plan: &Plan, state: &ApplyState) -> Result<()> {
+fn finish_final_update(git: &Git, plan: &Plan, state: &ReplayState) -> Result<()> {
     let branches = plan
         .nodes
         .iter()
         .map(|node| node.branch.clone())
         .collect::<Vec<_>>();
-    let temp_tips = temp_tips_from_refs(git, &state.completed.temp_refs)?;
+    let temp_tips = temp_tips_from_refs(git, &state.completed_temp_refs)?;
     ensure_target_branches_not_checked_out(git, &branches)?;
     if final_update_already_applied(git, plan, &temp_tips, &state.branch_tips)? {
         return Ok(());
@@ -667,7 +747,7 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
     )))
 }
 
-fn worktree_path(storage: &Storage, state: &ApplyState) -> PathBuf {
+fn worktree_path(storage: &Storage, state: &ReplayState) -> PathBuf {
     if state.worktree.path().is_empty() {
         storage.worktrees_dir().join(state.plan_id.to_string())
     } else {
