@@ -60,7 +60,13 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 Phase::FinalUpdate => {
                     self.backend.final_update(self.plan, &self.state)?;
                     test_hooks::run("after-final-update")?;
-                    self.state.phase = Phase::Deleting { delete_plan: true };
+                    self.state.phase = Phase::RestoreCheckout { delete_plan: true };
+                    self.write_state()?;
+                }
+                Phase::RestoreCheckout { delete_plan } => {
+                    let delete_plan = *delete_plan;
+                    self.backend.restore_checkout(&self.state)?;
+                    self.state.phase = Phase::Deleting { delete_plan };
                     self.write_state()?;
                     test_hooks::run("after-deleting-state-written")?;
                 }

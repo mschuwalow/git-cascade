@@ -1,4 +1,4 @@
-use super::{CurrentState, PausedState, ReplayState};
+use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
@@ -69,6 +69,7 @@ pub(crate) trait ReplayBackend {
         rewritten_tip: &str,
     ) -> Result<(String, String)>;
     fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
+    fn restore_checkout(&mut self, state: &ReplayState) -> Result<()>;
 }
 
 pub(crate) enum CherryPickOutcome {
@@ -315,6 +316,23 @@ impl ReplayBackend for GitReplayBackend<'_> {
         eprintln!("Updating branch refs");
         finish_final_update(self.git, plan, state)
     }
+
+    fn restore_checkout(&mut self, state: &ReplayState) -> Result<()> {
+        let worktree = std::path::PathBuf::from(state.worktree.path());
+        if !worktree.exists() {
+            return Ok(());
+        }
+
+        let worktree_git = Git::new(&worktree);
+        worktree_git.try_cherry_pick_abort()?;
+        if let WorktreeState::InPlace { restore, .. } = &state.worktree {
+            match restore {
+                RestoreState::Branch { name, .. } => worktree_git.switch_branch(name)?,
+                RestoreState::Detached { head } => worktree_git.switch_detached(head)?,
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct DryRunReplayBackend {
@@ -537,6 +555,24 @@ impl ReplayBackend for DryRunReplayBackend {
             &state.branch_tips,
         )?);
         writeln!(self.output, "EOF").unwrap();
+        Ok(())
+    }
+
+    fn restore_checkout(&mut self, state: &ReplayState) -> Result<()> {
+        let WorktreeState::InPlace { path, restore } = &state.worktree else {
+            return Ok(());
+        };
+
+        writeln!(self.output).unwrap();
+        writeln!(self.output, "# restore checkout").unwrap();
+        match restore {
+            RestoreState::Branch { name, .. } => {
+                writeln!(self.output, "git -C {} switch {name}", path).unwrap();
+            }
+            RestoreState::Detached { head } => {
+                writeln!(self.output, "git -C {} switch --detach {head}", path).unwrap();
+            }
+        }
         Ok(())
     }
 }

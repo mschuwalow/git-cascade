@@ -1,10 +1,9 @@
-use super::state::{Phase, ReplayState, RestoreState, WorktreeState};
+use super::state::{Phase, ReplayState};
 use super::state_writer::StateWriter;
 use crate::git::Git;
 use crate::storage::Storage;
 use crate::{Error, Result};
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
@@ -18,25 +17,6 @@ pub(super) fn run_deleting_phase(
     delete_applied_plan(storage, state, delete_plan)?;
     cleanup_replay_artifacts(git, storage, state)?;
     state_writer.remove_state()
-}
-
-pub(super) fn dry_run_deleting_output(state: &ReplayState) -> String {
-    let WorktreeState::InPlace { path, restore } = &state.worktree else {
-        return String::new();
-    };
-
-    let mut output = String::new();
-    writeln!(output).unwrap();
-    writeln!(output, "# restore checkout").unwrap();
-    match restore {
-        RestoreState::Branch { name, .. } => {
-            writeln!(output, "git -C {} switch {name}", path).unwrap();
-        }
-        RestoreState::Detached { head } => {
-            writeln!(output, "git -C {} switch --detach {head}", path).unwrap();
-        }
-    }
-    output
 }
 
 fn deleting_delete_plan(state: &ReplayState) -> Result<bool> {
@@ -58,32 +38,8 @@ fn delete_applied_plan(storage: &Storage, state: &ReplayState, delete_plan: bool
 fn cleanup_replay_artifacts(git: &Git, storage: &Storage, state: &ReplayState) -> Result<()> {
     eprintln!("Cleaning temporary cascade state");
     let worktree = worktree_path(storage, state);
-    abort_cherry_pick_and_restore_checkout(&worktree, &state.worktree)?;
     delete_temp_refs(git, state)?;
     remove_temporary_worktree(git, state, &worktree)
-}
-
-fn abort_cherry_pick_and_restore_checkout(
-    worktree: &std::path::Path,
-    worktree_state: &WorktreeState,
-) -> Result<()> {
-    if !worktree.exists() {
-        return Ok(());
-    }
-
-    let worktree_git = Git::new(worktree);
-    worktree_git.try_cherry_pick_abort()?;
-    if let WorktreeState::InPlace { restore, .. } = worktree_state {
-        restore_checkout(&worktree_git, restore)?;
-    }
-    Ok(())
-}
-
-fn restore_checkout(git: &Git, restore: &RestoreState) -> Result<()> {
-    match restore {
-        RestoreState::Branch { name, .. } => git.switch_branch(name),
-        RestoreState::Detached { head } => git.switch_detached(head),
-    }
 }
 
 fn delete_temp_refs(git: &Git, state: &ReplayState) -> Result<()> {
