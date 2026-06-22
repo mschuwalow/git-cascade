@@ -4,7 +4,7 @@ use crate::model::Strategy;
 use crate::model::{BranchName, CommitId};
 use crate::plan::{Node, PlanCommit};
 use crate::{Error, Result};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub(super) struct ReplayBranchStrategy {
     strategy: Strategy,
@@ -19,14 +19,35 @@ impl ReplayBranchStrategy {
         Self { strategy }
     }
 
+    pub(super) fn checkpoint_commits(
+        &self,
+        plan: &crate::plan::Plan,
+        node: &Node,
+        commits: &[PlanCommit],
+    ) -> BTreeSet<CommitId> {
+        match self.strategy {
+            Strategy::PreserveForkPoints => preserve_fork_point_checkpoints(plan, node, commits),
+            Strategy::MoveToPlannedTips => planned_tip_checkpoint(node, commits),
+            Strategy::MoveToCurrentTips | Strategy::Squash => BTreeSet::new(),
+        }
+    }
+
+    pub(super) fn finalizes_branch_at_end(&self, commits: &[PlanCommit]) -> bool {
+        match self.strategy {
+            Strategy::Squash => !commits.is_empty(),
+            Strategy::PreserveForkPoints
+            | Strategy::MoveToPlannedTips
+            | Strategy::MoveToCurrentTips => false,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn rewrite_branch_tip<B>(
+    pub(super) fn finalize_branch_tip<B>(
         &self,
         backend: &mut B,
         state: &ReplayState,
         branch_replay_base: &CommitId,
         total_branches: usize,
-        mappings: &mut BTreeMap<CommitId, CommitId>,
         node: &Node,
         commits: &[PlanCommit],
         branch_index: usize,
@@ -51,9 +72,6 @@ impl ReplayBranchStrategy {
                     &first_commit,
                     &rewritten_tip,
                 )?;
-                if let Some(last_commit) = commits.last() {
-                    mappings.insert(last_commit.oid.clone(), rewritten_tip.clone());
-                }
                 Ok(rewritten_tip)
             }
             Strategy::PreserveForkPoints
@@ -97,6 +115,68 @@ impl ReplayBranchStrategy {
             Strategy::MoveToCurrentTips | Strategy::Squash => Ok(None),
         }
     }
+}
+
+fn preserve_fork_point_checkpoints(
+    plan: &crate::plan::Plan,
+    node: &Node,
+    commits: &[PlanCommit],
+) -> BTreeSet<CommitId> {
+    let Some(last_commit) = commits.last() else {
+        return BTreeSet::new();
+    };
+
+    child_replay_bases(plan, node, commits)
+        .filter(|base| *base != node.base())
+        .filter(|base| *base != last_commit.oid.as_str())
+        .map(CommitId::new)
+        .collect()
+}
+
+fn planned_tip_checkpoint(node: &Node, commits: &[PlanCommit]) -> BTreeSet<CommitId> {
+    let Some(last_commit) = commits.last() else {
+        return BTreeSet::new();
+    };
+    let commit_oids = commits
+        .iter()
+        .map(|commit| commit.oid.as_str())
+        .collect::<BTreeSet<_>>();
+    if node.tip != last_commit.oid && commit_oids.contains(node.tip.as_str()) {
+        BTreeSet::from([node.tip.clone()])
+    } else {
+        BTreeSet::new()
+    }
+}
+
+fn child_replay_bases<'plan>(
+    plan: &'plan crate::plan::Plan,
+    node: &Node,
+    commits: &[PlanCommit],
+) -> impl Iterator<Item = &'plan str> {
+    let Some(last_commit) = commits.last() else {
+        return Vec::new().into_iter();
+    };
+    let has_child = plan
+        .nodes
+        .iter()
+        .any(|child| child.parent() == Some(node.branch.as_str()));
+    if !has_child {
+        return Vec::new().into_iter();
+    }
+
+    let commit_oids = commits
+        .iter()
+        .map(|commit| commit.oid.as_str())
+        .collect::<BTreeSet<_>>();
+    let bases = plan
+        .nodes
+        .iter()
+        .filter(|child| child.parent() == Some(node.branch.as_str()))
+        .map(Node::base)
+        .filter(move |base| *base != last_commit.oid.as_str())
+        .filter(move |base| commit_oids.contains(*base))
+        .collect::<Vec<_>>();
+    bases.into_iter()
 }
 
 fn preserve_fork_point_child_base(

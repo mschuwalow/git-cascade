@@ -1,6 +1,7 @@
 use crate::model::Strategy;
 use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{PlanCommit, PlanId, PlanName};
+use crate::replay::PausePlan;
 use crate::storage::Storage;
 use crate::{Error, Result};
 use clap::ValueEnum;
@@ -191,6 +192,7 @@ pub struct ReplayState {
     pub new_tip: CommitId,
     pub strategy: Strategy,
     pub replay_mode: ReplayPauseMode,
+    pub pause_plan: PausePlan,
     pub worktree: WorktreeState,
     pub completed_temp_refs: Vec<GitRef>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
@@ -355,6 +357,7 @@ pub struct InitialReplayStateInput<'a> {
     pub new_tip: &'a CommitId,
     pub strategy: Strategy,
     pub replay_mode: ReplayPauseMode,
+    pub pause_plan: PausePlan,
     pub pending_branches: Vec<BranchName>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
     pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
@@ -375,6 +378,7 @@ pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<Replay
         new_tip: input.new_tip.clone(),
         strategy: input.strategy,
         replay_mode: input.replay_mode,
+        pause_plan: input.pause_plan,
         worktree: input.worktree,
         completed_temp_refs: Vec::new(),
         branch_tips: input.branch_tips,

@@ -18,6 +18,7 @@ use crate::{Error, Result};
 use backend::{DryRunReplayBackend, GitReplayBackend};
 use cleanup::run_deleting_phase;
 use context::ReplayContext;
+pub use pause::PausePlan;
 pub use state::{
     CurrentState, PausedState, Phase, ReplayPauseMode, ReplayState, RestoreState, WorktreeState,
 };
@@ -33,13 +34,6 @@ pub struct ReplayOptions {
     pub strategy: Strategy,
     pub in_place: bool,
     pub replay_mode: ReplayPauseMode,
-}
-
-pub(super) fn branch_end_commit(node: &crate::plan::Node, commits: &[PlanCommit]) -> CommitId {
-    commits
-        .last()
-        .map(|commit| commit.oid.clone())
-        .unwrap_or_else(|| node.base.clone())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,20 +80,14 @@ pub fn dry_run(
             path: worktree.display().to_string(),
         }
     };
-    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
-    let mappings = BTreeMap::new();
-    let state = initial_replay_state(InitialReplayStateInput {
-        plan_name: &options.plan_name,
-        plan_id: &plan.plan_id,
-        new_tip: &new_tip,
-        strategy: options.strategy,
-        replay_mode: options.replay_mode,
-        pending_branches: ordered,
-        branch_tips,
-        extra_commits,
-        mappings,
-        worktree: worktree_state,
-    })?;
+    let state = start_replay_state(
+        plan,
+        &options,
+        &new_tip,
+        ordered,
+        branch_refs,
+        worktree_state,
+    )?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
     {
@@ -149,23 +137,18 @@ pub fn execute(
             worktree,
         )
     };
-    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
-    let mappings = BTreeMap::new();
-    let state = initial_replay_state(InitialReplayStateInput {
-        plan_name: &options.plan_name,
-        plan_id: &plan.plan_id,
-        new_tip: &new_tip,
-        strategy: options.strategy,
-        replay_mode: options.replay_mode,
-        pending_branches: ordered,
-        branch_tips,
-        extra_commits,
-        mappings,
-        worktree: worktree_state.clone(),
-    })?;
+    let temporary_worktree = worktree_state.is_temporary();
+    let state = start_replay_state(
+        plan,
+        &options,
+        &new_tip,
+        ordered,
+        branch_refs,
+        worktree_state,
+    )?;
     let state_file = StateFile::create(storage, &state)?;
 
-    if worktree_state.is_temporary() {
+    if temporary_worktree {
         storage.ensure_worktrees_dir()?;
         cleanup_stale_worktree(git, &worktree)?;
     }
@@ -358,6 +341,44 @@ fn branch_tips_and_extra_commits(
     }
 
     (branch_tips, extra_commits)
+}
+
+fn start_replay_state(
+    plan: &Plan,
+    options: &ReplayOptions,
+    new_tip: &CommitId,
+    pending_branches: Vec<BranchName>,
+    branch_refs: BTreeMap<BranchName, BranchRef>,
+    worktree: WorktreeState,
+) -> Result<ReplayState> {
+    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
+    let pause_plan =
+        PausePlan::for_plan(options.replay_mode, options.strategy, plan, &extra_commits);
+
+    initial_replay_state(InitialReplayStateInput {
+        plan_name: &options.plan_name,
+        plan_id: &plan.plan_id,
+        new_tip,
+        strategy: options.strategy,
+        replay_mode: options.replay_mode,
+        pause_plan,
+        pending_branches,
+        branch_tips,
+        extra_commits,
+        mappings: BTreeMap::new(),
+        worktree,
+    })
+}
+
+fn replay_commits_from_extra(
+    node: &crate::plan::Node,
+    extra_commits: &BTreeMap<BranchName, Vec<PlanCommit>>,
+) -> Vec<PlanCommit> {
+    let mut commits = node.commits().to_vec();
+    if let Some(extra) = extra_commits.get(&node.branch) {
+        commits.extend(extra.iter().cloned());
+    }
+    commits
 }
 
 fn cleanup_stale_worktree(git: &Git, worktree: &std::path::Path) -> Result<()> {

@@ -1,36 +1,71 @@
-use super::branch_end_commit;
+use super::replay_commits_from_extra;
 use super::state::ReplayPauseMode;
-use crate::model::{BranchName, CommitId, Strategy};
-use crate::plan::{Node, Plan, PlanCommit};
+use super::strategy::ReplayBranchStrategy;
+use crate::model::Strategy;
+use crate::model::{BranchName, CommitId};
+use crate::plan::{Plan, PlanCommit};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) struct ReplayPauseStrategy {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PausePlan {
     pauses: BTreeSet<CommitId>,
-    branch_end_pauses: BTreeSet<CommitId>,
+    branch_end_pauses: BTreeSet<BranchName>,
 }
 
-impl ReplayPauseStrategy {
-    pub(super) fn new(
+impl PausePlan {
+    pub(super) fn for_plan(
         mode: ReplayPauseMode,
-        replay_strategy: Strategy,
+        strategy: Strategy,
         plan: &Plan,
         extra_commits: &BTreeMap<BranchName, Vec<PlanCommit>>,
     ) -> Self {
-        let mut pauses = BTreeSet::new();
-        let mut branch_end_pauses = BTreeSet::new();
+        let branch_strategy = ReplayBranchStrategy::new(strategy);
+        let mut replay_commits = BTreeSet::new();
+        let mut checkpoint_commits = BTreeSet::new();
+        let mut branch_end_branches = BTreeSet::new();
+        let mut branch_end_finalization_branches = BTreeSet::new();
 
         for node in &plan.nodes {
             let commits = replay_commits_from_extra(node, extra_commits);
-            pauses.extend(commit_pauses(mode, replay_strategy, plan, node, &commits));
+            replay_commits.extend(commits.iter().map(|commit| commit.oid.clone()));
+            checkpoint_commits.extend(branch_strategy.checkpoint_commits(plan, node, &commits));
 
-            if pauses_after_branch_commit(mode, replay_strategy, &commits) {
-                branch_end_pauses.insert(branch_end_commit(node, &commits));
+            branch_end_branches.insert(node.branch.clone());
+            if branch_strategy.finalizes_branch_at_end(&commits) {
+                branch_end_finalization_branches.insert(node.branch.clone());
             }
         }
 
-        Self {
-            pauses,
-            branch_end_pauses,
+        Self::new(
+            mode,
+            replay_commits,
+            checkpoint_commits,
+            branch_end_branches,
+            branch_end_finalization_branches,
+        )
+    }
+
+    fn new(
+        mode: ReplayPauseMode,
+        replay_commits: BTreeSet<CommitId>,
+        checkpoint_commits: BTreeSet<CommitId>,
+        branch_end_branches: BTreeSet<BranchName>,
+        branch_end_finalization_branches: BTreeSet<BranchName>,
+    ) -> Self {
+        match mode {
+            ReplayPauseMode::Never => Self {
+                pauses: BTreeSet::new(),
+                branch_end_pauses: BTreeSet::new(),
+            },
+            ReplayPauseMode::EveryCommit => Self {
+                pauses: replay_commits,
+                branch_end_pauses: branch_end_finalization_branches,
+            },
+            ReplayPauseMode::Checkpoints => Self {
+                pauses: checkpoint_commits,
+                branch_end_pauses: branch_end_branches,
+            },
         }
     }
 
@@ -38,138 +73,7 @@ impl ReplayPauseStrategy {
         self.pauses.contains(commit)
     }
 
-    pub(super) fn pauses_at_branch_end(&self, commit: &CommitId) -> bool {
-        self.branch_end_pauses.contains(commit)
+    pub(super) fn pauses_at_branch_end(&self, branch: &BranchName) -> bool {
+        self.branch_end_pauses.contains(branch)
     }
-}
-
-fn replay_commits_from_extra(
-    node: &Node,
-    extra_commits: &BTreeMap<BranchName, Vec<PlanCommit>>,
-) -> Vec<PlanCommit> {
-    let mut commits = node.commits().to_vec();
-    if let Some(extra) = extra_commits.get(&node.branch) {
-        commits.extend(extra.iter().cloned());
-    }
-    commits
-}
-
-fn commit_pauses(
-    mode: ReplayPauseMode,
-    strategy: Strategy,
-    plan: &Plan,
-    node: &Node,
-    commits: &[PlanCommit],
-) -> BTreeSet<CommitId> {
-    match mode {
-        ReplayPauseMode::Never => BTreeSet::new(),
-        ReplayPauseMode::EveryCommit => every_commit_pauses(strategy, commits),
-        ReplayPauseMode::Checkpoints => checkpoint_pause_commits(strategy, plan, node, commits),
-    }
-}
-
-fn every_commit_pauses(strategy: Strategy, commits: &[PlanCommit]) -> BTreeSet<CommitId> {
-    let pause_count = match strategy {
-        Strategy::Squash => commits.len().saturating_sub(1),
-        Strategy::PreserveForkPoints
-        | Strategy::MoveToPlannedTips
-        | Strategy::MoveToCurrentTips => commits.len(),
-    };
-    commits
-        .iter()
-        .take(pause_count)
-        .map(|commit| commit.oid.clone())
-        .collect()
-}
-
-fn pauses_after_branch_commit(
-    mode: ReplayPauseMode,
-    strategy: Strategy,
-    commits: &[PlanCommit],
-) -> bool {
-    match mode {
-        ReplayPauseMode::Never => false,
-        ReplayPauseMode::EveryCommit => match strategy {
-            Strategy::Squash => !commits.is_empty(),
-            Strategy::PreserveForkPoints
-            | Strategy::MoveToPlannedTips
-            | Strategy::MoveToCurrentTips => false,
-        },
-        ReplayPauseMode::Checkpoints => true,
-    }
-}
-
-fn checkpoint_pause_commits(
-    strategy: Strategy,
-    plan: &Plan,
-    node: &Node,
-    commits: &[PlanCommit],
-) -> BTreeSet<CommitId> {
-    match strategy {
-        Strategy::PreserveForkPoints => preserve_fork_point_pause_commits(plan, node, commits),
-        Strategy::MoveToPlannedTips => planned_tip_pause_commits(node, commits),
-        Strategy::MoveToCurrentTips | Strategy::Squash => BTreeSet::new(),
-    }
-}
-
-fn preserve_fork_point_pause_commits(
-    plan: &Plan,
-    node: &Node,
-    commits: &[PlanCommit],
-) -> BTreeSet<CommitId> {
-    let Some(last_commit) = commits.last() else {
-        return BTreeSet::new();
-    };
-
-    child_replay_bases(plan, node, commits)
-        .filter(|base| *base != node.base())
-        .filter(|base| *base != last_commit.oid.as_str())
-        .map(CommitId::new)
-        .collect()
-}
-
-fn planned_tip_pause_commits(node: &Node, commits: &[PlanCommit]) -> BTreeSet<CommitId> {
-    let Some(last_commit) = commits.last() else {
-        return BTreeSet::new();
-    };
-    let commit_oids = commits
-        .iter()
-        .map(|commit| commit.oid.as_str())
-        .collect::<BTreeSet<_>>();
-    if node.tip != last_commit.oid && commit_oids.contains(node.tip.as_str()) {
-        BTreeSet::from([node.tip.clone()])
-    } else {
-        BTreeSet::new()
-    }
-}
-
-fn child_replay_bases<'plan>(
-    plan: &'plan Plan,
-    node: &Node,
-    commits: &[PlanCommit],
-) -> impl Iterator<Item = &'plan str> {
-    let Some(last_commit) = commits.last() else {
-        return Vec::new().into_iter();
-    };
-    let has_child = plan
-        .nodes
-        .iter()
-        .any(|child| child.parent() == Some(node.branch.as_str()));
-    if !has_child {
-        return Vec::new().into_iter();
-    }
-
-    let commit_oids = commits
-        .iter()
-        .map(|commit| commit.oid.as_str())
-        .collect::<BTreeSet<_>>();
-    let bases = plan
-        .nodes
-        .iter()
-        .filter(|child| child.parent() == Some(node.branch.as_str()))
-        .map(Node::base)
-        .filter(move |base| *base != last_commit.oid.as_str())
-        .filter(move |base| commit_oids.contains(*base))
-        .collect::<Vec<_>>();
-    bases.into_iter()
 }
