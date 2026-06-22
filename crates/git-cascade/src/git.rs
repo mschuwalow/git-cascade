@@ -485,8 +485,16 @@ impl Git {
         self.run_mutating(["switch", "--detach", commit])
     }
 
+    pub fn switch_detached_discarding_changes(&self, commit: &str) -> Result<()> {
+        self.run_mutating(["switch", "--discard-changes", "--detach", commit])
+    }
+
     pub fn switch_branch(&self, branch: &str) -> Result<()> {
         self.run_mutating(["switch", branch])
+    }
+
+    pub fn switch_branch_discarding_changes(&self, branch: &str) -> Result<()> {
+        self.run_mutating(["switch", "--discard-changes", branch])
     }
 
     pub fn cherry_pick(&self, commit: &str) -> Result<()> {

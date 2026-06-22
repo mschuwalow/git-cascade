@@ -364,6 +364,37 @@ fn continue_refuses_dirty_paused_worktree() {
 }
 
 #[test]
+fn abort_in_place_paused_replay_discards_dirty_worktree() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+    repo.switch("pr-2");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+            "--in-place",
+        ])
+        .assert()
+        .success();
+    repo.write("pr2.txt", "dirty\n");
+
+    repo.cascade()
+        .arg("abort")
+        .assert()
+        .success()
+        .stdout("aborted cascade operation\n");
+
+    assert_eq!(repo.git_output(["branch", "--show-current"]).trim(), "pr-2");
+    assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
 fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
     let repo = paused_intermediate_stack();
     let old_pr2 = repo.rev_parse("pr-2");

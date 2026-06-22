@@ -32,6 +32,10 @@ pub enum Phase {
         paused: PausedState,
     },
     FinalUpdate,
+    RestoreCheckout {
+        delete_plan: bool,
+        force_checkout: bool,
+    },
     Deleting {
         delete_plan: bool,
     },
@@ -46,6 +50,7 @@ impl Phase {
             Self::Paused { .. } => "paused",
             Self::ContinueAfterPause { .. } => "continue_after_pause",
             Self::FinalUpdate => "final_update",
+            Self::RestoreCheckout { .. } => "restore_checkout",
             Self::Deleting { .. } => "deleting",
         }
     }

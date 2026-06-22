@@ -1,7 +1,7 @@
+use super::ReplayOutcome;
 use super::backend::{CherryPickOutcome, ReplayBackend};
 use super::state::{CurrentState, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
-use super::{ReplayOutcome, run_deleting_state};
 use crate::model::Strategy;
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::test_hooks;
@@ -60,7 +60,20 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 Phase::FinalUpdate => {
                     self.backend.final_update(self.plan, &self.state)?;
                     test_hooks::run("after-final-update")?;
-                    self.state.phase = Phase::Deleting { delete_plan: true };
+                    self.state.phase = Phase::RestoreCheckout {
+                        delete_plan: true,
+                        force_checkout: false,
+                    };
+                    self.write_state()?;
+                }
+                Phase::RestoreCheckout {
+                    delete_plan,
+                    force_checkout,
+                } => {
+                    let delete_plan = *delete_plan;
+                    let force_checkout = *force_checkout;
+                    self.backend.restore_checkout(&self.state, force_checkout)?;
+                    self.state.phase = Phase::Deleting { delete_plan };
                     self.write_state()?;
                     test_hooks::run("after-deleting-state-written")?;
                 }
@@ -82,12 +95,13 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 Phase::ContinueAfterPause { paused } => {
                     self.resume_paused_branch(paused.clone())?
                 }
-                Phase::Deleting { .. } => {
-                    run_deleting_state(self.state_writer, self.backend, &mut self.state)?;
-                    return Ok(ReplayOutcome::Complete);
-                }
+                Phase::Deleting { .. } => return Ok(ReplayOutcome::Complete),
             }
         }
+    }
+
+    pub(super) fn into_state(self) -> ReplayState {
+        self.state
     }
 
     pub(super) fn continue_after_pause_or_conflict(&mut self) {
