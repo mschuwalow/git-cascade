@@ -1,5 +1,6 @@
 use super::ReplayOutcome;
 use super::backend::{CherryPickOutcome, ReplayBackend, RequiredAncestor};
+use super::branch_end_commit;
 use super::pause::ReplayPauseStrategy;
 use super::state::{CurrentState, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
@@ -347,7 +348,8 @@ where
             rewritten_tip,
         )?;
 
-        if self.pause_strategy.pauses_at_branch_end(&node.branch) {
+        let branch_end_commit = branch_end_commit(node, commits);
+        if self.pause_strategy.pauses_at_branch_end(&branch_end_commit) {
             self.pause_branch_end(
                 node,
                 branch,

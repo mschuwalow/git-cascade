@@ -1,11 +1,12 @@
+use super::branch_end_commit;
 use super::state::ReplayPauseMode;
 use crate::model::{BranchName, CommitId, Strategy};
 use crate::plan::{Node, Plan, PlanCommit};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct ReplayPauseStrategy {
-    commit_pauses: BTreeSet<CommitId>,
-    branch_end_pauses: BTreeSet<BranchName>,
+    pauses: BTreeSet<CommitId>,
+    branch_end_pauses: BTreeSet<CommitId>,
 }
 
 impl ReplayPauseStrategy {
@@ -15,37 +16,30 @@ impl ReplayPauseStrategy {
         plan: &Plan,
         extra_commits: &BTreeMap<BranchName, Vec<PlanCommit>>,
     ) -> Self {
-        let mut commit_pauses = BTreeSet::new();
+        let mut pauses = BTreeSet::new();
         let mut branch_end_pauses = BTreeSet::new();
 
         for node in &plan.nodes {
             let commits = replay_commits_from_extra(node, extra_commits);
-            let pauses = match mode {
-                ReplayPauseMode::Never => BTreeSet::new(),
-                ReplayPauseMode::EveryCommit => every_commit_pauses(replay_strategy, &commits),
-                ReplayPauseMode::Checkpoints => {
-                    checkpoint_pause_commits(replay_strategy, plan, node, &commits)
-                }
-            };
-            commit_pauses.extend(pauses);
+            pauses.extend(commit_pauses(mode, replay_strategy, plan, node, &commits));
 
-            if pauses_at_branch_end(mode, replay_strategy, &commits) {
-                branch_end_pauses.insert(node.branch.clone());
+            if pauses_after_branch_commit(mode, replay_strategy, &commits) {
+                branch_end_pauses.insert(branch_end_commit(node, &commits));
             }
         }
 
         Self {
-            commit_pauses,
+            pauses,
             branch_end_pauses,
         }
     }
 
     pub(super) fn pauses_at_commit(&self, commit: &CommitId) -> bool {
-        self.commit_pauses.contains(commit)
+        self.pauses.contains(commit)
     }
 
-    pub(super) fn pauses_at_branch_end(&self, branch: &BranchName) -> bool {
-        self.branch_end_pauses.contains(branch)
+    pub(super) fn pauses_at_branch_end(&self, commit: &CommitId) -> bool {
+        self.branch_end_pauses.contains(commit)
     }
 }
 
@@ -58,6 +52,20 @@ fn replay_commits_from_extra(
         commits.extend(extra.iter().cloned());
     }
     commits
+}
+
+fn commit_pauses(
+    mode: ReplayPauseMode,
+    strategy: Strategy,
+    plan: &Plan,
+    node: &Node,
+    commits: &[PlanCommit],
+) -> BTreeSet<CommitId> {
+    match mode {
+        ReplayPauseMode::Never => BTreeSet::new(),
+        ReplayPauseMode::EveryCommit => every_commit_pauses(strategy, commits),
+        ReplayPauseMode::Checkpoints => checkpoint_pause_commits(strategy, plan, node, commits),
+    }
 }
 
 fn every_commit_pauses(strategy: Strategy, commits: &[PlanCommit]) -> BTreeSet<CommitId> {
@@ -74,7 +82,11 @@ fn every_commit_pauses(strategy: Strategy, commits: &[PlanCommit]) -> BTreeSet<C
         .collect()
 }
 
-fn pauses_at_branch_end(mode: ReplayPauseMode, strategy: Strategy, commits: &[PlanCommit]) -> bool {
+fn pauses_after_branch_commit(
+    mode: ReplayPauseMode,
+    strategy: Strategy,
+    commits: &[PlanCommit],
+) -> bool {
     match mode {
         ReplayPauseMode::Never => false,
         ReplayPauseMode::EveryCommit => match strategy {

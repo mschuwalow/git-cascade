@@ -35,6 +35,13 @@ pub struct ReplayOptions {
     pub replay_mode: ReplayPauseMode,
 }
 
+pub(super) fn branch_end_commit(node: &crate::plan::Node, commits: &[PlanCommit]) -> CommitId {
+    commits
+        .last()
+        .map(|commit| commit.oid.clone())
+        .unwrap_or_else(|| node.base.clone())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplayOutcome {
     Complete,
