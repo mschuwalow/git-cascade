@@ -63,13 +63,20 @@ pub(super) fn replay(old_tip: &str, old_base: &str, new_tip: &str, run: RunOptio
     })
 }
 
-pub(super) fn sync(base: Option<String>, run: RunOptions) -> Result<()> {
+pub(super) fn sync(
+    base: Option<String>,
+    oldest_branch: Option<String>,
+    run: RunOptions,
+) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let base = base.or(git.default_branch_ref()?).ok_or_else(|| {
         Error::InvalidInvocation("sync needs --base <ref> when no default branch exists".to_owned())
     })?;
-    let old_base = infer_old_base_from_local_fork_points(&git, &base)?;
+    let old_base = match oldest_branch {
+        Some(oldest_branch) => infer_old_base_from_branch(&git, &base, &oldest_branch)?,
+        None => infer_old_base_from_local_fork_points(&git, &base)?,
+    };
     let excluded_branches = excluded_target_branches(&git, &base)?;
     let plan_name = generated_plan_name("sync", &base)?;
 
@@ -117,6 +124,24 @@ pub(super) fn landed(
         new_tip: inference.new_tip,
         run,
         success_message: "updated dependents of landed branch",
+    })
+}
+
+fn infer_old_base_from_branch(git: &Git, onto: &str, oldest_branch: &str) -> Result<String> {
+    let onto_tip = git.resolve_commit(onto)?;
+    let branch_tip = git.resolve_commit(oldest_branch)?;
+    let fork_point = git
+        .unique_merge_base(&onto_tip, &branch_tip)?
+        .ok_or_else(|| {
+            Error::InvalidInvocation(format!(
+                "cannot infer old base for sync; `{oldest_branch}` has no merge base with `{onto}`"
+            ))
+        })?;
+
+    git.commit_parents(&fork_point)?.first().cloned().ok_or_else(|| {
+        Error::InvalidInvocation(format!(
+            "cannot infer old base for sync; oldest fork point `{fork_point}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
+        ))
     })
 }
 

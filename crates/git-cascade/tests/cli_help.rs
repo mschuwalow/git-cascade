@@ -48,6 +48,7 @@ fn sync_help_mentions_default_branch_options() {
         .stdout(
             predicate::str::contains("default branch advanced")
                 .and(predicate::str::contains("--base"))
+                .and(predicate::str::contains("--oldest-branch"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
                 .and(predicate::str::contains("--pause-at-checkpoints"))

@@ -269,6 +269,35 @@ fn sync_infers_old_base_from_oldest_local_fork_point() {
 }
 
 #[test]
+fn sync_oldest_branch_bounds_the_inferred_range() {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.commit_file("main-1.txt", "main 1\n", "main 1");
+    repo.switch_new("older-local");
+    let older_local = repo.commit_file("older.txt", "older\n", "older local work");
+    repo.switch("main");
+    repo.commit_file("main-2.txt", "main 2\n", "main 2");
+    repo.switch_new("pr-1");
+    let old_pr1 = repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    let old_pr2 = repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch("main");
+    repo.commit_file("main-3.txt", "main 3\n", "main 3");
+
+    repo.cascade()
+        .args(["sync", "--oldest-branch", "pr-1"])
+        .assert()
+        .success()
+        .stdout("synced dependent branches\n");
+
+    assert_eq!(repo.rev_parse("older-local"), older_local);
+    assert_ne!(repo.rev_parse("pr-1"), old_pr1);
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.merge_base("main", "pr-1"), repo.rev_parse("main"));
+    assert_eq!(repo.merge_base("pr-1", "pr-2"), repo.rev_parse("pr-1"));
+}
+
+#[test]
 fn sync_is_idempotent_for_already_synced_stacks() {
     let repo = stack_on_non_root_main_tip();
     repo.switch("main");

@@ -71,6 +71,12 @@ pr-2                   D' -- E'
 By default, `sync` uses the repository default branch, preferring `origin/HEAD`, then local `main`, then local `master`.
 After `sync`, each affected local stack starts from the current tip of the selected target branch.
 
+If you know the oldest local branch that should be included, pass it explicitly to avoid considering older unrelated branches:
+
+```sh
+git cascade sync --oldest-branch pr-1
+```
+
 If this repository targets a non-default integration branch, pass it explicitly:
 
 ```sh

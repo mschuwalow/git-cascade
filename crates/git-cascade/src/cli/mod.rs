@@ -79,6 +79,9 @@ enum Command {
         /// Base branch or ref to sync stacks onto. Defaults to the current default branch.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// Oldest local branch to include. Defaults to the oldest inferred local fork point.
+        #[arg(long, value_name = "REF")]
+        oldest_branch: Option<String>,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
@@ -187,12 +190,14 @@ where
         ),
         Command::Sync {
             base,
+            oldest_branch,
             strategy,
             dry_run,
             in_place,
             pause_at_checkpoints,
         } => high_level::sync(
             base,
+            oldest_branch,
             high_level::RunOptions {
                 strategy,
                 is_dry_run: dry_run,
