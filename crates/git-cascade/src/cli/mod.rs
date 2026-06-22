@@ -6,7 +6,9 @@ mod status;
 use crate::Result;
 use crate::git::Git;
 use crate::model::{BranchName, GitRef, Strategy};
-use crate::replay::{PausedState, ReplayOutcome, abort as abort_apply, continue_replay};
+use crate::replay::{
+    AbortOutcome, PausedState, ReplayOutcome, abort as abort_apply, continue_replay,
+};
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -294,8 +296,10 @@ pub(super) fn print_paused_message(paused: &PausedState) {
 fn abort() -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    abort_apply(&git, &storage)?;
-    println!("aborted cascade operation");
+    match abort_apply(&git, &storage)? {
+        AbortOutcome::Aborted => println!("aborted cascade operation"),
+        AbortOutcome::CompletedCleanup => println!("completed cascade cleanup"),
+    }
 
     Ok(())
 }

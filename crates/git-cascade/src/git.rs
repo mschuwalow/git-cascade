@@ -238,7 +238,7 @@ impl Git {
                 continue;
             };
             branches.push(LocalBranch {
-                name: BranchName::new(name),
+                name: BranchName::from_git_unchecked(name),
                 tip: tip.into(),
             });
         }
@@ -290,7 +290,7 @@ impl Git {
             let Some(name) = refname.strip_prefix("refs/heads/") else {
                 continue;
             };
-            branch = Some(name.into());
+            branch = Some(BranchName::from_git_unchecked(name));
         }
 
         if let Some(path) = path {
@@ -304,7 +304,11 @@ impl Git {
         Ok(self
             .output_allowing_status(["symbolic-ref", "--quiet", "HEAD"], &[1])?
             .map(|output| output.trim().to_owned())
-            .and_then(|output| output.strip_prefix("refs/heads/").map(BranchName::new)))
+            .and_then(|output| {
+                output
+                    .strip_prefix("refs/heads/")
+                    .map(BranchName::from_git_unchecked)
+            }))
     }
 
     pub fn ensure_clean_worktree(&self) -> Result<()> {

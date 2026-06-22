@@ -165,7 +165,7 @@ fn abort_after_final_update_committed_finishes_cleanup_without_retaining_plan() 
         .arg("abort")
         .assert()
         .success()
-        .stdout("aborted cascade operation\n");
+        .stdout("completed cascade cleanup\n");
 
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());

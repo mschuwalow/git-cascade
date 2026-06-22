@@ -1,5 +1,5 @@
 use crate::model::Strategy;
-use crate::model::{BranchName, CommitId};
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
 use crate::{Error, Result};
@@ -103,7 +103,7 @@ pub enum PausedState {
     BranchEnd {
         branch: BranchName,
         rewritten_tip: CommitId,
-        temp_ref: String,
+        temp_ref: GitRef,
         mapped_commit: CommitId,
         worktree: String,
     },
@@ -192,7 +192,7 @@ pub struct ReplayState {
     pub strategy: Strategy,
     pub replay_mode: ReplayMode,
     pub worktree: WorktreeState,
-    pub completed_temp_refs: Vec<String>,
+    pub completed_temp_refs: Vec<GitRef>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
     pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
     pub mappings: BTreeMap<CommitId, CommitId>,

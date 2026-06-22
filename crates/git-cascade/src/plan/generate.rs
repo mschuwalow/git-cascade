@@ -248,9 +248,11 @@ fn old_range_base(
 }
 
 fn old_tip_local_branch(git: &Git, old_tip: &GitRef) -> Result<Option<BranchName>> {
-    Ok(git
-        .symbolic_full_name(old_tip)?
-        .and_then(|refname| refname.strip_prefix("refs/heads/").map(BranchName::new)))
+    Ok(git.symbolic_full_name(old_tip)?.and_then(|refname| {
+        refname
+            .strip_prefix("refs/heads/")
+            .map(BranchName::from_git_unchecked)
+    }))
 }
 
 fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bool) -> Result<()> {

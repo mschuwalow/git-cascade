@@ -173,7 +173,7 @@ fn validation_rejects_dependency_parent_mismatch() {
     let mut plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
-    plan.dependencies[0].parent = "pr-3".into();
+    plan.dependencies[0].parent = "pr-3".parse().unwrap();
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 

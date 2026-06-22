@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 pub(crate) trait ReplayBackend {
     fn start(&mut self, state: &ReplayState) -> Result<()>;
     fn no_branches(&mut self) -> Result<()>;
-    fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>>;
+    fn temp_tips(&mut self, temp_refs: &[GitRef]) -> Result<HashMap<BranchName, CommitId>>;
     fn prepare_branch(
         &mut self,
         state: &ReplayState,
@@ -64,7 +64,7 @@ pub(crate) trait ReplayBackend {
         branch_index: usize,
         total_branches: usize,
         current_tip: &CommitId,
-    ) -> Result<(String, CommitId)>;
+    ) -> Result<(GitRef, CommitId)>;
     fn write_temp_ref(
         &mut self,
         plan: &Plan,
@@ -72,7 +72,7 @@ pub(crate) trait ReplayBackend {
         branch_index: usize,
         total_branches: usize,
         rewritten_tip: &CommitId,
-    ) -> Result<(String, CommitId)>;
+    ) -> Result<(GitRef, CommitId)>;
     fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
     fn restore_checkout(&mut self, state: &ReplayState, force_checkout: bool) -> Result<()>;
 }
@@ -111,7 +111,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
         Ok(())
     }
 
-    fn temp_tips(&mut self, temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>> {
+    fn temp_tips(&mut self, temp_refs: &[GitRef]) -> Result<HashMap<BranchName, CommitId>> {
         temp_tips_from_refs(self.git, temp_refs)
     }
 
@@ -223,9 +223,9 @@ impl ReplayBackend for GitReplayBackend<'_> {
         branch_index: usize,
         total_branches: usize,
         current_tip: &CommitId,
-    ) -> Result<(String, CommitId)> {
+    ) -> Result<(GitRef, CommitId)> {
         let temp_ref = temp_ref(plan, node.branch.as_str());
-        self.git.update_ref(&temp_ref, current_tip)?;
+        self.git.update_ref(temp_ref.as_str(), current_tip)?;
         eprintln!(
             "Branch {branch_index}/{total_branches} `{}` already starts at its replay base; keeping {}",
             node.branch,
@@ -241,9 +241,9 @@ impl ReplayBackend for GitReplayBackend<'_> {
         branch_index: usize,
         total_branches: usize,
         rewritten_tip: &CommitId,
-    ) -> Result<(String, CommitId)> {
+    ) -> Result<(GitRef, CommitId)> {
         let temp_ref = temp_ref(plan, node.branch.as_str());
-        self.git.update_ref(&temp_ref, rewritten_tip)?;
+        self.git.update_ref(temp_ref.as_str(), rewritten_tip)?;
         eprintln!(
             "Finished branch {branch_index}/{total_branches} `{}` -> {}",
             node.branch,
@@ -317,7 +317,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
             )));
         }
         if let PausedState::BranchEnd { temp_ref, .. } = paused {
-            self.git.update_ref(temp_ref, &head)?;
+            self.git.update_ref(temp_ref.as_str(), &head)?;
         }
         eprintln!(
             "Continuing after paused branch `{}` at {}",
@@ -406,7 +406,7 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn temp_tips(&mut self, _temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>> {
+    fn temp_tips(&mut self, _temp_refs: &[GitRef]) -> Result<HashMap<BranchName, CommitId>> {
         Ok(self.temp_tips.clone())
     }
 
@@ -504,7 +504,7 @@ impl ReplayBackend for DryRunReplayBackend {
         _branch_index: usize,
         _total_branches: usize,
         current_tip: &CommitId,
-    ) -> Result<(String, CommitId)> {
+    ) -> Result<(GitRef, CommitId)> {
         let temp_ref = temp_ref(plan, node.branch.as_str());
         writeln!(self.output).unwrap();
         writeln!(self.output, "# branch {}", node.branch).unwrap();
@@ -526,7 +526,7 @@ impl ReplayBackend for DryRunReplayBackend {
         _branch_index: usize,
         _total_branches: usize,
         _rewritten_tip: &CommitId,
-    ) -> Result<(String, CommitId)> {
+    ) -> Result<(GitRef, CommitId)> {
         let temp_ref = temp_ref(plan, node.branch.as_str());
         let rewritten_tip = CommitId::new(format!("<rewritten {} tip>", node.branch));
         let current_tip = CommitId::new(format!("<rewritten {} current tip>", node.branch));
@@ -689,30 +689,30 @@ fn final_update_already_applied(
     Ok(saw_updated && !saw_pending)
 }
 
-fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<BranchName, CommitId>> {
+fn temp_tips_from_refs(git: &Git, temp_refs: &[GitRef]) -> Result<HashMap<BranchName, CommitId>> {
     let mut temp_tips = HashMap::new();
     for temp_ref in temp_refs {
-        let Some(encoded_branch) = temp_ref.rsplit('/').next() else {
+        let Some(encoded_branch) = temp_ref.as_str().rsplit('/').next() else {
             continue;
         };
-        let branch = BranchName::new(decode_component(encoded_branch)?);
-        temp_tips.insert(branch, git.resolve_commit(&GitRef::new(temp_ref.clone()))?);
+        let branch = BranchName::from_git_unchecked(decode_component(encoded_branch)?);
+        temp_tips.insert(branch, git.resolve_commit(temp_ref)?);
     }
 
     Ok(temp_tips)
 }
 
-fn temp_ref(plan: &Plan, branch: &str) -> String {
-    format!(
+fn temp_ref(plan: &Plan, branch: &str) -> GitRef {
+    GitRef::new(format!(
         "refs/cascade/tmp/{}/{}",
         plan.plan_id,
         encode_component(branch)
-    )
+    ))
 }
 
-fn final_ref_transaction(
+fn final_ref_transaction<T: std::fmt::Display>(
     plan: &Plan,
-    temp_tips: &HashMap<BranchName, CommitId>,
+    temp_tips: &HashMap<BranchName, T>,
     branch_tips: &BTreeMap<BranchName, CommitId>,
 ) -> Result<String> {
     let mut transaction = String::new();

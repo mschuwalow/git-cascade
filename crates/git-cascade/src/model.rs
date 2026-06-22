@@ -49,8 +49,40 @@ macro_rules! string_newtype {
     };
 }
 
-// Name of a local Git branch, without `refs/heads/`.
-string_newtype!(BranchName);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BranchName(String);
+
+impl BranchName {
+    pub fn new(value: &str) -> std::result::Result<Self, String> {
+        value.parse()
+    }
+
+    pub(crate) fn from_git_unchecked(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<BranchName> for String {
+    fn from(value: BranchName) -> Self {
+        value.0
+    }
+}
+
+impl std::fmt::Display for BranchName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 // Object id for a resolved commit.
 string_newtype!(CommitId);
 // User-supplied Git revision or ref expression that still needs resolving.
@@ -93,7 +125,7 @@ impl FromStr for BranchName {
         {
             return Err("branch name contains invalid character".to_owned());
         }
-        Ok(Self::new(value))
+        Ok(Self(value.to_owned()))
     }
 }
 

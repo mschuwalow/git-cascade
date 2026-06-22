@@ -77,7 +77,7 @@ fn visit_ordered<'a>(
         )));
     }
 
-    ordered.push(BranchName::new(branch));
+    ordered.push(BranchName::from_git_unchecked(branch));
 
     if let Some(children) = children_by_parent.get(branch) {
         for child in children {
@@ -100,6 +100,7 @@ fn visit_ordered<'a>(
 #[cfg(test)]
 mod tests {
     use super::branches_in_topological_order;
+    use crate::model::BranchName;
     use crate::plan::{Dependency, Node, Plan, PlanCommit, PlanId, Repository, Source};
     use time::OffsetDateTime;
 
@@ -187,18 +188,18 @@ mod tests {
 
     fn node(branch: &str, parent: Option<&str>) -> Node {
         Node {
-            branch: branch.into(),
+            branch: BranchName::from_git_unchecked(branch),
             tip: "0".repeat(40).into(),
             base: "0".repeat(40).into(),
             commits: vec![PlanCommit::new("0".repeat(40), vec!["0".repeat(40)])],
-            parent: parent.map(Into::into),
+            parent: parent.map(BranchName::from_git_unchecked),
         }
     }
 
     fn dependency(parent: &str, child: &str) -> Dependency {
         Dependency {
-            parent: parent.into(),
-            child: child.into(),
+            parent: BranchName::from_git_unchecked(parent),
+            child: BranchName::from_git_unchecked(child),
         }
     }
 }

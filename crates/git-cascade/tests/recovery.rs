@@ -157,7 +157,7 @@ fn abort_succeeds_when_plan_was_already_deleted() {
         .arg("abort")
         .assert()
         .success()
-        .stdout("aborted cascade operation\n");
+        .stdout("completed cascade cleanup\n");
 
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!std::path::Path::new(state.worktree.path()).exists());
@@ -225,7 +225,7 @@ fn abort_finishes_cleanup_for_deleting_state() {
         .arg("abort")
         .assert()
         .success()
-        .stdout("aborted cascade operation\n");
+        .stdout("completed cascade cleanup\n");
 
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!std::path::Path::new(state.worktree.path()).exists());
@@ -701,6 +701,59 @@ fn continue_refuses_dirty_paused_worktree() {
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
     assert_eq!(paused_state(&state).branch(), "pr-2");
+}
+
+#[test]
+fn continue_refuses_when_target_branch_moved_while_paused() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    repo.git_ok(["update-ref", "refs/heads/pr-2", "main"]);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "branch `pr-2` moved after apply started",
+        ));
+
+    assert!(repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
+fn continue_refuses_plan_id_mismatch() {
+    let repo = conflicting_stack();
+
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .success();
+
+    let plan_path = repo.plan_path("stack");
+    let mut plan =
+        git_cascade::plan::Plan::from_yaml(&std::fs::read_to_string(&plan_path).unwrap()).unwrap();
+    plan.plan_id = git_cascade::plan::PlanId::new();
+    std::fs::write(&plan_path, serde_yaml::to_string(&plan).unwrap()).unwrap();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("references plan id"));
 }
 
 #[test]

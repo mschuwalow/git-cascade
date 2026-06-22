@@ -272,14 +272,14 @@ fn excluded_target_branches(git: &Git, target: &GitRef) -> Result<Vec<BranchName
     let mut branches = Vec::new();
     if let Some(refname) = git.symbolic_full_name(target)? {
         if let Some(branch) = refname.strip_prefix("refs/heads/") {
-            branches.push(branch.into());
+            branches.push(BranchName::from_git_unchecked(branch));
         } else if let Some(remote_ref) = refname.strip_prefix("refs/remotes/")
             && let Some((_, branch)) = remote_ref.split_once('/')
         {
-            branches.push(branch.into());
+            branches.push(BranchName::from_git_unchecked(branch));
         }
     } else if let Some(branch) = target.as_str().strip_prefix("origin/") {
-        branches.push(branch.into());
+        branches.push(BranchName::from_git_unchecked(branch));
     }
 
     branches.sort();
