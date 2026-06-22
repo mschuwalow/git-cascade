@@ -283,13 +283,13 @@ pub(super) fn print_paused_message(paused: &PausedState) {
         } => println!(
             "paused after branch `{branch}`; run checks in {worktree}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`"
         ),
-        PausedState::ChildBase {
+        PausedState::Commit {
             branch,
             commit,
             worktree,
             ..
         } => println!(
-            "paused at child base `{commit}` on branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
+            "paused at commit `{commit}` on branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
         ),
     }
 }

@@ -107,7 +107,7 @@ pub enum PausedState {
         mapped_commit: CommitId,
         worktree: String,
     },
-    ChildBase {
+    Commit {
         branch: BranchName,
         commit: CommitId,
         rewritten_tip: CommitId,
@@ -118,13 +118,13 @@ pub enum PausedState {
 impl PausedState {
     pub fn branch(&self) -> &str {
         match self {
-            Self::BranchEnd { branch, .. } | Self::ChildBase { branch, .. } => branch.as_str(),
+            Self::BranchEnd { branch, .. } | Self::Commit { branch, .. } => branch.as_str(),
         }
     }
 
     pub fn rewritten_tip(&self) -> &str {
         match self {
-            Self::BranchEnd { rewritten_tip, .. } | Self::ChildBase { rewritten_tip, .. } => {
+            Self::BranchEnd { rewritten_tip, .. } | Self::Commit { rewritten_tip, .. } => {
                 rewritten_tip.as_str()
             }
         }
@@ -132,7 +132,7 @@ impl PausedState {
 
     pub fn worktree(&self) -> &str {
         match self {
-            Self::BranchEnd { worktree, .. } | Self::ChildBase { worktree, .. } => worktree,
+            Self::BranchEnd { worktree, .. } | Self::Commit { worktree, .. } => worktree,
         }
     }
 }

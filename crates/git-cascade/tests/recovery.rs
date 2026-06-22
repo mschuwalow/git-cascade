@@ -351,13 +351,13 @@ fn pause_every_commit_stops_after_each_replayed_commit() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused at child base"))
+        .stdout(predicate::str::contains("paused at commit"))
         .stderr(predicate::str::contains("every-commit"));
     let state = read_state(&repo);
     assert_eq!(state.replay_mode, ReplayPauseMode::EveryCommit);
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     match paused_state(&state) {
-        PausedState::ChildBase { branch, .. } => assert_eq!(branch.as_str(), "pr-2"),
+        PausedState::Commit { branch, .. } => assert_eq!(branch.as_str(), "pr-2"),
         paused => panic!("expected commit pause, got {paused:?}"),
     }
 
@@ -365,11 +365,11 @@ fn pause_every_commit_stops_after_each_replayed_commit() {
         .arg("continue")
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused at child base"));
+        .stdout(predicate::str::contains("paused at commit"));
     let state = read_state(&repo);
     assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
     match paused_state(&state) {
-        PausedState::ChildBase { branch, .. } => assert_eq!(branch.as_str(), "pr-3"),
+        PausedState::Commit { branch, .. } => assert_eq!(branch.as_str(), "pr-3"),
         paused => panic!("expected commit pause, got {paused:?}"),
     }
 
@@ -543,7 +543,7 @@ fn pause_at_checkpoints_pauses_unchanged_branches_without_rewriting_if_unchanged
 }
 
 #[test]
-fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
+fn pause_at_checkpoints_walks_unchanged_commit_pause_before_branch_end() {
     let repo = paused_intermediate_stack();
     let old_pr2 = repo.rev_parse("pr-2");
     let old_pr3 = repo.rev_parse("pr-3");
@@ -560,14 +560,11 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused at child base"));
+        .stdout(predicate::str::contains("paused at commit"));
 
     let state = read_state(&repo);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert!(matches!(
-        paused_state(&state),
-        PausedState::ChildBase { .. }
-    ));
+    assert!(matches!(paused_state(&state), PausedState::Commit { .. }));
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
@@ -603,7 +600,7 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
 }
 
 #[test]
-fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
+fn unchanged_commit_pause_allows_fix_before_remaining_branch() {
     let repo = paused_intermediate_stack();
     let old_pr2 = repo.rev_parse("pr-2");
     let old_pr3 = repo.rev_parse("pr-3");
@@ -620,7 +617,7 @@ fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused at child base"));
+        .stdout(predicate::str::contains("paused at commit"));
 
     let state = read_state(&repo);
     let worktree = std::path::PathBuf::from(state.worktree.path());
@@ -631,9 +628,9 @@ fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
         worktree.to_str().unwrap(),
         "commit",
         "-m",
-        "fix unchanged child base",
+        "fix unchanged commit pause",
     ]);
-    let fixed_child_base = repo
+    let fixed_commit_pause = repo
         .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
         .trim()
         .to_owned();
@@ -658,7 +655,7 @@ fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
 
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     assert_ne!(repo.rev_parse("pr-3"), old_pr3);
-    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_child_base);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_commit_pause);
     assert_eq!(repo.show("pr-2:base-fix.txt"), "base fix\n");
     assert_eq!(repo.show("pr-3:base-fix.txt"), "base fix\n");
     assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
@@ -846,7 +843,7 @@ fn abort_in_place_paused_replay_discards_dirty_worktree() {
 }
 
 #[test]
-fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
+fn pause_at_checkpoints_stops_at_commit_before_branch_end() {
     let repo = paused_intermediate_stack();
     let old_pr2 = repo.rev_parse("pr-2");
     let old_pr3 = repo.rev_parse("pr-3");
@@ -864,12 +861,12 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused at child base"));
+        .stdout(predicate::str::contains("paused at commit"));
 
     let state = read_state(&repo);
     let first_pause = paused_state(&state);
     assert_eq!(first_pause.branch(), "pr-2");
-    assert!(matches!(first_pause, PausedState::ChildBase { .. }));
+    assert!(matches!(first_pause, PausedState::Commit { .. }));
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
@@ -882,9 +879,9 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
         worktree.to_str().unwrap(),
         "commit",
         "-m",
-        "fix child base",
+        "fix commit pause",
     ]);
-    let fixed_child_base = repo
+    let fixed_commit_pause = repo
         .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
         .trim()
         .to_owned();
@@ -929,7 +926,7 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
 
     assert_eq!(repo.rev_parse("pr-2"), fixed_pr2_tip);
     assert_ne!(repo.rev_parse("pr-3"), old_pr3);
-    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_child_base);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_commit_pause);
     assert_eq!(repo.show("pr-3:base-fix.txt"), "base fix\n");
     repo.git_fails(["show", "pr-3:tip-fix.txt"]);
     assert_eq!(repo.show("pr-2:tip-fix.txt"), "tip fix\n");
@@ -954,7 +951,7 @@ fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused at child base"));
+        .stdout(predicate::str::contains("paused at commit"));
 
     repo.cascade()
         .arg("continue")

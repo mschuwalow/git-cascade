@@ -8,7 +8,7 @@ use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::test_hooks;
 use crate::{Error, Result};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 pub(super) struct ReplayContext<'plan, 'state, B, W>
 where
@@ -53,7 +53,12 @@ where
         let selected_bases = selected_bases_from_mappings(plan, &state.mappings);
         let mappings = state.mappings.clone();
         let branch_strategy = ReplayBranchStrategy::new(state.strategy);
-        let pause_strategy = ReplayPauseStrategy::new(state.replay_mode);
+        let pause_strategy = ReplayPauseStrategy::new(
+            state.replay_mode,
+            state.strategy,
+            plan,
+            &state.extra_commits,
+        );
 
         Ok(Self {
             plan,
@@ -161,10 +166,6 @@ where
         let commits = replay_commits_from_extra(&node, &self.state.extra_commits);
         let replay_current = self.replay_current();
         let was_resuming = replay_current.is_some();
-        let child_base_pause_commits =
-            self.pause_strategy
-                .pause_commits(&self.branch_strategy, self.plan, &node, &commits);
-
         let (start_commit_index, mut last_rewritten) = if let Some(current) = replay_current {
             let start = self.resume_start_commit_index(&node, &current, &commits)?;
             self.state.phase = Phase::Replay { current: None };
@@ -212,7 +213,6 @@ where
                 commit_index,
                 commits.len(),
                 &last_rewritten,
-                &child_base_pause_commits,
                 branch_index,
             )? {
                 CommitReplay::Continue => last_rewritten = self.mapped_commit(&commit.oid)?.clone(),
@@ -231,7 +231,6 @@ where
         commit_index: usize,
         total_commits: usize,
         last_rewritten: &CommitId,
-        child_base_pause_commits: &BTreeSet<CommitId>,
         branch_index: usize,
     ) -> Result<CommitReplay> {
         let Some(rewritten_commit) =
@@ -241,7 +240,7 @@ where
         };
         self.mappings
             .insert(commit.oid.clone(), rewritten_commit.clone());
-        if child_base_pause_commits.contains(&commit.oid) {
+        if self.pause_strategy.pauses_at_commit(&commit.oid) {
             if self.can_keep_existing_commit(commit, last_rewritten) {
                 self.backend.prepare_branch(
                     &self.state,
@@ -251,7 +250,7 @@ where
                     &rewritten_commit,
                 )?;
             }
-            self.pause_at_child_base(node, &commit.oid, &rewritten_commit)?;
+            self.pause_at_commit(node, &commit.oid, &rewritten_commit)?;
             return Ok(CommitReplay::Stop);
         }
         Ok(CommitReplay::Continue)
@@ -300,13 +299,13 @@ where
         }
     }
 
-    fn pause_at_child_base(
+    fn pause_at_commit(
         &mut self,
         node: &Node,
         commit: &CommitId,
         rewritten_tip: &CommitId,
     ) -> Result<()> {
-        let paused = PausedState::ChildBase {
+        let paused = PausedState::Commit {
             branch: node.branch.clone(),
             commit: commit.clone(),
             rewritten_tip: rewritten_tip.clone(),
@@ -348,21 +347,93 @@ where
             rewritten_tip,
         )?;
 
-        self.pause_strategy.finish_branch(
-            &self.branch_strategy,
-            self.backend,
-            self.state_writer,
-            &mut self.state,
+        if self.pause_strategy.pauses_at_branch_end(&node.branch) {
+            self.pause_branch_end(
+                node,
+                branch,
+                commits,
+                branch_index,
+                total_branches,
+                &rewritten_tip,
+            )
+        } else {
+            self.complete_branch(node, branch, branch_index, total_branches, &rewritten_tip)
+        }
+    }
+
+    fn complete_branch(
+        &mut self,
+        node: &Node,
+        branch: &BranchName,
+        branch_index: usize,
+        total_branches: usize,
+        rewritten_tip: &CommitId,
+    ) -> Result<bool> {
+        let (temp_ref, branch_tip) = if rewritten_tip == &node.tip {
+            self.backend.skip_replay(
+                self.plan,
+                node,
+                branch_index,
+                total_branches,
+                rewritten_tip,
+            )?
+        } else {
+            self.backend.write_temp_ref(
+                self.plan,
+                node,
+                branch_index,
+                total_branches,
+                rewritten_tip,
+            )?
+        };
+        self.record_temp_ref(&node.branch, temp_ref, branch_tip);
+        self.remove_pending_branch(branch)?;
+        self.state.phase = Phase::Replay { current: None };
+        self.write_state()?;
+        Ok(false)
+    }
+
+    fn pause_branch_end(
+        &mut self,
+        node: &Node,
+        branch: &BranchName,
+        commits: &[PlanCommit],
+        branch_index: usize,
+        total_branches: usize,
+        rewritten_tip: &CommitId,
+    ) -> Result<bool> {
+        if rewritten_tip == &node.tip {
+            self.backend.prepare_branch(
+                &self.state,
+                branch_index,
+                total_branches,
+                node,
+                rewritten_tip,
+            )?;
+        }
+        let (temp_ref, branch_tip) = self.backend.write_temp_ref(
             self.plan,
-            &self.mappings,
-            &mut self.temp_tips,
-            branch,
             node,
-            commits,
             branch_index,
             total_branches,
-            &rewritten_tip,
-        )
+            rewritten_tip,
+        )?;
+        self.record_temp_ref(&node.branch, temp_ref.clone(), branch_tip.clone());
+        self.remove_pending_branch(branch)?;
+        self.state.phase = Phase::Paused {
+            paused: PausedState::BranchEnd {
+                branch: node.branch.clone(),
+                rewritten_tip: branch_tip,
+                temp_ref,
+                mapped_commit: commits
+                    .last()
+                    .map(|commit| commit.oid.clone())
+                    .unwrap_or_else(|| node.base.clone()),
+                worktree: self.state.worktree.path().to_owned(),
+            },
+        };
+        self.write_state()?;
+        Ok(true)
     }
 
     fn resolve_conflict(&mut self, current: CurrentState) -> Result<()> {
@@ -404,7 +475,7 @@ where
                 self.mappings.insert(mapped_commit, rewritten_tip);
                 self.state.phase = Phase::Replay { current: None };
             }
-            PausedState::ChildBase {
+            PausedState::Commit {
                 branch,
                 commit,
                 worktree,
@@ -427,7 +498,7 @@ where
     fn resume_requirements(&self, paused: &PausedState) -> Result<Vec<RequiredAncestor>> {
         let node = self.node(paused.branch())?;
         match paused {
-            PausedState::ChildBase { rewritten_tip, .. } => {
+            PausedState::Commit { rewritten_tip, .. } => {
                 let mut required = BTreeMap::<CommitId, String>::new();
                 required.insert(
                     self.branch_replay_base(node)?.clone(),
@@ -435,7 +506,7 @@ where
                 );
                 required.insert(
                     rewritten_tip.clone(),
-                    format!("rewritten child-base checkpoint for `{}`", node.branch),
+                    format!("rewritten commit pause for `{}`", node.branch),
                 );
                 Ok(required
                     .into_iter()
@@ -545,6 +616,16 @@ where
         if !self.state.completed_temp_refs.contains(&temp_ref) {
             self.state.completed_temp_refs.push(temp_ref);
         }
+    }
+
+    fn remove_pending_branch(&mut self, branch: &BranchName) -> Result<()> {
+        if self.state.pending_branches.first() != Some(branch) {
+            return Err(Error::InvalidPlan(format!(
+                "completed branch `{branch}` is not first in pending state"
+            )));
+        }
+        self.state.pending_branches.remove(0);
+        Ok(())
     }
 
     fn node(&self, branch: &str) -> Result<&Node> {

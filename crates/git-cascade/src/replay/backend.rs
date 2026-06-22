@@ -638,8 +638,8 @@ impl ReplayBackend for DryRunReplayBackend {
             PausedState::BranchEnd { branch, .. } => {
                 writeln!(self.output, "# pause after branch {branch}").unwrap();
             }
-            PausedState::ChildBase { branch, commit, .. } => {
-                writeln!(self.output, "# pause at child base {branch}:{commit}").unwrap();
+            PausedState::Commit { branch, commit, .. } => {
+                writeln!(self.output, "# pause at commit {branch}:{commit}").unwrap();
             }
         }
         writeln!(
