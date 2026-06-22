@@ -4,7 +4,7 @@ use crate::git::Git;
 use crate::model::{GitRef, Strategy};
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::replay::state::read_state;
-use crate::replay::{ReplayMode, ReplayOptions, dry_run, execute};
+use crate::replay::{ReplayOptions, ReplayPauseMode, dry_run, execute};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -42,9 +42,9 @@ pub(super) enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode. Bare --pause-at-checkpoints means checkpoints.
-        #[arg(long, value_enum, value_name = "MODE", default_value_t = ReplayMode::Never, default_missing_value = "checkpoints", num_args = 0..=1, require_equals = true)]
-        pause_at_checkpoints: ReplayMode,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -76,15 +76,8 @@ pub(super) fn run(command: Command) -> Result<()> {
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
-        } => apply(
-            name,
-            new_tip,
-            strategy,
-            dry_run,
-            in_place,
-            pause_at_checkpoints,
-        ),
+            pause_at,
+        } => apply(name, new_tip, strategy, dry_run, in_place, pause_at),
         Command::List => list(),
         Command::Show { name } => show(&name),
         Command::Remove { name } => remove(name),
@@ -116,7 +109,7 @@ fn apply(
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
-    replay_mode: ReplayMode,
+    replay_mode: ReplayPauseMode,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;

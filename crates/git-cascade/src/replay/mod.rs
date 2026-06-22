@@ -17,7 +17,7 @@ use backend::{DryRunReplayBackend, GitReplayBackend};
 use cleanup::run_deleting_phase;
 use context::ReplayContext;
 pub use state::{
-    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
+    CurrentState, PausedState, Phase, ReplayPauseMode, ReplayState, RestoreState, WorktreeState,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
 use state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
@@ -30,7 +30,7 @@ pub struct ReplayOptions {
     pub new_tip_input: GitRef,
     pub strategy: Strategy,
     pub in_place: bool,
-    pub replay_mode: ReplayMode,
+    pub replay_mode: ReplayPauseMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

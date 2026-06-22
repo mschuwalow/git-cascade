@@ -51,7 +51,7 @@ fn sync_help_mentions_default_branch_options() {
                 .and(predicate::str::contains("--oldest-branch"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--pause-at-checkpoints"))
+                .and(predicate::str::contains("--pause-at"))
                 .and(predicate::str::contains("--onto").not())
                 .and(predicate::str::contains("--old-tip").not())
                 .and(predicate::str::contains("--old-base").not())
@@ -76,7 +76,7 @@ fn replay_help_mentions_generic_one_shot_options() {
                 .and(predicate::str::contains("move-to-current-tips"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--pause-at-checkpoints")),
+                .and(predicate::str::contains("--pause-at")),
         );
 }
 
@@ -94,7 +94,7 @@ fn restack_help_mentions_common_options() {
                 .and(predicate::str::contains("--base"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--pause-at-checkpoints"))
+                .and(predicate::str::contains("--pause-at"))
                 .and(predicate::str::contains("--onto").not())
                 .and(predicate::str::contains("--strategy")),
         );
@@ -115,7 +115,7 @@ fn landed_help_mentions_landing_options() {
                 .and(predicate::str::contains("--old-base"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--pause-at-checkpoints"))
+                .and(predicate::str::contains("--pause-at"))
                 .and(predicate::str::contains("--strategy")),
         );
 }
@@ -135,7 +135,7 @@ fn apply_help_mentions_strategy_and_dry_run() {
                 .and(predicate::str::contains("move-to-current-tips"))
                 .and(predicate::str::contains("--dry-run"))
                 .and(predicate::str::contains("--in-place"))
-                .and(predicate::str::contains("--pause-at-checkpoints"))
+                .and(predicate::str::contains("--pause-at"))
                 .and(predicate::str::contains("--new-tip"))
                 .and(predicate::str::contains("<NAME>"))
                 .and(predicate::str::contains(

@@ -2,7 +2,7 @@ mod common;
 
 use common::repo::TestRepo;
 use git_cascade::replay::{
-    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
+    CurrentState, PausedState, Phase, ReplayPauseMode, ReplayState, RestoreState, WorktreeState,
 };
 use predicates::prelude::*;
 
@@ -273,7 +273,8 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -281,7 +282,7 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
-    assert_eq!(state.replay_mode, ReplayMode::Checkpoints);
+    assert_eq!(state.replay_mode, ReplayPauseMode::Checkpoints);
     assert_eq!(paused_state(&state).branch(), "pr-2");
     assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
@@ -345,14 +346,15 @@ fn pause_every_commit_stops_after_each_replayed_commit() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints=every-commit",
+            "--pause-at",
+            "every-commit",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("paused at child base"))
         .stderr(predicate::str::contains("every-commit"));
     let state = read_state(&repo);
-    assert_eq!(state.replay_mode, ReplayMode::EveryCommit);
+    assert_eq!(state.replay_mode, ReplayPauseMode::EveryCommit);
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     match paused_state(&state) {
         PausedState::ChildBase { branch, .. } => assert_eq!(branch.as_str(), "pr-2"),
@@ -394,7 +396,8 @@ fn branch_end_pause_rejects_rewrite_that_drops_branch_replay_base() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -433,7 +436,8 @@ fn branch_end_pause_allows_squashing_before_replaying_child_to_current_tip() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -506,7 +510,8 @@ fn pause_at_checkpoints_pauses_unchanged_branches_without_rewriting_if_unchanged
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -550,7 +555,8 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -609,7 +615,8 @@ fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -672,7 +679,8 @@ fn pause_at_checkpoints_allows_rewriting_unchanged_branch_before_child() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -732,7 +740,8 @@ fn continue_refuses_dirty_paused_worktree() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success();
@@ -762,7 +771,8 @@ fn continue_refuses_when_target_branch_moved_while_paused() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -816,7 +826,8 @@ fn abort_in_place_paused_replay_discards_dirty_worktree() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
             "--in-place",
         ])
         .assert()
@@ -848,7 +859,8 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -937,7 +949,8 @@ fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()

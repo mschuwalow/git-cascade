@@ -7,7 +7,8 @@ use crate::Result;
 use crate::git::Git;
 use crate::model::{BranchName, GitRef, Strategy};
 use crate::replay::{
-    AbortOutcome, PausedState, ReplayMode, ReplayOutcome, abort as abort_apply, continue_replay,
+    AbortOutcome, PausedState, ReplayOutcome, ReplayPauseMode, abort as abort_apply,
+    continue_replay,
 };
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -48,9 +49,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode. Bare --pause-at-checkpoints means checkpoints.
-        #[arg(long, value_enum, value_name = "MODE", default_value_t = ReplayMode::Never, default_missing_value = "checkpoints", num_args = 0..=1, require_equals = true)]
-        pause_at_checkpoints: ReplayMode,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Replay dependents from an old root tip onto an arbitrary replacement tip.
     Replay {
@@ -72,9 +73,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode. Bare --pause-at-checkpoints means checkpoints.
-        #[arg(long, value_enum, value_name = "MODE", default_value_t = ReplayMode::Never, default_missing_value = "checkpoints", num_args = 0..=1, require_equals = true)]
-        pause_at_checkpoints: ReplayMode,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Update branches after the default branch advanced.
     Sync {
@@ -93,9 +94,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode. Bare --pause-at-checkpoints means checkpoints.
-        #[arg(long, value_enum, value_name = "MODE", default_value_t = ReplayMode::Never, default_missing_value = "checkpoints", num_args = 0..=1, require_equals = true)]
-        pause_at_checkpoints: ReplayMode,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Move dependents of a branch that landed on the default branch.
     Landed {
@@ -117,9 +118,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode. Bare --pause-at-checkpoints means checkpoints.
-        #[arg(long, value_enum, value_name = "MODE", default_value_t = ReplayMode::Never, default_missing_value = "checkpoints", num_args = 0..=1, require_equals = true)]
-        pause_at_checkpoints: ReplayMode,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Show the active cascade operation, if any.
     Status,
@@ -160,7 +161,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::restack(
             branch,
             base,
@@ -168,7 +169,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Replay {
@@ -178,7 +179,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::replay(
             old_tip,
             old_base,
@@ -187,7 +188,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Sync {
@@ -196,7 +197,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::sync(
             base,
             oldest_branch,
@@ -204,7 +205,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Landed {
@@ -214,7 +215,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::landed(
             old_tip,
             onto,
@@ -223,7 +224,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Status => status::status(),

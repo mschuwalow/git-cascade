@@ -3,7 +3,7 @@ use super::landed as landed_inference;
 use crate::git::Git;
 use crate::model::{BranchName, GitRef, Strategy};
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
-use crate::replay::{ReplayMode, ReplayOptions, dry_run, execute};
+use crate::replay::{ReplayOptions, ReplayPauseMode, dry_run, execute};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -11,7 +11,7 @@ pub(super) struct RunOptions {
     pub(super) strategy: Strategy,
     pub(super) is_dry_run: bool,
     pub(super) in_place: bool,
-    pub(super) replay_mode: ReplayMode,
+    pub(super) replay_mode: ReplayPauseMode,
 }
 
 pub(super) fn restack(

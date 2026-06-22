@@ -67,16 +67,14 @@ impl std::fmt::Display for Phase {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
-pub enum ReplayMode {
+pub enum ReplayPauseMode {
     #[default]
-    #[serde(alias = "run-to-completion")]
     Never,
     EveryCommit,
-    #[serde(alias = "pause-at-checkpoints")]
     Checkpoints,
 }
 
-impl ReplayMode {
+impl ReplayPauseMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Never => "never",
@@ -94,7 +92,7 @@ impl ReplayMode {
     }
 }
 
-impl std::fmt::Display for ReplayMode {
+impl std::fmt::Display for ReplayPauseMode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -200,7 +198,7 @@ pub struct ReplayState {
     pub updated_at: String,
     pub new_tip: CommitId,
     pub strategy: Strategy,
-    pub replay_mode: ReplayMode,
+    pub replay_mode: ReplayPauseMode,
     pub worktree: WorktreeState,
     pub completed_temp_refs: Vec<GitRef>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
@@ -364,7 +362,7 @@ pub struct InitialReplayStateInput<'a> {
     pub plan_id: &'a PlanId,
     pub new_tip: &'a CommitId,
     pub strategy: Strategy,
-    pub replay_mode: ReplayMode,
+    pub replay_mode: ReplayPauseMode,
     pub pending_branches: Vec<BranchName>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
     pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
