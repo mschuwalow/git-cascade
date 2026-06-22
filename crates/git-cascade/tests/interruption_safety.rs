@@ -7,48 +7,76 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn recovers_linear_stack_after_git_operation_interruptions() {
-    for seed in 1..=12 {
+    let mut fail_at = 1;
+    loop {
         let repo = clean_stack_with_rebased_root();
         let old_pr2 = repo.rev_parse("pr-2");
-
-        apply_with_interruptions(&repo, 75, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
+        let interrupted = apply_with_interruption_at(
+            &repo,
+            fail_at,
+            ["plan", "apply", "stack", "--new-tip", "pr-1"],
+        );
 
         assert_ne!(repo.rev_parse("pr-2"), old_pr2);
         assert_eq!(repo.merge_base("pr-1", "pr-2"), repo.rev_parse("pr-1"));
         assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
         assert_clean_cascade_state(&repo);
+
+        if !interrupted {
+            break;
+        }
+        fail_at += 1;
     }
 }
 
 #[test]
 fn recovers_no_dependent_branches_after_git_operation_interruptions() {
-    for seed in 1..=12 {
+    let mut fail_at = 1;
+    loop {
         let repo = root_only_stack();
-
-        apply_with_interruptions(&repo, 60, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
+        let interrupted = apply_with_interruption_at(
+            &repo,
+            fail_at,
+            ["plan", "apply", "stack", "--new-tip", "pr-1"],
+        );
 
         assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
         assert_clean_cascade_state(&repo);
+
+        if !interrupted {
+            break;
+        }
+        fail_at += 1;
     }
 }
 
 #[test]
 fn recovers_branches_already_at_replay_base_after_git_operation_interruptions() {
-    for seed in 1..=12 {
+    let mut fail_at = 1;
+    loop {
         let repo = clean_stack();
         let pr2 = repo.rev_parse("pr-2");
-
-        apply_with_interruptions(&repo, 30, seed, ["plan", "apply", "stack", "--new-tip", "pr-1"]);
+        let interrupted = apply_with_interruption_at(
+            &repo,
+            fail_at,
+            ["plan", "apply", "stack", "--new-tip", "pr-1"],
+        );
 
         assert_eq!(repo.rev_parse("pr-2"), pr2);
         assert_eq!(repo.show("pr-2:pr2.txt"), "b\n");
         assert_clean_cascade_state(&repo);
+
+        if !interrupted {
+            break;
+        }
+        fail_at += 1;
     }
 }
 
 #[test]
 fn recovers_conflict_continuation_after_git_operation_interruptions() {
-    for seed in 1..=12 {
+    let mut fail_at = 1;
+    loop {
         let repo = conflicting_stack();
         let old_pr2 = repo.rev_parse("pr-2");
 
@@ -62,24 +90,26 @@ fn recovers_conflict_continuation_after_git_operation_interruptions() {
         std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
         repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
-        apply_with_interruptions(&repo, 25, seed, ["continue"]);
+        let interrupted = apply_with_interruption_at(&repo, fail_at, ["continue"]);
 
         assert_ne!(repo.rev_parse("pr-2"), old_pr2);
         assert_eq!(repo.show("pr-2:conflict.txt"), "resolved\n");
         assert_clean_cascade_state(&repo);
+
+        if !interrupted {
+            break;
+        }
+        fail_at += 1;
     }
 }
 
-fn apply_with_interruptions<const N: usize>(
+fn apply_with_interruption_at<const N: usize>(
     repo: &TestRepo,
-    interruption_percent: u8,
-    seed: usize,
+    fail_at: usize,
     args: [&str; N],
-) -> usize {
-    assert!(interruption_percent <= 100);
-
-    let hook = write_probabilistic_active_git_operation_hook(repo);
-    let count_path = repo.path().join("git-operation-hook-count");
+) -> bool {
+    let hook = write_operation_index_hook(repo);
+    let count_path = repo.path().with_extension("hook-count");
     let mut interruptions = 0;
 
     loop {
@@ -94,25 +124,30 @@ fn apply_with_interruptions<const N: usize>(
             .env("GIT_CASCADE_TEST_HOOK_AFTER_GIT_OPERATION", &hook)
             .env("GIT_CASCADE_TEST_COMMON_DIR", repo.common_dir())
             .env("GIT_CASCADE_TEST_HOOK_COUNT", &count_path)
-            .env("GIT_CASCADE_TEST_HOOK_FAILURE_PERCENT", interruption_percent.to_string())
-            .env("GIT_CASCADE_TEST_HOOK_SEED", seed.to_string())
+            .env("GIT_CASCADE_TEST_HOOK_FAIL_AT", fail_at.to_string())
             .output()
             .unwrap();
 
         if output.status.success() {
-            assert!(interruptions > 0, "seed {seed} completed without interruption");
-            return interruptions;
+            return interruptions > 0;
         }
 
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("test hook `before-git-operation` failed")
+                || String::from_utf8_lossy(&output.stderr)
+                    .contains("test hook `after-git-operation` failed"),
+            "unexpected failure at operation {fail_at}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         interruptions += 1;
-        assert!(interruptions <= 200, "seed {seed} produced too many interruptions");
+        assert!(interruptions == 1);
     }
 }
 
-fn write_probabilistic_active_git_operation_hook(repo: &TestRepo) -> std::path::PathBuf {
-    let path = repo
-        .path()
-        .join("probabilistic-active-git-operation-hook.sh");
+fn write_operation_index_hook(repo: &TestRepo) -> std::path::PathBuf {
+    let path = repo.path().join("operation-index-hook.sh");
     std::fs::write(
         &path,
         indoc! {r#"
@@ -123,20 +158,7 @@ fn write_probabilistic_active_git_operation_hook(repo: &TestRepo) -> std::path::
             [ -f "$GIT_CASCADE_TEST_HOOK_COUNT" ] && count=$(cat "$GIT_CASCADE_TEST_HOOK_COUNT")
             count=$((count + 1))
             echo "$count" > "$GIT_CASCADE_TEST_HOOK_COUNT"
-            seed=${GIT_CASCADE_TEST_HOOK_SEED:-1}
-            percent=${GIT_CASCADE_TEST_HOOK_FAILURE_PERCENT:-10}
-
-            x=$((count ^ (seed * 0x9e3779b9)))
-
-            x=$((x ^ (x >> 16)))
-            x=$((x * 0x85ebca6b))
-            x=$((x ^ (x >> 13)))
-            x=$((x * 0xc2b2ae35))
-            x=$((x ^ (x >> 16)))
-
-            roll=$((x % 100))
-
-            [ "$roll" -lt "$percent" ] && exit 1
+            [ "$count" -gte "$GIT_CASCADE_TEST_HOOK_FAIL_AT" ] && exit 1
             exit 0
         "#},
     )
