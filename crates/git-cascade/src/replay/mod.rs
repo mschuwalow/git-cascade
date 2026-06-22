@@ -13,7 +13,7 @@ use crate::plan::{
 };
 use crate::storage::Storage;
 use crate::{Error, Result};
-use backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
+use backend::{DryRunReplayBackend, GitReplayBackend};
 use cleanup::run_deleting_phase;
 use context::ReplayContext;
 pub use state::{
@@ -177,8 +177,6 @@ pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
     if matches!(state.phase, Phase::Deleting { .. }) {
         run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
         Ok(ReplayOutcome::Complete)
-    } else if matches!(state.phase, Phase::RestoreCheckout { .. }) {
-        run_restore_checkout_phase(git, storage, &mut state_writer, &mut backend, &mut state)
     } else {
         let plan_name = state.plan_name.clone();
         let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
@@ -211,16 +209,14 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
         return run_deleting_phase(git, storage, &mut state_writer, &mut state);
     }
 
-    let mut backend = GitReplayBackend::new(git);
-    if matches!(state.phase, Phase::RestoreCheckout { .. }) {
-        run_restore_checkout_phase(git, storage, &mut state_writer, &mut backend, &mut state)?;
-        return Ok(());
-    }
-
     let plan_name = state.plan_name.clone();
     let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
+    let mut backend = GitReplayBackend::new(git);
 
-    if matches!(state.phase, Phase::FinalUpdate) {
+    if matches!(
+        state.phase,
+        Phase::FinalUpdate | Phase::RestoreCheckout { .. }
+    ) {
         let mut context = ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?;
         if matches!(context.run()?, ReplayOutcome::Complete) {
             let mut state = context.into_state();
@@ -248,31 +244,6 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
             Error::InvalidInvocation("abort cleanup stopped before deleting phase".to_owned()),
         ),
     }
-}
-
-fn run_restore_checkout_phase(
-    git: &Git,
-    storage: &Storage,
-    state_writer: &mut dyn StateWriter,
-    backend: &mut GitReplayBackend<'_>,
-    state: &mut ReplayState,
-) -> Result<ReplayOutcome> {
-    let Phase::RestoreCheckout {
-        delete_plan,
-        force_checkout,
-    } = &state.phase
-    else {
-        return Err(Error::InvalidInvocation(
-            "active apply state is not in restore-checkout phase".to_owned(),
-        ));
-    };
-    let delete_plan = *delete_plan;
-    let force_checkout = *force_checkout;
-    backend.restore_checkout(state, force_checkout)?;
-    state.phase = Phase::Deleting { delete_plan };
-    state_writer.write_state(state)?;
-    run_deleting_phase(git, storage, state_writer, state)?;
-    Ok(ReplayOutcome::Complete)
 }
 
 fn restore_state(git: &Git) -> Result<RestoreState> {
