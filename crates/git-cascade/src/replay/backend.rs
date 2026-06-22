@@ -1,14 +1,12 @@
-use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
+use super::{CurrentState, PausedState, ReplayState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::plan::{Node, Plan};
 use crate::storage::Storage;
 use crate::test_hooks;
 use crate::{Error, Result};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
-use std::fs;
-use std::path::PathBuf;
 
 pub(crate) trait ReplayBackend {
     fn start(&mut self, state: &ReplayState) -> Result<()>;
@@ -71,8 +69,6 @@ pub(crate) trait ReplayBackend {
         rewritten_tip: &str,
     ) -> Result<(String, String)>;
     fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
-    fn delete_applied_plan(&mut self, state: &ReplayState) -> Result<()>;
-    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()>;
 }
 
 pub(crate) enum CherryPickOutcome {
@@ -82,12 +78,11 @@ pub(crate) enum CherryPickOutcome {
 
 pub(crate) struct GitReplayBackend<'a> {
     git: &'a Git,
-    storage: &'a Storage,
 }
 
 impl<'a> GitReplayBackend<'a> {
-    pub(crate) fn new(git: &'a Git, storage: &'a Storage) -> Self {
-        Self { git, storage }
+    pub(crate) fn new(git: &'a Git) -> Self {
+        Self { git }
     }
 }
 
@@ -320,47 +315,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
         eprintln!("Updating branch refs");
         finish_final_update(self.git, plan, state)
     }
-
-    fn delete_applied_plan(&mut self, state: &ReplayState) -> Result<()> {
-        self.storage.delete_plan_if_exists(state.plan_name.clone())
-    }
-
-    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()> {
-        eprintln!("Cleaning temporary cascade state");
-        let worktree = worktree_path(self.storage, state);
-        if worktree.exists() {
-            let worktree_git = Git::new(&worktree);
-            worktree_git.try_cherry_pick_abort()?;
-            if let WorktreeState::InPlace { restore, .. } = &state.worktree {
-                match restore {
-                    RestoreState::Branch { name, .. } => worktree_git.switch_branch(name)?,
-                    RestoreState::Detached { head } => worktree_git.switch_detached(head)?,
-                }
-            }
-        }
-
-        let mut refs = BTreeSet::new();
-        refs.extend(state.completed_temp_refs.iter().cloned());
-        refs.extend(
-            self.git
-                .refs_under(&format!("refs/cascade/tmp/{}", state.plan_id))?,
-        );
-        for temp_ref in refs {
-            self.git.delete_ref(&temp_ref)?;
-        }
-
-        if state.worktree.is_temporary() && worktree.exists() {
-            self.git.worktree_remove_force(&worktree)?;
-            if worktree.exists() {
-                fs::remove_dir_all(&worktree).map_err(|source| Error::IoWithPath {
-                    path: worktree.clone(),
-                    source,
-                })?;
-            }
-        }
-
-        Ok(())
-    }
 }
 
 pub(crate) struct DryRunReplayBackend {
@@ -585,28 +539,6 @@ impl ReplayBackend for DryRunReplayBackend {
         writeln!(self.output, "EOF").unwrap();
         Ok(())
     }
-
-    fn delete_applied_plan(&mut self, _state: &ReplayState) -> Result<()> {
-        Ok(())
-    }
-
-    fn cleanup_deleting_state(&mut self, state: &mut ReplayState) -> Result<()> {
-        let WorktreeState::InPlace { path, restore } = &state.worktree else {
-            return Ok(());
-        };
-
-        writeln!(self.output).unwrap();
-        writeln!(self.output, "# restore checkout").unwrap();
-        match restore {
-            RestoreState::Branch { name, .. } => {
-                writeln!(self.output, "git -C {} switch {name}", path).unwrap();
-            }
-            RestoreState::Detached { head } => {
-                writeln!(self.output, "git -C {} switch --detach {head}", path).unwrap();
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Detects a cherry-pick that stopped because it became empty: the pick is
@@ -745,14 +677,6 @@ fn ensure_branches_not_checked_out(branches: &[String], checked_out: &[String]) 
         "cannot apply while target branch(es) are checked out in a worktree: {}. Switch those worktrees to another branch or a detached HEAD before running apply.",
         blocked.join(", ")
     )))
-}
-
-fn worktree_path(storage: &Storage, state: &ReplayState) -> PathBuf {
-    if state.worktree.path().is_empty() {
-        storage.worktrees_dir().join(state.plan_id.to_string())
-    } else {
-        PathBuf::from(state.worktree.path())
-    }
 }
 
 fn short_oid(oid: &str) -> &str {

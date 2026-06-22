@@ -1,4 +1,5 @@
 mod backend;
+mod cleanup;
 mod context;
 pub mod state;
 mod state_writer;
@@ -11,13 +12,14 @@ use crate::plan::{
 };
 use crate::storage::Storage;
 use crate::{Error, Result};
-use backend::{DryRunReplayBackend, GitReplayBackend, ReplayBackend};
+use backend::{DryRunReplayBackend, GitReplayBackend};
+use cleanup::{dry_run_deleting_output, run_deleting_phase};
 use context::ReplayContext;
 pub use state::{
     CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
-use state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
+use state_writer::{LockedStateWriter, NoopStateWriter};
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -84,19 +86,24 @@ pub fn dry_run(
     })?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
-    {
+    let cleanup_output = {
         let mut replay = ReplayContext::new(plan, &mut state_writer, &mut backend, state)?;
         loop {
             // drive replay to completions, as there are no manual resolutions in dry run
             match replay.run()? {
-                ReplayOutcome::Complete => break,
+                ReplayOutcome::Complete => {
+                    let state = replay.into_state();
+                    break dry_run_deleting_output(&state);
+                }
                 ReplayOutcome::Paused { .. } => replay.continue_after_pause_or_conflict(),
-                ReplayOutcome::Conflict { .. } => break,
+                ReplayOutcome::Conflict { .. } => break String::new(),
             }
         }
-    }
+    };
 
-    Ok(backend.finish())
+    let mut output = backend.finish();
+    output.push_str(&cleanup_output);
+    Ok(output)
 }
 
 pub fn execute(
@@ -152,8 +159,19 @@ pub fn execute(
         cleanup_stale_worktree(git, &worktree)?;
     }
     let mut state_writer = LockedStateWriter::new(state_file);
-    let mut backend = GitReplayBackend::new(git, storage);
-    ReplayContext::new(plan, &mut state_writer, &mut backend, state)?.run()
+    let mut backend = GitReplayBackend::new(git);
+    let mut context = ReplayContext::new(plan, &mut state_writer, &mut backend, state)?;
+    match context.run()? {
+        ReplayOutcome::Complete => {
+            let mut state = context.into_state();
+            run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
+            Ok(ReplayOutcome::Complete)
+        }
+        ReplayOutcome::Conflict { current, message } => {
+            Ok(ReplayOutcome::Conflict { current, message })
+        }
+        ReplayOutcome::Paused { paused } => Ok(ReplayOutcome::Paused { paused }),
+    }
 }
 
 pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
@@ -162,9 +180,9 @@ pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
     let mut state = state_file.read_state()?;
 
     let mut state_writer = LockedStateWriter::new(state_file);
-    let mut backend = GitReplayBackend::new(git, storage);
+    let mut backend = GitReplayBackend::new(git);
     if matches!(state.phase, Phase::Deleting { .. }) {
-        run_deleting_state(&mut state_writer, &mut backend, &mut state)?;
+        run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
         Ok(ReplayOutcome::Complete)
     } else {
         let plan_name = state.plan_name.clone();
@@ -174,7 +192,17 @@ pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
         validate_plan(git, &plan)?;
         let mut context = ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?;
         context.continue_after_pause_or_conflict();
-        context.run()
+        match context.run()? {
+            ReplayOutcome::Complete => {
+                let mut state = context.into_state();
+                run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
+                Ok(ReplayOutcome::Complete)
+            }
+            ReplayOutcome::Conflict { current, message } => {
+                Ok(ReplayOutcome::Conflict { current, message })
+            }
+            ReplayOutcome::Paused { paused } => Ok(ReplayOutcome::Paused { paused }),
+        }
     }
 }
 
@@ -192,8 +220,7 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
     }
 
     let mut state_writer = LockedStateWriter::new(state_file);
-    let mut backend = GitReplayBackend::new(git, storage);
-    run_deleting_state(&mut state_writer, &mut backend, &mut state)
+    run_deleting_phase(git, storage, &mut state_writer, &mut state)
 }
 
 fn restore_state(git: &Git) -> Result<RestoreState> {
@@ -211,26 +238,6 @@ fn replay_mode(options: &ReplayOptions) -> ReplayMode {
     } else {
         ReplayMode::RunToCompletion
     }
-}
-
-fn run_deleting_state(
-    state_writer: &mut dyn StateWriter,
-    backend: &mut dyn ReplayBackend,
-    state: &mut ReplayState,
-) -> Result<()> {
-    let delete_plan = match &state.phase {
-        Phase::Deleting { delete_plan } => *delete_plan,
-        _ => {
-            return Err(Error::InvalidInvocation(
-                "active apply state is not in deleting phase".to_owned(),
-            ));
-        }
-    };
-    if delete_plan {
-        backend.delete_applied_plan(state)?;
-    }
-    backend.cleanup_deleting_state(state)?;
-    state_writer.remove_state()
 }
 
 fn ensure_target_branches_not_checked_out(git: &Git, branches: &[String]) -> Result<()> {

@@ -1,7 +1,7 @@
+use super::ReplayOutcome;
 use super::backend::{CherryPickOutcome, ReplayBackend};
 use super::state::{CurrentState, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
-use super::{ReplayOutcome, run_deleting_state};
 use crate::model::Strategy;
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::test_hooks;
@@ -82,12 +82,13 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 Phase::ContinueAfterPause { paused } => {
                     self.resume_paused_branch(paused.clone())?
                 }
-                Phase::Deleting { .. } => {
-                    run_deleting_state(self.state_writer, self.backend, &mut self.state)?;
-                    return Ok(ReplayOutcome::Complete);
-                }
+                Phase::Deleting { .. } => return Ok(ReplayOutcome::Complete),
             }
         }
+    }
+
+    pub(super) fn into_state(self) -> ReplayState {
+        self.state
     }
 
     pub(super) fn continue_after_pause_or_conflict(&mut self) {
