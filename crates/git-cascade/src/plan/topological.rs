@@ -1,5 +1,5 @@
 use super::{Node, Plan};
-use crate::types::BranchName;
+use crate::model::BranchName;
 use crate::{Error, Result};
 use std::collections::{HashMap, HashSet};
 

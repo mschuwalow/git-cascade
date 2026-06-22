@@ -1,7 +1,7 @@
 use super::handle_replay_outcome;
 use crate::Result;
 use crate::git::Git;
-use crate::model::Strategy;
+use crate::model::{GitRef, Strategy};
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::replay::state::read_state;
 use crate::replay::{ReplayOptions, dry_run, execute};
@@ -17,10 +17,10 @@ pub(super) enum Command {
         name: PlanName,
         /// Ref used with --old-tip to compute the old range base via merge-base.
         #[arg(long, value_name = "REF")]
-        old_base: String,
+        old_base: GitRef,
         /// Old top of the root range before rewriting.
         #[arg(long, value_name = "REF")]
-        old_tip: String,
+        old_tip: GitRef,
         /// Overwrite an existing plan with the same name.
         #[arg(long)]
         replace: bool,
@@ -32,7 +32,7 @@ pub(super) enum Command {
         name: PlanName,
         /// Replacement ref or commit-ish for the old root tip.
         #[arg(long, value_name = "REF")]
-        new_tip: String,
+        new_tip: GitRef,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
         strategy: Strategy,
@@ -69,7 +69,7 @@ pub(super) fn run(command: Command) -> Result<()> {
             old_base,
             old_tip,
             replace,
-        } => create(name, &old_base, &old_tip, replace),
+        } => create(name, old_base, old_tip, replace),
         Command::Apply {
             name,
             new_tip,
@@ -79,7 +79,7 @@ pub(super) fn run(command: Command) -> Result<()> {
             pause_at_checkpoints,
         } => apply(
             name,
-            &new_tip,
+            new_tip,
             strategy,
             dry_run,
             in_place,
@@ -91,7 +91,7 @@ pub(super) fn run(command: Command) -> Result<()> {
     }
 }
 
-fn create(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Result<()> {
+fn create(name: PlanName, old_base: GitRef, old_tip: GitRef, replace: bool) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     generate_stored_plan(
@@ -99,8 +99,8 @@ fn create(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Resul
         &storage,
         &GenerateOptions {
             name: name.clone(),
-            old_base: old_base.to_owned(),
-            old_tip: old_tip.to_owned(),
+            old_base,
+            old_tip,
             excluded_branches: Vec::new(),
         },
         replace,
@@ -112,7 +112,7 @@ fn create(name: PlanName, old_base: &str, old_tip: &str, replace: bool) -> Resul
 
 fn apply(
     name: PlanName,
-    new_tip: &str,
+    new_tip: GitRef,
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
@@ -123,7 +123,7 @@ fn apply(
     let plan = Plan::from_yaml(&storage.read_plan(&name)?)?;
     let options = ReplayOptions {
         plan_name: name,
-        new_tip_input: new_tip.to_owned(),
+        new_tip_input: new_tip,
         strategy,
         in_place,
         pause_at_checkpoints,

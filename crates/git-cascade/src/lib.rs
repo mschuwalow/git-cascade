@@ -7,6 +7,5 @@ pub mod plan;
 pub mod replay;
 pub mod storage;
 pub mod test_hooks;
-pub mod types;
 
 pub use error::{Error, Result};

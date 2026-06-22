@@ -3,9 +3,9 @@ use super::backend::{CherryPickOutcome, ReplayBackend, RequiredAncestor};
 use super::state::{CurrentState, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
 use crate::model::Strategy;
+use crate::model::{BranchName, CommitId};
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::test_hooks;
-use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -500,7 +500,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 })?
             }
             Strategy::PreserveForkPoints => {
-                self.state.mappings.get(child.base()).ok_or_else(|| {
+                self.state.mappings.get(&child.base).ok_or_else(|| {
                     Error::InvalidPlan(format!(
                         "base `{}` for branch `{}` was not mapped",
                         child.base(),
@@ -587,8 +587,8 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
             });
         }
 
-        let base = node.base();
-        if base == parent.base() {
+        let base = &node.base;
+        if base.as_str() == parent.base() {
             return self
                 .selected_bases
                 .get(&parent.branch)
@@ -616,7 +616,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
     fn node(&self, branch: &str) -> Result<&Node> {
         let index = self
             .nodes
-            .get(branch)
+            .get(&BranchName::new(branch))
             .ok_or_else(|| Error::InvalidPlan(format!("unknown branch `{branch}`")))?;
         self.plan
             .nodes
@@ -710,7 +710,7 @@ fn selected_bases_from_mappings(
         .iter()
         .filter_map(|node| {
             mappings
-                .get(node.base())
+                .get(&node.base)
                 .map(|base| (node.branch.clone(), base.clone()))
         })
         .collect()

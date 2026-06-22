@@ -3,7 +3,7 @@ mod topological;
 mod validate;
 
 use crate::encoding::{decode_component, encode_component};
-use crate::types::{BranchName, CommitId};
+use crate::model::{BranchName, CommitId};
 use crate::{Error, Result};
 pub use generate::{GenerateOptions, generate_plan, generate_stored_plan};
 use serde::{Deserialize, Serialize};
@@ -202,9 +202,8 @@ impl Node {
         self.commits.iter().map(|commit| commit.oid.as_str())
     }
 
-    pub fn contains_commit(&self, oid: impl AsRef<str>) -> bool {
-        let oid = oid.as_ref();
-        self.commit_oids().any(|commit| commit == oid)
+    pub fn contains_commit(&self, oid: &CommitId) -> bool {
+        self.commits.iter().any(|commit| commit.oid == *oid)
     }
 
     pub fn is_root(&self) -> bool {

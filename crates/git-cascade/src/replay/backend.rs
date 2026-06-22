@@ -1,10 +1,10 @@
 use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{Node, Plan};
 use crate::storage::Storage;
 use crate::test_hooks;
-use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -343,9 +343,9 @@ impl ReplayBackend for GitReplayBackend<'_> {
         if let WorktreeState::InPlace { restore, .. } = &state.worktree {
             match restore {
                 RestoreState::Branch { name, .. } if force_checkout => {
-                    worktree_git.switch_branch_discarding_changes(name)?
+                    worktree_git.switch_branch_discarding_changes(name.as_str())?
                 }
-                RestoreState::Branch { name, .. } => worktree_git.switch_branch(name)?,
+                RestoreState::Branch { name, .. } => worktree_git.switch_branch(name.as_str())?,
                 RestoreState::Detached { head } if force_checkout => {
                     worktree_git.switch_detached_discarding_changes(head)?
                 }
@@ -662,7 +662,7 @@ fn final_update_already_applied(
         let expected_tip = branch_tips.get(&node.branch).ok_or_else(|| {
             Error::InvalidPlan(format!("branch `{}` has no expected tip", node.branch))
         })?;
-        let current_tip = git.local_branch_tip(node.branch.as_str())?;
+        let current_tip = git.local_branch_tip(&node.branch)?;
         if &current_tip == expected_tip {
             if expected_tip != rewritten_tip {
                 saw_pending = true;
@@ -696,7 +696,7 @@ fn temp_tips_from_refs(git: &Git, temp_refs: &[String]) -> Result<HashMap<Branch
             continue;
         };
         let branch = BranchName::new(decode_component(encoded_branch)?);
-        temp_tips.insert(branch, git.resolve_commit(temp_ref)?);
+        temp_tips.insert(branch, git.resolve_commit(&GitRef::new(temp_ref.clone()))?);
     }
 
     Ok(temp_tips)
@@ -761,7 +761,7 @@ fn ensure_branches_not_checked_out(
     )))
 }
 
-fn short_oid(oid: impl AsRef<str>) -> String {
-    let oid = oid.as_ref();
+fn short_oid(oid: &CommitId) -> String {
+    let oid = oid.as_str();
     oid.get(..12).unwrap_or(oid).to_owned()
 }

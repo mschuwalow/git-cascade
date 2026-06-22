@@ -1,7 +1,7 @@
 use crate::model::Strategy;
+use crate::model::{BranchName, CommitId};
 use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
-use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -176,8 +176,8 @@ impl std::fmt::Display for WorktreeState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum RestoreState {
-    Branch { name: String, head: String },
-    Detached { head: String },
+    Branch { name: BranchName, head: CommitId },
+    Detached { head: CommitId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

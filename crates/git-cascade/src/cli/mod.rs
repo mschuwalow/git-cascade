@@ -5,7 +5,7 @@ mod status;
 
 use crate::Result;
 use crate::git::Git;
-use crate::model::Strategy;
+use crate::model::{BranchName, GitRef, Strategy};
 use crate::replay::{PausedState, ReplayOutcome, abort as abort_apply, continue_replay};
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -33,10 +33,10 @@ enum Command {
     Restack {
         /// Branch whose dependents should move. Defaults to the current branch.
         #[arg(value_name = "BRANCH")]
-        branch: Option<String>,
+        branch: Option<BranchName>,
         /// Base branch or ref the branch stack forked from. Defaults to the default branch.
         #[arg(long, value_name = "REF")]
-        base: Option<String>,
+        base: Option<GitRef>,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
@@ -54,13 +54,13 @@ enum Command {
     Replay {
         /// Old top of the root range before rewriting.
         #[arg(long, value_name = "REF")]
-        old_tip: String,
+        old_tip: GitRef,
         /// Ref used with --old-tip to compute the old range base via merge-base.
         #[arg(long, value_name = "REF")]
-        old_base: String,
+        old_base: GitRef,
         /// Replacement ref or commit-ish for the old root tip.
         #[arg(long, value_name = "REF")]
-        new_tip: String,
+        new_tip: GitRef,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
@@ -78,10 +78,10 @@ enum Command {
     Sync {
         /// Base branch or ref to sync stacks onto. Defaults to the current default branch.
         #[arg(long, value_name = "REF")]
-        base: Option<String>,
+        base: Option<GitRef>,
         /// Oldest local branch to include. Defaults to the oldest inferred local fork point.
         #[arg(long, value_name = "REF")]
-        oldest_branch: Option<String>,
+        oldest_branch: Option<GitRef>,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
@@ -99,13 +99,13 @@ enum Command {
     Landed {
         /// Old branch tip or commit that landed.
         #[arg(value_name = "OLD-TIP")]
-        old_tip: String,
+        old_tip: GitRef,
         /// Branch or commit containing the landing. Defaults to the default branch.
         #[arg(long, value_name = "REF")]
-        onto: Option<String>,
+        onto: Option<GitRef>,
         /// Explicit old range base for fast-forward or ambiguous landings.
         #[arg(long, value_name = "REF")]
-        old_base: Option<String>,
+        old_base: Option<GitRef>,
         /// Replay strategy for dependent branches.
         #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
@@ -178,9 +178,9 @@ where
             in_place,
             pause_at_checkpoints,
         } => high_level::replay(
-            &old_tip,
-            &old_base,
-            &new_tip,
+            old_tip,
+            old_base,
+            new_tip,
             high_level::RunOptions {
                 strategy,
                 is_dry_run: dry_run,
@@ -214,7 +214,7 @@ where
             in_place,
             pause_at_checkpoints,
         } => high_level::landed(
-            &old_tip,
+            old_tip,
             onto,
             old_base,
             high_level::RunOptions {

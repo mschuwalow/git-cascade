@@ -58,7 +58,13 @@ fn status_output(storage: &Storage) -> Result<String> {
     if state.pending_branches.is_empty() {
         output.push_str("pending: none\n");
     } else {
-        output.push_str(&format!("pending: {}\n", state.pending_branches.join(", ")));
+        let pending = state
+            .pending_branches
+            .iter()
+            .map(|branch| branch.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!("pending: {pending}\n"));
     }
 
     Ok(output)

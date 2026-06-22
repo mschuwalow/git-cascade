@@ -1,6 +1,6 @@
 use super::{Dependency, Node, PLAN_VERSION, Plan, PlanCommit, branches_in_topological_order};
 use crate::git::Git;
-use crate::types::{BranchName, CommitId};
+use crate::model::{BranchName, CommitId};
 use crate::{Error, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -67,8 +67,8 @@ pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<BranchNam
     let mut branch_refs = BTreeMap::new();
 
     for node in &plan.nodes {
-        let tip = node.tip.as_str();
-        let actual = git.local_branch_tip(node.branch.as_str())?;
+        let tip = &node.tip;
+        let actual = git.local_branch_tip(&node.branch)?;
         if !git.is_ancestor(tip, &actual)? {
             return invalid(format!(
                 "branch `{}` rewrote planned commits after plan generation: planned tip `{}` is not reachable from `{actual}`",
@@ -84,7 +84,7 @@ pub fn validate_branch_refs(git: &Git, plan: &Plan) -> Result<BTreeMap<BranchNam
         // first-parent walk, and its last commit is `actual`, so checking the
         // oldest commit suffices.
         if let Some(first) = extra_commits.first()
-            && first.parents.first().map(CommitId::as_str) != Some(tip)
+            && first.parents.first() != Some(tip)
         {
             return invalid(format!(
                 "branch `{}` no longer extends planned tip `{}` by first parent: commit `{}` added after plan generation starts elsewhere",
@@ -176,15 +176,15 @@ fn validate_shape(plan: &Plan) -> Result<()> {
 }
 
 fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
-    let mut commits = HashSet::<&str>::new();
-    commits.insert(plan.source.base.as_str());
-    commits.insert(plan.source.tip.as_str());
+    let mut commits = HashSet::<&CommitId>::new();
+    commits.insert(&plan.source.base);
+    commits.insert(&plan.source.tip);
 
     for node in &plan.nodes {
-        commits.insert(node.tip.as_str());
-        commits.insert(node.base());
+        commits.insert(&node.tip);
+        commits.insert(&node.base);
         for commit in node.commits() {
-            commits.insert(commit.oid.as_str());
+            commits.insert(&commit.oid);
         }
     }
 
@@ -199,8 +199,8 @@ fn validate_git_objects(git: &Git, plan: &Plan) -> Result<()> {
 
 fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
     for node in &plan.nodes {
-        let tip = node.tip.as_str();
-        let base = node.base();
+        let tip = &node.tip;
+        let base = &node.base;
         let actual = first_parent_chain(git, base, tip)?;
         if actual != node.commits() {
             return invalid(format!(
@@ -215,11 +215,7 @@ fn validate_git_ranges(git: &Git, plan: &Plan) -> Result<()> {
 
 /// The first-parent chain of `base..tip`. Commits off the chain are reached
 /// through merge second parents and are never replayed.
-fn first_parent_chain(
-    git: &Git,
-    base: impl AsRef<str>,
-    tip: impl AsRef<str>,
-) -> Result<Vec<PlanCommit>> {
+fn first_parent_chain(git: &Git, base: &CommitId, tip: &CommitId) -> Result<Vec<PlanCommit>> {
     Ok(git
         .rev_list_first_parent_with_parents(base, tip)?
         .into_iter()
@@ -237,9 +233,9 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
 
     let node_by_branch = node_by_branch(plan)?;
     for node in &plan.nodes {
-        let base = node.base();
+        let base = &node.base;
         if node.is_root() {
-            if base == plan.source.base.as_str()
+            if base == &plan.source.base
                 || !git.is_ancestor(&plan.source.base, base)?
                 || !git.is_ancestor(base, &plan.source.tip)?
             {
@@ -252,7 +248,7 @@ fn validate_parent_reachability(git: &Git, plan: &Plan) -> Result<()> {
         }
 
         let parent = node_by_branch[node.parent().expect("dependent node has a parent")];
-        let parent_tip = parent.tip.as_str();
+        let parent_tip = &parent.tip;
         if !git.is_ancestor(base, parent_tip)? {
             return invalid(format!(
                 "base `{}` for branch `{}` is not reachable from parent `{}` tip `{}`",
@@ -274,9 +270,9 @@ fn validate_default_fork_point_mappability(
         }
         let parent_branch = node.parent().expect("dependent node has a parent");
         let parent = node_by_branch[parent_branch];
-        let base = node.base();
+        let base = &node.base;
         let parent_base = parent.base();
-        if base != parent_base && !parent.contains_commit(base) {
+        if base.as_str() != parent_base && !parent.contains_commit(base) {
             return invalid(format!(
                 "base `{}` for branch `{}` cannot be mapped through parent `{}`",
                 base, node.branch, parent.branch

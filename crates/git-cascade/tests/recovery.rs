@@ -100,7 +100,7 @@ fn abort_in_place_conflict_restores_original_checkout() {
         WorktreeState::InPlace {
             restore: RestoreState::Branch { name, .. },
             ..
-        } if name == "main"
+        } if name.as_str() == "main"
     ));
     assert_eq!(std::path::Path::new(state.worktree.path()), repo.path());
     assert_eq!(repo.git_output(["branch", "--show-current"]).trim(), "");
@@ -283,7 +283,7 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
     assert!(matches!(state.phase, Phase::Paused { .. }));
     assert_eq!(state.replay_mode, ReplayMode::PauseAtCheckpoints);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -430,7 +430,7 @@ fn pause_at_checkpoints_pauses_unchanged_branches_without_rewriting_if_unchanged
 
     let state = read_state(&repo);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -478,7 +478,7 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
         paused_state(&state),
         PausedState::ChildBase { .. }
     ));
-    assert_eq!(state.pending_branches, vec!["pr-2", "pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -493,7 +493,7 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
         paused_state(&state),
         PausedState::BranchEnd { .. }
     ));
-    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
 
     repo.cascade()
         .arg("continue")
@@ -721,7 +721,7 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
     let first_pause = paused_state(&state);
     assert_eq!(first_pause.branch(), "pr-2");
     assert!(matches!(first_pause, PausedState::ChildBase { .. }));
-    assert_eq!(state.pending_branches, vec!["pr-2", "pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -751,7 +751,7 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
         paused_state(&state),
         PausedState::BranchEnd { .. }
     ));
-    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
     std::fs::write(worktree.join("tip-fix.txt"), "tip fix\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "tip-fix.txt"]);
     repo.git_ok([
@@ -844,7 +844,7 @@ fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
         paused_state(&state),
         PausedState::BranchEnd { .. }
     ));
-    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
 }
 
 #[test]
@@ -1223,6 +1223,14 @@ fn paused_state(state: &ReplayState) -> &PausedState {
         Phase::Paused { paused } => paused,
         phase => panic!("expected paused phase, got {phase:?}"),
     }
+}
+
+fn pending_branch_names(state: &ReplayState) -> Vec<&str> {
+    state
+        .pending_branches
+        .iter()
+        .map(|branch| branch.as_str())
+        .collect()
 }
 
 fn read_state(repo: &TestRepo) -> ReplayState {

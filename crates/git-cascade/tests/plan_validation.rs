@@ -49,7 +49,7 @@ fn validation_rejects_tampered_commit_list() {
     let node = plan
         .nodes
         .iter_mut()
-        .find(|node| node.branch == "pr-3")
+        .find(|node| node.branch.as_str() == "pr-3")
         .unwrap();
     assert_eq!(node.parent(), Some("pr-2"));
     node.commits.push(node.commits[0].clone());
@@ -201,7 +201,7 @@ fn validation_rejects_direct_child_at_anchor_base() {
     let node = plan
         .nodes
         .iter_mut()
-        .find(|node| node.branch == "pr-2")
+        .find(|node| node.branch.as_str() == "pr-2")
         .unwrap();
     assert_eq!(node.parent(), None);
     node.base = plan.source.base.clone();

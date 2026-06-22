@@ -1,22 +1,22 @@
 use crate::git::Git;
-use crate::types::CommitId;
+use crate::model::{CommitId, GitRef};
 use crate::{Error, Result};
 
 pub(super) struct Inference {
-    pub(super) old_base: String,
-    pub(super) new_tip: String,
+    pub(super) old_base: GitRef,
+    pub(super) new_tip: GitRef,
 }
 
 pub(super) fn infer_range(
     git: &Git,
-    old_tip: &str,
-    onto: &str,
-    old_base: Option<String>,
+    old_tip: &GitRef,
+    onto: &GitRef,
+    old_base: Option<GitRef>,
 ) -> Result<Inference> {
     if let Some(old_base) = old_base {
         return Ok(Inference {
             old_base,
-            new_tip: onto.to_owned(),
+            new_tip: onto.clone(),
         });
     }
 
@@ -25,15 +25,15 @@ pub(super) fn infer_range(
 
     if !git.is_ancestor(&old_tip_commit, &onto_commit)? {
         return Ok(Inference {
-            old_base: onto.to_owned(),
-            new_tip: onto.to_owned(),
+            old_base: onto.clone(),
+            new_tip: onto.clone(),
         });
     }
 
     if let Some(landing) = find_landing_merge(git, &old_tip_commit, &onto_commit)? {
         return Ok(Inference {
-            old_base: landing.first_parent,
-            new_tip: landing.commit,
+            old_base: landing.first_parent.into(),
+            new_tip: landing.commit.into(),
         });
     }
 
@@ -43,8 +43,8 @@ pub(super) fn infer_range(
 }
 
 struct LandingMerge {
-    commit: String,
-    first_parent: String,
+    commit: CommitId,
+    first_parent: CommitId,
 }
 
 fn find_landing_merge(
@@ -77,7 +77,7 @@ fn find_landing_merge(
         if matching_parents.len() == 1 {
             return Ok(Some(LandingMerge {
                 commit,
-                first_parent: first_parent.to_string(),
+                first_parent: first_parent.clone(),
             }));
         }
     }

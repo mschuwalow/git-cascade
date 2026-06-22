@@ -6,12 +6,12 @@ mod state_writer;
 
 use crate::git::Git;
 use crate::model::Strategy;
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{
     BranchRef, Plan, PlanCommit, PlanName, branches_in_topological_order, validate_branch_refs,
     validate_merge_parents_for_apply, validate_plan,
 };
 use crate::storage::Storage;
-use crate::types::{BranchName, CommitId};
 use crate::{Error, Result};
 use backend::{DryRunReplayBackend, GitReplayBackend};
 use cleanup::run_deleting_phase;
@@ -27,7 +27,7 @@ use std::fs;
 #[derive(Debug, Clone)]
 pub struct ReplayOptions {
     pub plan_name: PlanName,
-    pub new_tip_input: String,
+    pub new_tip_input: GitRef,
     pub strategy: Strategy,
     pub in_place: bool,
     pub pause_at_checkpoints: bool,
@@ -234,14 +234,9 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
 fn restore_state(git: &Git) -> Result<RestoreState> {
     let head = git.head_oid()?;
     Ok(if let Some(name) = git.current_branch()? {
-        RestoreState::Branch {
-            name,
-            head: head.to_string(),
-        }
+        RestoreState::Branch { name, head }
     } else {
-        RestoreState::Detached {
-            head: head.to_string(),
-        }
+        RestoreState::Detached { head }
     })
 }
 
