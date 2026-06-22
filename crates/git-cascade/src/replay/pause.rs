@@ -12,16 +12,6 @@ pub(super) struct ReplayPauseStrategy {
     mode: ReplayPauseMode,
 }
 
-pub(super) enum BranchEnd {
-    Complete { ref_update: BranchRefUpdate },
-    Pause { prepare_worktree: bool },
-}
-
-pub(super) enum BranchRefUpdate {
-    Skip,
-    Write,
-}
-
 impl ReplayPauseStrategy {
     pub(super) fn new(mode: ReplayPauseMode) -> Self {
         Self { mode }
@@ -47,23 +37,6 @@ impl ReplayPauseStrategy {
         }
     }
 
-    pub(super) fn branch_end(
-        &self,
-        branch_strategy: &ReplayBranchStrategy,
-        commits: &[PlanCommit],
-        unchanged_tip: bool,
-    ) -> BranchEnd {
-        match self.mode {
-            ReplayPauseMode::Never => complete_branch_end(unchanged_tip),
-            ReplayPauseMode::EveryCommit => {
-                branch_strategy.every_commit_branch_end(commits, unchanged_tip)
-            }
-            ReplayPauseMode::Checkpoints => BranchEnd::Pause {
-                prepare_worktree: unchanged_tip,
-            },
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) fn finish_branch<B, W>(
         &self,
@@ -85,137 +58,123 @@ impl ReplayPauseStrategy {
         B: ReplayBackend,
         W: StateWriter,
     {
-        let branch_end = self.branch_end(branch_strategy, commits, rewritten_tip == &node.tip);
-        branch_end.apply(
-            backend,
-            state_writer,
-            state,
-            plan,
-            mappings,
-            temp_tips,
-            branch,
-            node,
-            commits,
-            branch_index,
-            total_branches,
-            rewritten_tip,
-        )
-    }
-}
+        let pause_at_branch_end = match self.mode {
+            ReplayPauseMode::Never => false,
+            ReplayPauseMode::EveryCommit => {
+                branch_strategy.pauses_at_branch_end_after_every_commit(commits)
+            }
+            ReplayPauseMode::Checkpoints => true,
+        };
 
-pub(super) fn complete_branch_end(unchanged_tip: bool) -> BranchEnd {
-    BranchEnd::Complete {
-        ref_update: if unchanged_tip {
-            BranchRefUpdate::Skip
+        if pause_at_branch_end {
+            pause_branch_end(
+                backend,
+                state_writer,
+                state,
+                plan,
+                mappings,
+                temp_tips,
+                branch,
+                node,
+                commits,
+                branch_index,
+                total_branches,
+                rewritten_tip,
+            )
         } else {
-            BranchRefUpdate::Write
+            complete_branch(
+                backend,
+                state_writer,
+                state,
+                plan,
+                mappings,
+                temp_tips,
+                branch,
+                node,
+                branch_index,
+                total_branches,
+                rewritten_tip,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn complete_branch<B, W>(
+    backend: &mut B,
+    state_writer: &mut W,
+    state: &mut ReplayState,
+    plan: &Plan,
+    mappings: &BTreeMap<CommitId, CommitId>,
+    temp_tips: &mut HashMap<BranchName, CommitId>,
+    branch: &BranchName,
+    node: &Node,
+    branch_index: usize,
+    total_branches: usize,
+    rewritten_tip: &CommitId,
+) -> Result<bool>
+where
+    B: ReplayBackend,
+    W: StateWriter,
+{
+    let (temp_ref, branch_tip) = if rewritten_tip == &node.tip {
+        backend.skip_replay(plan, node, branch_index, total_branches, rewritten_tip)?
+    } else {
+        backend.write_temp_ref(plan, node, branch_index, total_branches, rewritten_tip)?
+    };
+    record_temp_ref(state, temp_tips, &node.branch, temp_ref, branch_tip);
+    remove_pending_branch(state, branch)?;
+    state.phase = Phase::Replay { current: None };
+    write_state(state_writer, state, mappings)?;
+    Ok(false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pause_branch_end<B, W>(
+    backend: &mut B,
+    state_writer: &mut W,
+    state: &mut ReplayState,
+    plan: &Plan,
+    mappings: &BTreeMap<CommitId, CommitId>,
+    temp_tips: &mut HashMap<BranchName, CommitId>,
+    branch: &BranchName,
+    node: &Node,
+    commits: &[PlanCommit],
+    branch_index: usize,
+    total_branches: usize,
+    rewritten_tip: &CommitId,
+) -> Result<bool>
+where
+    B: ReplayBackend,
+    W: StateWriter,
+{
+    if rewritten_tip == &node.tip {
+        backend.prepare_branch(state, branch_index, total_branches, node, rewritten_tip)?;
+    }
+    let (temp_ref, branch_tip) =
+        backend.write_temp_ref(plan, node, branch_index, total_branches, rewritten_tip)?;
+    record_temp_ref(
+        state,
+        temp_tips,
+        &node.branch,
+        temp_ref.clone(),
+        branch_tip.clone(),
+    );
+    remove_pending_branch(state, branch)?;
+    state.phase = Phase::Paused {
+        paused: PausedState::BranchEnd {
+            branch: node.branch.clone(),
+            rewritten_tip: branch_tip,
+            temp_ref,
+            mapped_commit: commits
+                .last()
+                .map(|commit| commit.oid.clone())
+                .unwrap_or_else(|| node.base.clone()),
+            worktree: state.worktree.path().to_owned(),
         },
-    }
-}
-
-impl BranchEnd {
-    #[allow(clippy::too_many_arguments)]
-    fn apply<B, W>(
-        self,
-        backend: &mut B,
-        state_writer: &mut W,
-        state: &mut ReplayState,
-        plan: &Plan,
-        mappings: &BTreeMap<CommitId, CommitId>,
-        temp_tips: &mut HashMap<BranchName, CommitId>,
-        branch: &BranchName,
-        node: &Node,
-        commits: &[PlanCommit],
-        branch_index: usize,
-        total_branches: usize,
-        rewritten_tip: &CommitId,
-    ) -> Result<bool>
-    where
-        B: ReplayBackend,
-        W: StateWriter,
-    {
-        match self {
-            Self::Complete { ref_update } => {
-                let (temp_ref, branch_tip) = ref_update.write(
-                    backend,
-                    plan,
-                    node,
-                    branch_index,
-                    total_branches,
-                    rewritten_tip,
-                )?;
-                record_temp_ref(state, temp_tips, &node.branch, temp_ref, branch_tip);
-                remove_pending_branch(state, branch)?;
-                state.phase = Phase::Replay { current: None };
-                write_state(state_writer, state, mappings)?;
-                Ok(false)
-            }
-            Self::Pause { prepare_worktree } => {
-                if prepare_worktree {
-                    backend.prepare_branch(
-                        state,
-                        branch_index,
-                        total_branches,
-                        node,
-                        rewritten_tip,
-                    )?;
-                }
-                let (temp_ref, branch_tip) = backend.write_temp_ref(
-                    plan,
-                    node,
-                    branch_index,
-                    total_branches,
-                    rewritten_tip,
-                )?;
-                record_temp_ref(
-                    state,
-                    temp_tips,
-                    &node.branch,
-                    temp_ref.clone(),
-                    branch_tip.clone(),
-                );
-                remove_pending_branch(state, branch)?;
-                state.phase = Phase::Paused {
-                    paused: PausedState::BranchEnd {
-                        branch: node.branch.clone(),
-                        rewritten_tip: branch_tip,
-                        temp_ref,
-                        mapped_commit: commits
-                            .last()
-                            .map(|commit| commit.oid.clone())
-                            .unwrap_or_else(|| node.base.clone()),
-                        worktree: state.worktree.path().to_owned(),
-                    },
-                };
-                write_state(state_writer, state, mappings)?;
-                Ok(true)
-            }
-        }
-    }
-}
-
-impl BranchRefUpdate {
-    fn write<B>(
-        self,
-        backend: &mut B,
-        plan: &Plan,
-        node: &Node,
-        branch_index: usize,
-        total_branches: usize,
-        rewritten_tip: &CommitId,
-    ) -> Result<(GitRef, CommitId)>
-    where
-        B: ReplayBackend,
-    {
-        match self {
-            Self::Skip => {
-                backend.skip_replay(plan, node, branch_index, total_branches, rewritten_tip)
-            }
-            Self::Write => {
-                backend.write_temp_ref(plan, node, branch_index, total_branches, rewritten_tip)
-            }
-        }
-    }
+    };
+    write_state(state_writer, state, mappings)?;
+    Ok(true)
 }
 
 fn record_temp_ref(

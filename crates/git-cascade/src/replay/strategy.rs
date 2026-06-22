@@ -1,5 +1,4 @@
 use super::backend::ReplayBackend;
-use super::pause::{BranchEnd, complete_branch_end};
 use super::state::ReplayState;
 use crate::model::Strategy;
 use crate::model::{BranchName, CommitId};
@@ -9,11 +8,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub(super) struct ReplayBranchStrategy {
     strategy: Strategy,
-}
-
-enum BranchTipRewrite {
-    Keep,
-    Squash { first_commit: CommitId },
 }
 
 pub(super) fn dry_run_temp_ref_tracks_rewritten_tip(strategy: Strategy) -> bool {
@@ -47,35 +41,12 @@ impl ReplayBranchStrategy {
         }
     }
 
-    pub(super) fn every_commit_branch_end(
-        &self,
-        commits: &[PlanCommit],
-        unchanged_tip: bool,
-    ) -> BranchEnd {
+    pub(super) fn pauses_at_branch_end_after_every_commit(&self, commits: &[PlanCommit]) -> bool {
         match self.strategy {
-            Strategy::Squash if !commits.is_empty() => BranchEnd::Pause {
-                prepare_worktree: unchanged_tip,
-            },
+            Strategy::Squash => !commits.is_empty(),
             Strategy::PreserveForkPoints
             | Strategy::MoveToPlannedTips
-            | Strategy::MoveToCurrentTips
-            | Strategy::Squash => complete_branch_end(unchanged_tip),
-        }
-    }
-
-    fn branch_tip_rewrite(&self, commits: &[PlanCommit]) -> BranchTipRewrite {
-        match self.strategy {
-            Strategy::Squash if commits.len() > 1 => BranchTipRewrite::Squash {
-                first_commit: commits
-                    .first()
-                    .expect("non-empty commits has a first commit")
-                    .oid
-                    .clone(),
-            },
-            Strategy::PreserveForkPoints
-            | Strategy::MoveToPlannedTips
-            | Strategy::MoveToCurrentTips
-            | Strategy::Squash => BranchTipRewrite::Keep,
+            | Strategy::MoveToCurrentTips => false,
         }
     }
 
@@ -95,17 +66,32 @@ impl ReplayBranchStrategy {
     where
         B: ReplayBackend,
     {
-        self.branch_tip_rewrite(commits).apply(
-            backend,
-            state,
-            branch_replay_base,
-            total_branches,
-            mappings,
-            node,
-            commits,
-            branch_index,
-            rewritten_tip,
-        )
+        match self.strategy {
+            Strategy::Squash if commits.len() > 1 => {
+                let first_commit = commits
+                    .first()
+                    .expect("non-empty commits has a first commit")
+                    .oid
+                    .clone();
+                let rewritten_tip = backend.squash_branch(
+                    state,
+                    node,
+                    branch_index,
+                    total_branches,
+                    branch_replay_base,
+                    &first_commit,
+                    &rewritten_tip,
+                )?;
+                if let Some(last_commit) = commits.last() {
+                    mappings.insert(last_commit.oid.clone(), rewritten_tip.clone());
+                }
+                Ok(rewritten_tip)
+            }
+            Strategy::PreserveForkPoints
+            | Strategy::MoveToPlannedTips
+            | Strategy::MoveToCurrentTips
+            | Strategy::Squash => Ok(rewritten_tip),
+        }
     }
 
     pub(super) fn actual_child_base(
@@ -140,44 +126,6 @@ impl ReplayBranchStrategy {
             Strategy::MoveToPlannedTips => planned_parent_tip(parent, mappings)
                 .map(|base| Some(child_replay_base_requirement(child, base))),
             Strategy::MoveToCurrentTips | Strategy::Squash => Ok(None),
-        }
-    }
-}
-
-impl BranchTipRewrite {
-    #[allow(clippy::too_many_arguments)]
-    fn apply<B>(
-        self,
-        backend: &mut B,
-        state: &ReplayState,
-        branch_replay_base: &CommitId,
-        total_branches: usize,
-        mappings: &mut BTreeMap<CommitId, CommitId>,
-        node: &Node,
-        commits: &[PlanCommit],
-        branch_index: usize,
-        rewritten_tip: CommitId,
-    ) -> Result<CommitId>
-    where
-        B: ReplayBackend,
-    {
-        match self {
-            Self::Keep => Ok(rewritten_tip),
-            Self::Squash { first_commit } => {
-                let rewritten_tip = backend.squash_branch(
-                    state,
-                    node,
-                    branch_index,
-                    total_branches,
-                    branch_replay_base,
-                    &first_commit,
-                    &rewritten_tip,
-                )?;
-                if let Some(last_commit) = commits.last() {
-                    mappings.insert(last_commit.oid.clone(), rewritten_tip.clone());
-                }
-                Ok(rewritten_tip)
-            }
         }
     }
 }
