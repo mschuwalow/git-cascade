@@ -2,6 +2,7 @@
   lib,
   rustPlatform,
   installShellFiles,
+  makeWrapper,
   git,
 }:
 
@@ -15,13 +16,18 @@ rustPlatform.buildRustPackage {
   src = lib.cleanSource ../.;
   cargoLock.lockFile = ../Cargo.lock;
 
-  nativeBuildInputs = [ installShellFiles ];
+  nativeBuildInputs = [
+    installShellFiles
+    makeWrapper
+  ];
+
   nativeCheckInputs = [ git ];
 
   cargoBuildFlags = [
     "-p"
     "git-cascade"
   ];
+
   cargoTestFlags = [
     "-p"
     "git-cascade"
@@ -34,6 +40,9 @@ rustPlatform.buildRustPackage {
       --bash <($out/bin/git-cascade completions bash) \
       --fish <($out/bin/git-cascade completions fish) \
       --zsh <($out/bin/git-cascade completions zsh)
+
+    wrapProgram $out/bin/git-cascade \
+      --prefix PATH : ${lib.makeBinPath [ git ]}
   '';
 
   meta = {
