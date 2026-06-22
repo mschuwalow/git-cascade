@@ -19,7 +19,7 @@ pub use state::{
     CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
-use state_writer::{LockedStateWriter, NoopStateWriter};
+use state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -179,18 +179,6 @@ pub fn continue_replay(git: &Git, storage: &Storage) -> Result<ReplayOutcome> {
     if matches!(state.phase, Phase::Deleting { .. }) {
         run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
         Ok(ReplayOutcome::Complete)
-    } else if matches!(state.phase, Phase::RestoreCheckout { .. }) {
-        let plan_name = state.plan_name.clone();
-        let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
-        let mut context = ReplayContext::new(&plan, &mut state_writer, &mut backend, state)?;
-        match context.run()? {
-            ReplayOutcome::Complete => {
-                let mut state = context.into_state();
-                run_deleting_phase(git, storage, &mut state_writer, &mut state)?;
-                Ok(ReplayOutcome::Complete)
-            }
-            outcome => Ok(outcome),
-        }
     } else {
         let plan_name = state.plan_name.clone();
         let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
@@ -221,18 +209,13 @@ pub fn abort(git: &Git, storage: &Storage) -> Result<()> {
     };
     let mut state = state_file.read_state()?;
 
-    if !matches!(
-        state.phase,
-        Phase::Deleting { .. } | Phase::RestoreCheckout { .. }
-    ) {
-        state.phase = Phase::RestoreCheckout { delete_plan: false };
-        state_file.write_state(&mut state)?;
-    }
-
     let mut state_writer = LockedStateWriter::new(state_file);
     if matches!(state.phase, Phase::Deleting { .. }) {
         return run_deleting_phase(git, storage, &mut state_writer, &mut state);
     }
+
+    state.phase = Phase::RestoreCheckout { delete_plan: false };
+    state_writer.write_state(&mut state)?;
 
     let plan_name = state.plan_name.clone();
     let plan = Plan::from_yaml(&storage.read_plan(&plan_name)?)?;
