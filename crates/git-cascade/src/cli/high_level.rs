@@ -273,7 +273,9 @@ fn excluded_target_branches(git: &Git, target: &GitRef) -> Result<Vec<BranchName
     if let Some(refname) = git.symbolic_full_name(target)? {
         if let Some(branch) = refname.strip_prefix("refs/heads/") {
             branches.push(branch.into());
-        } else if let Some(branch) = refname.strip_prefix("refs/remotes/origin/") {
+        } else if let Some(remote_ref) = refname.strip_prefix("refs/remotes/")
+            && let Some((_, branch)) = remote_ref.split_once('/')
+        {
             branches.push(branch.into());
         }
     } else if let Some(branch) = target.as_str().strip_prefix("origin/") {

@@ -225,7 +225,7 @@ impl Git {
     pub fn local_branches(&self) -> Result<Vec<LocalBranch>> {
         let output = self.output([
             "for-each-ref",
-            "--format=%(refname:short)%09%(objectname)",
+            "--format=%(refname)%09%(objectname)",
             "refs/heads",
         ])?;
 
@@ -234,8 +234,11 @@ impl Git {
             let Some((name, tip)) = line.split_once('\t') else {
                 continue;
             };
+            let Some(name) = name.strip_prefix("refs/heads/") else {
+                continue;
+            };
             branches.push(LocalBranch {
-                name: name.into(),
+                name: BranchName::new(name),
                 tip: tip.into(),
             });
         }
@@ -299,10 +302,9 @@ impl Git {
 
     pub fn current_branch(&self) -> Result<Option<BranchName>> {
         Ok(self
-            .output_allowing_status(["symbolic-ref", "--quiet", "--short", "HEAD"], &[1])?
+            .output_allowing_status(["symbolic-ref", "--quiet", "HEAD"], &[1])?
             .map(|output| output.trim().to_owned())
-            .filter(|output| !output.is_empty())
-            .map(BranchName::from))
+            .and_then(|output| output.strip_prefix("refs/heads/").map(BranchName::new)))
     }
 
     pub fn ensure_clean_worktree(&self) -> Result<()> {

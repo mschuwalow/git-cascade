@@ -41,14 +41,6 @@ macro_rules! string_newtype {
             }
         }
 
-        impl FromStr for $name {
-            type Err = Infallible;
-
-            fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-                Ok(Self::new(value))
-            }
-        }
-
         impl std::fmt::Display for $name {
             fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 formatter.write_str(self.as_str())
@@ -73,6 +65,51 @@ impl From<CommitId> for GitRef {
 impl From<BranchName> for GitRef {
     fn from(branch: BranchName) -> Self {
         Self(branch.0)
+    }
+}
+
+impl FromStr for BranchName {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        if value.is_empty() {
+            return Err("branch name must not be empty".to_owned());
+        }
+        if value.starts_with("refs/") {
+            return Err("branch name must not include refs/ prefix".to_owned());
+        }
+        if value.starts_with('-') {
+            return Err("branch name must not start with '-'".to_owned());
+        }
+        if value.ends_with('/') || value.ends_with(".lock") {
+            return Err("branch name has invalid suffix".to_owned());
+        }
+        if value.contains("..") || value.contains("@{") {
+            return Err("branch name contains invalid sequence".to_owned());
+        }
+        if value
+            .chars()
+            .any(|ch| ch.is_control() || " ~^:?*[\\".contains(ch))
+        {
+            return Err("branch name contains invalid character".to_owned());
+        }
+        Ok(Self::new(value))
+    }
+}
+
+impl FromStr for CommitId {
+    type Err = Infallible;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self::new(value))
+    }
+}
+
+impl FromStr for GitRef {
+    type Err = Infallible;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self::new(value))
     }
 }
 
@@ -101,5 +138,35 @@ impl Strategy {
 impl std::fmt::Display for Strategy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BranchName;
+    use std::str::FromStr;
+
+    #[test]
+    fn branch_name_rejects_refs_and_revision_syntax() {
+        for invalid in [
+            "",
+            "refs/heads/topic",
+            "origin/main^",
+            "topic..main",
+            "bad lock.lock",
+        ] {
+            assert!(
+                BranchName::from_str(invalid).is_err(),
+                "accepted `{invalid}`"
+            );
+        }
+    }
+
+    #[test]
+    fn branch_name_accepts_path_components() {
+        assert_eq!(
+            BranchName::from_str("feature/topic").unwrap().as_str(),
+            "feature/topic"
+        );
     }
 }

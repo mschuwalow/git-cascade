@@ -443,21 +443,29 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
     fn resume_requirements(&self, paused: &PausedState) -> Result<Vec<RequiredAncestor>> {
         let node = self.node(paused.branch())?;
         match paused {
-            PausedState::ChildBase { rewritten_tip, .. } => Ok(vec![RequiredAncestor {
-                commit: rewritten_tip.clone(),
-                reason: format!("rewritten child-base checkpoint for `{}`", node.branch),
-            }]),
+            PausedState::ChildBase { rewritten_tip, .. } => {
+                let mut required = BTreeMap::<CommitId, String>::new();
+                required.insert(
+                    self.branch_replay_base(node)?.clone(),
+                    format!("replay base for branch `{}`", node.branch),
+                );
+                required.insert(
+                    rewritten_tip.clone(),
+                    format!("rewritten child-base checkpoint for `{}`", node.branch),
+                );
+                Ok(required
+                    .into_iter()
+                    .map(|(commit, reason)| RequiredAncestor { commit, reason })
+                    .collect())
+            }
             PausedState::BranchEnd { .. } => self.branch_end_resume_requirements(node),
         }
     }
 
     fn branch_end_resume_requirements(&self, node: &Node) -> Result<Vec<RequiredAncestor>> {
         let mut required = BTreeMap::<CommitId, String>::new();
-        let branch_base = self.selected_bases.get(&node.branch).ok_or_else(|| {
-            Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
-        })?;
         required.insert(
-            branch_base.clone(),
+            self.branch_replay_base(node)?.clone(),
             format!("replay base for branch `{}`", node.branch),
         );
 
@@ -477,6 +485,12 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
             .into_iter()
             .map(|(commit, reason)| RequiredAncestor { commit, reason })
             .collect())
+    }
+
+    fn branch_replay_base(&self, node: &Node) -> Result<&CommitId> {
+        self.selected_bases.get(&node.branch).ok_or_else(|| {
+            Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
+        })
     }
 
     fn required_child_replay_base(

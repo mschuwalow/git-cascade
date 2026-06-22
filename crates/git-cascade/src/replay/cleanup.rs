@@ -61,7 +61,7 @@ fn remove_temporary_worktree(
         return Ok(());
     }
 
-    git.worktree_remove_force(worktree)?;
+    let _ = git.worktree_remove_force(worktree);
     if worktree.exists() {
         fs::remove_dir_all(worktree).map_err(|source| Error::IoWithPath {
             path: worktree.to_owned(),

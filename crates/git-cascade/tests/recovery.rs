@@ -334,6 +334,43 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
 }
 
 #[test]
+fn branch_end_pause_rejects_rewrite_that_drops_branch_replay_base() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-current-tips",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "reset", "--hard", "main"]);
+
+    repo.cascade().arg("continue").assert().failure().stderr(
+        predicate::str::contains("does not preserve")
+            .and(predicate::str::contains("replay base for branch `pr-2`")),
+    );
+
+    let state = read_state(&repo);
+    assert!(matches!(
+        paused_state(&state),
+        PausedState::BranchEnd { .. }
+    ));
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+}
+
+#[test]
 fn branch_end_pause_allows_squashing_before_replaying_child_to_current_tip() {
     let repo = paused_multi_commit_branch_stack();
     let old_pr2 = repo.rev_parse("pr-2");
