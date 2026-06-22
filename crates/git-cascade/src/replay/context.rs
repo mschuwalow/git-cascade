@@ -156,6 +156,8 @@ where
         let was_resuming = replay_current.is_some();
         let child_base_pause_commits = if self.state.replay_mode.pauses_at_checkpoints() {
             child_base_pause_commits(self.plan, &node, self.state.strategy, &commits)
+        } else if self.state.replay_mode.pauses_at_every_commit() {
+            every_commit_pause_commits(self.state.strategy, &commits)
         } else {
             BTreeSet::new()
         };
@@ -318,7 +320,7 @@ where
         commits: &[PlanCommit],
         branch_index: usize,
     ) -> Result<bool> {
-        let rewritten_tip = if let Some(commit) = commits.last() {
+        let mut rewritten_tip = if let Some(commit) = commits.last() {
             self.mapped_commit(&commit.oid)?.clone()
         } else {
             self.selected_bases
@@ -329,8 +331,28 @@ where
                 })?
         };
 
+        if self.state.strategy == Strategy::Squash
+            && commits.len() > 1
+            && let Some(first_commit) = commits.first()
+        {
+            let base = self.branch_replay_base(node)?.clone();
+            rewritten_tip = self.backend.squash_branch(
+                &self.state,
+                node,
+                branch_index,
+                self.total_branches(),
+                &base,
+                &first_commit.oid,
+                &rewritten_tip,
+            )?;
+            if let Some(last_commit) = commits.last() {
+                self.mappings
+                    .insert(last_commit.oid.clone(), rewritten_tip.clone());
+            }
+        }
+
         let unchanged_tip = rewritten_tip == node.tip;
-        let pauses = self.state.replay_mode.pauses_at_checkpoints();
+        let pauses = self.pauses_at_branch_end(&commits);
 
         if unchanged_tip && pauses {
             self.backend.prepare_branch(
@@ -499,7 +521,7 @@ where
         child: &Node,
     ) -> Result<Option<(CommitId, String)>> {
         let base = match self.state.strategy {
-            Strategy::MoveToCurrentTips => return Ok(None),
+            Strategy::MoveToCurrentTips | Strategy::Squash => return Ok(None),
             Strategy::MoveToPlannedTips => self.mappings.get(&parent.tip).ok_or_else(|| {
                 Error::InvalidPlan(format!(
                     "parent `{}` has no rewritten planned tip",
@@ -586,7 +608,10 @@ where
             });
         }
 
-        if self.state.strategy == Strategy::MoveToCurrentTips {
+        if matches!(
+            self.state.strategy,
+            Strategy::MoveToCurrentTips | Strategy::Squash
+        ) {
             return self.temp_tips.get(&parent.branch).cloned().ok_or_else(|| {
                 Error::InvalidPlan(format!("parent `{}` has no rewritten tip", parent.branch))
             });
@@ -658,6 +683,13 @@ where
     fn can_keep_existing_commit(&self, commit: &PlanCommit, last_rewritten: &CommitId) -> bool {
         commit.parents.first() == Some(last_rewritten)
     }
+
+    fn pauses_at_branch_end(&self, commits: &[PlanCommit]) -> bool {
+        self.state.replay_mode.pauses_at_checkpoints()
+            || (self.state.replay_mode.pauses_at_every_commit()
+                && self.state.strategy == Strategy::Squash
+                && !commits.is_empty())
+    }
 }
 
 fn replay_commits_from_extra(
@@ -693,7 +725,7 @@ fn child_base_pause_commits(
         .map(|commit| commit.oid.as_str())
         .collect::<BTreeSet<_>>();
     match strategy {
-        Strategy::MoveToCurrentTips => BTreeSet::new(),
+        Strategy::MoveToCurrentTips | Strategy::Squash => BTreeSet::new(),
         Strategy::MoveToPlannedTips => {
             if node.tip != last_commit.oid && commit_oids.contains(node.tip.as_str()) {
                 BTreeSet::from([node.tip.clone()])
@@ -712,6 +744,19 @@ fn child_base_pause_commits(
             .map(CommitId::new)
             .collect(),
     }
+}
+
+fn every_commit_pause_commits(strategy: Strategy, commits: &[PlanCommit]) -> BTreeSet<CommitId> {
+    let pause_count = if strategy == Strategy::Squash {
+        commits.len().saturating_sub(1)
+    } else {
+        commits.len()
+    };
+    commits
+        .iter()
+        .take(pause_count)
+        .map(|commit| commit.oid.clone())
+        .collect()
 }
 
 fn selected_bases_from_mappings(

@@ -4,7 +4,7 @@ use crate::git::Git;
 use crate::model::{GitRef, Strategy};
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::replay::state::read_state;
-use crate::replay::{ReplayOptions, dry_run, execute};
+use crate::replay::{ReplayMode, ReplayOptions, dry_run, execute};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -42,9 +42,9 @@ pub(super) enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
-        #[arg(long)]
-        pause_at_checkpoints: bool,
+        /// Pause mode. Bare --pause-at-checkpoints means checkpoints.
+        #[arg(long, value_enum, value_name = "MODE", default_value_t = ReplayMode::Never, default_missing_value = "checkpoints", num_args = 0..=1, require_equals = true)]
+        pause_at_checkpoints: ReplayMode,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -116,7 +116,7 @@ fn apply(
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
-    pause_at_checkpoints: bool,
+    replay_mode: ReplayMode,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
@@ -126,7 +126,7 @@ fn apply(
         new_tip_input: new_tip,
         strategy,
         in_place,
-        pause_at_checkpoints,
+        replay_mode,
     };
 
     if is_dry_run {

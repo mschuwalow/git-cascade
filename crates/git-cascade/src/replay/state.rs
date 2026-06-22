@@ -3,6 +3,7 @@ use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
 use crate::{Error, Result};
+use clap::ValueEnum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -63,24 +64,33 @@ impl std::fmt::Display for Phase {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
 pub enum ReplayMode {
     #[default]
-    RunToCompletion,
-    PauseAtCheckpoints,
+    #[serde(alias = "run-to-completion")]
+    Never,
+    EveryCommit,
+    #[serde(alias = "pause-at-checkpoints")]
+    Checkpoints,
 }
 
 impl ReplayMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::RunToCompletion => "run-to-completion",
-            Self::PauseAtCheckpoints => "pause-at-checkpoints",
+            Self::Never => "never",
+            Self::EveryCommit => "every-commit",
+            Self::Checkpoints => "checkpoints",
         }
     }
 
     pub fn pauses_at_checkpoints(self) -> bool {
-        self == Self::PauseAtCheckpoints
+        self == Self::Checkpoints
+    }
+
+    pub fn pauses_at_every_commit(self) -> bool {
+        self == Self::EveryCommit
     }
 }
 

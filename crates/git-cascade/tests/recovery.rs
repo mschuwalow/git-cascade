@@ -281,7 +281,7 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
-    assert_eq!(state.replay_mode, ReplayMode::PauseAtCheckpoints);
+    assert_eq!(state.replay_mode, ReplayMode::Checkpoints);
     assert_eq!(paused_state(&state).branch(), "pr-2");
     assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
@@ -330,6 +330,53 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
     assert_eq!(repo.show("pr-3:pr3.txt"), "c\n");
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn pause_every_commit_stops_after_each_replayed_commit() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints=every-commit",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at child base"))
+        .stderr(predicate::str::contains("every-commit"));
+    let state = read_state(&repo);
+    assert_eq!(state.replay_mode, ReplayMode::EveryCommit);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+    match paused_state(&state) {
+        PausedState::ChildBase { branch, .. } => assert_eq!(branch.as_str(), "pr-2"),
+        paused => panic!("expected commit pause, got {paused:?}"),
+    }
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at child base"));
+    let state = read_state(&repo);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    match paused_state(&state) {
+        PausedState::ChildBase { branch, .. } => assert_eq!(branch.as_str(), "pr-3"),
+        paused => panic!("expected commit pause, got {paused:?}"),
+    }
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 

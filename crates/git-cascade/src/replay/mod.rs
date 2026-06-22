@@ -30,7 +30,7 @@ pub struct ReplayOptions {
     pub new_tip_input: GitRef,
     pub strategy: Strategy,
     pub in_place: bool,
-    pub pause_at_checkpoints: bool,
+    pub replay_mode: ReplayMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,7 +84,7 @@ pub fn dry_run(
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
         strategy: options.strategy,
-        replay_mode: replay_mode(&options),
+        replay_mode: options.replay_mode,
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -147,7 +147,7 @@ pub fn execute(
         plan_id: &plan.plan_id,
         new_tip: &new_tip,
         strategy: options.strategy,
-        replay_mode: replay_mode(&options),
+        replay_mode: options.replay_mode,
         pending_branches: ordered,
         branch_tips,
         extra_commits,
@@ -300,14 +300,6 @@ fn restore_state(git: &Git) -> Result<RestoreState> {
     } else {
         RestoreState::Detached { head }
     })
-}
-
-fn replay_mode(options: &ReplayOptions) -> ReplayMode {
-    if options.pause_at_checkpoints {
-        ReplayMode::PauseAtCheckpoints
-    } else {
-        ReplayMode::RunToCompletion
-    }
 }
 
 fn ensure_target_branches_not_checked_out(git: &Git, branches: &[BranchName]) -> Result<()> {

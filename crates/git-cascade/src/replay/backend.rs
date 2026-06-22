@@ -1,7 +1,7 @@
 use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
-use crate::model::{BranchName, CommitId, GitRef};
+use crate::model::{BranchName, CommitId, GitRef, Strategy};
 use crate::plan::{Node, Plan};
 use crate::storage::Storage;
 use crate::test_hooks;
@@ -46,6 +46,16 @@ pub(crate) trait ReplayBackend {
         commit_index: usize,
         total_commits: usize,
     ) -> Result<()>;
+    fn squash_branch(
+        &mut self,
+        state: &ReplayState,
+        node: &Node,
+        branch_index: usize,
+        total_branches: usize,
+        base: &CommitId,
+        first_commit: &CommitId,
+        rewritten_tip: &CommitId,
+    ) -> Result<CommitId>;
     fn continue_cherry_pick(
         &mut self,
         state: &ReplayState,
@@ -216,6 +226,43 @@ impl ReplayBackend for GitReplayBackend<'_> {
         Ok(())
     }
 
+    fn squash_branch(
+        &mut self,
+        state: &ReplayState,
+        node: &Node,
+        branch_index: usize,
+        total_branches: usize,
+        base: &CommitId,
+        first_commit: &CommitId,
+        rewritten_tip: &CommitId,
+    ) -> Result<CommitId> {
+        if rewritten_tip == base {
+            eprintln!(
+                "Squashed branch {branch_index}/{total_branches} `{}` has no changes; keeping {}",
+                node.branch,
+                short_oid(base)
+            );
+            return Ok(base.clone());
+        }
+
+        eprintln!(
+            "Squashing branch {branch_index}/{total_branches} `{}` into one commit",
+            node.branch
+        );
+        let worktree = std::path::PathBuf::from(state.worktree.path());
+        let worktree_git = Git::new(&worktree);
+        if worktree_git.head_oid()? != *rewritten_tip {
+            worktree_git.reset_hard(rewritten_tip)?;
+        }
+        worktree_git.reset_soft(base)?;
+        if !worktree_git.has_staged_changes()? {
+            worktree_git.reset_hard(base)?;
+            return Ok(base.clone());
+        }
+        worktree_git.commit_reusing(first_commit)?;
+        worktree_git.head_oid()
+    }
+
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -359,6 +406,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 pub(crate) struct DryRunReplayBackend {
     output: String,
     temp_tips: HashMap<BranchName, CommitId>,
+    strategy: Strategy,
 }
 
 impl DryRunReplayBackend {
@@ -389,6 +437,7 @@ impl DryRunReplayBackend {
         Ok(Self {
             output,
             temp_tips: HashMap::new(),
+            strategy: state.strategy,
         })
     }
 
@@ -497,6 +546,31 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
+    fn squash_branch(
+        &mut self,
+        state: &ReplayState,
+        node: &Node,
+        _branch_index: usize,
+        _total_branches: usize,
+        base: &CommitId,
+        first_commit: &CommitId,
+        _rewritten_tip: &CommitId,
+    ) -> Result<CommitId> {
+        writeln!(
+            self.output,
+            "git -C {} reset --soft {base}",
+            state.worktree.path()
+        )
+        .unwrap();
+        writeln!(
+            self.output,
+            "git -C {} commit -C {first_commit}",
+            state.worktree.path()
+        )
+        .unwrap();
+        Ok(CommitId::new(format!("<squashed {} tip>", node.branch)))
+    }
+
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -525,11 +599,17 @@ impl ReplayBackend for DryRunReplayBackend {
         node: &Node,
         _branch_index: usize,
         _total_branches: usize,
-        _rewritten_tip: &CommitId,
+        rewritten_tip: &CommitId,
     ) -> Result<(GitRef, CommitId)> {
         let temp_ref = temp_ref(plan, node.branch.as_str());
-        let rewritten_tip = CommitId::new(format!("<rewritten {} tip>", node.branch));
-        let current_tip = CommitId::new(format!("<rewritten {} current tip>", node.branch));
+        let (rewritten_tip, current_tip) = if self.strategy == Strategy::Squash {
+            (rewritten_tip.clone(), rewritten_tip.clone())
+        } else {
+            (
+                CommitId::new(format!("<rewritten {} tip>", node.branch)),
+                CommitId::new(format!("<rewritten {} current tip>", node.branch)),
+            )
+        };
         writeln!(self.output, "git update-ref {temp_ref} HEAD").unwrap();
         self.temp_tips.insert(node.branch.clone(), rewritten_tip);
         Ok((temp_ref, current_tip))
