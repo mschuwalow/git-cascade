@@ -219,43 +219,16 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         child_base_pause_commits: &BTreeSet<String>,
         branch_index: usize,
     ) -> Result<CommitReplay> {
-        let kept_existing = can_keep_existing_commit(commit, last_rewritten);
-        let rewritten_commit = if kept_existing {
-            commit.oid.clone()
-        } else if commit.is_merge() {
-            // The merged history is contained in the new base; flatten.
-            self.backend
-                .flatten_merge(node, &commit.oid, commit_index, total_commits)?;
-            last_rewritten.to_owned()
-        } else {
-            match self.backend.cherry_pick(
-                &self.state,
-                node,
-                &commit.oid,
-                commit_index,
-                total_commits,
-            )? {
-                CherryPickOutcome::Applied(rewritten_commit) => rewritten_commit,
-                CherryPickOutcome::Conflict { message } => {
-                    let current = CurrentState {
-                        branch: node.branch.clone(),
-                        commit: commit.oid.clone(),
-                        worktree: self.state.worktree.path().to_owned(),
-                    };
-                    self.state.phase = Phase::Conflict {
-                        current: current.clone(),
-                        message,
-                    };
-                    self.write_state()?;
-                    return Ok(CommitReplay::Stop);
-                }
-            }
+        let Some(rewritten_commit) =
+            self.rewrite_commit(node, commit, commit_index, total_commits, last_rewritten)?
+        else {
+            return Ok(CommitReplay::Stop);
         };
         self.state
             .mappings
             .insert(commit.oid.clone(), rewritten_commit.clone());
         if child_base_pause_commits.contains(&commit.oid) {
-            if kept_existing {
+            if can_keep_existing_commit(commit, last_rewritten) {
                 self.backend.prepare_branch(
                     &self.state,
                     branch_index,
@@ -268,6 +241,49 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
             return Ok(CommitReplay::Stop);
         }
         Ok(CommitReplay::Continue(rewritten_commit))
+    }
+
+    fn rewrite_commit(
+        &mut self,
+        node: &Node,
+        commit: &PlanCommit,
+        commit_index: usize,
+        total_commits: usize,
+        last_rewritten: &str,
+    ) -> Result<Option<String>> {
+        if can_keep_existing_commit(commit, last_rewritten) {
+            return Ok(Some(commit.oid.clone()));
+        }
+
+        if commit.is_merge() {
+            // The merged history is contained in the new base; flatten.
+            self.backend
+                .flatten_merge(node, &commit.oid, commit_index, total_commits)?;
+            return Ok(Some(last_rewritten.to_owned()));
+        }
+
+        match self.backend.cherry_pick(
+            &self.state,
+            node,
+            &commit.oid,
+            commit_index,
+            total_commits,
+        )? {
+            CherryPickOutcome::Applied(rewritten_commit) => Ok(Some(rewritten_commit)),
+            CherryPickOutcome::Conflict { message } => {
+                let current = CurrentState {
+                    branch: node.branch.clone(),
+                    commit: commit.oid.clone(),
+                    worktree: self.state.worktree.path().to_owned(),
+                };
+                self.state.phase = Phase::Conflict {
+                    current: current.clone(),
+                    message,
+                };
+                self.write_state()?;
+                Ok(None)
+            }
+        }
     }
 
     fn pause_at_child_base(
