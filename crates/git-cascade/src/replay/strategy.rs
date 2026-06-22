@@ -1,0 +1,291 @@
+use super::backend::ReplayBackend;
+use super::pause::{BranchEnd, complete_branch_end};
+use super::state::ReplayState;
+use crate::model::Strategy;
+use crate::model::{BranchName, CommitId};
+use crate::plan::{Node, Plan, PlanCommit};
+use crate::{Error, Result};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+pub(super) struct ReplayBranchStrategy {
+    strategy: Strategy,
+}
+
+enum BranchTipRewrite {
+    Keep,
+    Squash { first_commit: CommitId },
+}
+
+pub(super) fn dry_run_temp_ref_tracks_rewritten_tip(strategy: Strategy) -> bool {
+    matches!(strategy, Strategy::Squash)
+}
+
+impl ReplayBranchStrategy {
+    pub(super) fn new(strategy: Strategy) -> Self {
+        Self { strategy }
+    }
+
+    pub(super) fn checkpoint_pause_commits(
+        &self,
+        plan: &Plan,
+        node: &Node,
+        commits: &[PlanCommit],
+    ) -> BTreeSet<CommitId> {
+        match self.strategy {
+            Strategy::PreserveForkPoints => preserve_fork_point_pause_commits(plan, node, commits),
+            Strategy::MoveToPlannedTips => planned_tip_pause_commits(node, commits),
+            Strategy::MoveToCurrentTips | Strategy::Squash => BTreeSet::new(),
+        }
+    }
+
+    pub(super) fn every_commit_pause_count(&self, commits: &[PlanCommit]) -> usize {
+        match self.strategy {
+            Strategy::Squash => commits.len().saturating_sub(1),
+            Strategy::PreserveForkPoints
+            | Strategy::MoveToPlannedTips
+            | Strategy::MoveToCurrentTips => commits.len(),
+        }
+    }
+
+    pub(super) fn every_commit_branch_end(
+        &self,
+        commits: &[PlanCommit],
+        unchanged_tip: bool,
+    ) -> BranchEnd {
+        match self.strategy {
+            Strategy::Squash if !commits.is_empty() => BranchEnd::Pause {
+                prepare_worktree: unchanged_tip,
+            },
+            Strategy::PreserveForkPoints
+            | Strategy::MoveToPlannedTips
+            | Strategy::MoveToCurrentTips
+            | Strategy::Squash => complete_branch_end(unchanged_tip),
+        }
+    }
+
+    fn branch_tip_rewrite(&self, commits: &[PlanCommit]) -> BranchTipRewrite {
+        match self.strategy {
+            Strategy::Squash if commits.len() > 1 => BranchTipRewrite::Squash {
+                first_commit: commits
+                    .first()
+                    .expect("non-empty commits has a first commit")
+                    .oid
+                    .clone(),
+            },
+            Strategy::PreserveForkPoints
+            | Strategy::MoveToPlannedTips
+            | Strategy::MoveToCurrentTips
+            | Strategy::Squash => BranchTipRewrite::Keep,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn rewrite_branch_tip<B>(
+        &self,
+        backend: &mut B,
+        state: &ReplayState,
+        branch_replay_base: &CommitId,
+        total_branches: usize,
+        mappings: &mut BTreeMap<CommitId, CommitId>,
+        node: &Node,
+        commits: &[PlanCommit],
+        branch_index: usize,
+        rewritten_tip: CommitId,
+    ) -> Result<CommitId>
+    where
+        B: ReplayBackend,
+    {
+        self.branch_tip_rewrite(commits).apply(
+            backend,
+            state,
+            branch_replay_base,
+            total_branches,
+            mappings,
+            node,
+            commits,
+            branch_index,
+            rewritten_tip,
+        )
+    }
+
+    pub(super) fn actual_child_base(
+        &self,
+        parent: &Node,
+        child: &Node,
+        selected_bases: &HashMap<BranchName, CommitId>,
+        mappings: &BTreeMap<CommitId, CommitId>,
+        temp_tips: &HashMap<BranchName, CommitId>,
+    ) -> Result<CommitId> {
+        match self.strategy {
+            Strategy::PreserveForkPoints => {
+                preserve_fork_point_child_base(parent, child, selected_bases, mappings)
+            }
+            Strategy::MoveToPlannedTips => planned_parent_tip(parent, mappings),
+            Strategy::MoveToCurrentTips | Strategy::Squash => current_parent_tip(parent, temp_tips),
+        }
+    }
+
+    pub(super) fn required_child_replay_base(
+        &self,
+        parent: &Node,
+        child: &Node,
+        selected_bases: &HashMap<BranchName, CommitId>,
+        mappings: &BTreeMap<CommitId, CommitId>,
+    ) -> Result<Option<(CommitId, String)>> {
+        match self.strategy {
+            Strategy::PreserveForkPoints => {
+                preserve_fork_point_child_base(parent, child, selected_bases, mappings)
+                    .map(|base| Some(child_replay_base_requirement(child, base)))
+            }
+            Strategy::MoveToPlannedTips => planned_parent_tip(parent, mappings)
+                .map(|base| Some(child_replay_base_requirement(child, base))),
+            Strategy::MoveToCurrentTips | Strategy::Squash => Ok(None),
+        }
+    }
+}
+
+impl BranchTipRewrite {
+    #[allow(clippy::too_many_arguments)]
+    fn apply<B>(
+        self,
+        backend: &mut B,
+        state: &ReplayState,
+        branch_replay_base: &CommitId,
+        total_branches: usize,
+        mappings: &mut BTreeMap<CommitId, CommitId>,
+        node: &Node,
+        commits: &[PlanCommit],
+        branch_index: usize,
+        rewritten_tip: CommitId,
+    ) -> Result<CommitId>
+    where
+        B: ReplayBackend,
+    {
+        match self {
+            Self::Keep => Ok(rewritten_tip),
+            Self::Squash { first_commit } => {
+                let rewritten_tip = backend.squash_branch(
+                    state,
+                    node,
+                    branch_index,
+                    total_branches,
+                    branch_replay_base,
+                    &first_commit,
+                    &rewritten_tip,
+                )?;
+                if let Some(last_commit) = commits.last() {
+                    mappings.insert(last_commit.oid.clone(), rewritten_tip.clone());
+                }
+                Ok(rewritten_tip)
+            }
+        }
+    }
+}
+
+fn preserve_fork_point_pause_commits(
+    plan: &Plan,
+    node: &Node,
+    commits: &[PlanCommit],
+) -> BTreeSet<CommitId> {
+    let Some(last_commit) = commits.last() else {
+        return BTreeSet::new();
+    };
+
+    child_replay_bases(plan, node, commits)
+        .filter(|base| *base != node.base())
+        .filter(|base| *base != last_commit.oid.as_str())
+        .map(CommitId::new)
+        .collect()
+}
+
+fn planned_tip_pause_commits(node: &Node, commits: &[PlanCommit]) -> BTreeSet<CommitId> {
+    let Some(last_commit) = commits.last() else {
+        return BTreeSet::new();
+    };
+    let commit_oids = commits
+        .iter()
+        .map(|commit| commit.oid.as_str())
+        .collect::<BTreeSet<_>>();
+    if node.tip != last_commit.oid && commit_oids.contains(node.tip.as_str()) {
+        BTreeSet::from([node.tip.clone()])
+    } else {
+        BTreeSet::new()
+    }
+}
+
+fn child_replay_bases<'plan>(
+    plan: &'plan Plan,
+    node: &Node,
+    commits: &[PlanCommit],
+) -> impl Iterator<Item = &'plan str> {
+    let Some(last_commit) = commits.last() else {
+        return Vec::new().into_iter();
+    };
+    let has_child = plan
+        .nodes
+        .iter()
+        .any(|child| child.parent() == Some(node.branch.as_str()));
+    if !has_child {
+        return Vec::new().into_iter();
+    }
+
+    let commit_oids = commits
+        .iter()
+        .map(|commit| commit.oid.as_str())
+        .collect::<BTreeSet<_>>();
+    let bases = plan
+        .nodes
+        .iter()
+        .filter(|child| child.parent() == Some(node.branch.as_str()))
+        .map(Node::base)
+        .filter(move |base| *base != last_commit.oid.as_str())
+        .filter(move |base| commit_oids.contains(*base))
+        .collect::<Vec<_>>();
+    bases.into_iter()
+}
+
+fn preserve_fork_point_child_base(
+    parent: &Node,
+    child: &Node,
+    selected_bases: &HashMap<BranchName, CommitId>,
+    mappings: &BTreeMap<CommitId, CommitId>,
+) -> Result<CommitId> {
+    if child.base() == parent.base() {
+        return selected_bases.get(&parent.branch).cloned().ok_or_else(|| {
+            Error::InvalidPlan(format!("parent `{}` has no selected base", parent.branch))
+        });
+    }
+
+    mappings.get(&child.base).cloned().ok_or_else(|| {
+        Error::InvalidPlan(format!(
+            "base `{}` for branch `{}` was not mapped",
+            child.base(),
+            child.branch
+        ))
+    })
+}
+
+fn planned_parent_tip(parent: &Node, mappings: &BTreeMap<CommitId, CommitId>) -> Result<CommitId> {
+    mappings.get(&parent.tip).cloned().ok_or_else(|| {
+        Error::InvalidPlan(format!(
+            "parent `{}` has no rewritten planned tip",
+            parent.branch
+        ))
+    })
+}
+
+fn current_parent_tip(
+    parent: &Node,
+    temp_tips: &HashMap<BranchName, CommitId>,
+) -> Result<CommitId> {
+    temp_tips.get(&parent.branch).cloned().ok_or_else(|| {
+        Error::InvalidPlan(format!("parent `{}` has no rewritten tip", parent.branch))
+    })
+}
+
+fn child_replay_base_requirement(child: &Node, base: CommitId) -> (CommitId, String) {
+    (
+        base,
+        format!("replay base for child branch `{}`", child.branch),
+    )
+}

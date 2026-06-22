@@ -1,8 +1,10 @@
 mod backend;
 mod cleanup;
 mod context;
+mod pause;
 pub mod state;
 mod state_writer;
+mod strategy;
 
 use crate::git::Git;
 use crate::model::Strategy;

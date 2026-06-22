@@ -1,7 +1,8 @@
+use super::strategy::dry_run_temp_ref_tracks_rewritten_tip;
 use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
-use crate::model::{BranchName, CommitId, GitRef, Strategy};
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{Node, Plan};
 use crate::storage::Storage;
 use crate::test_hooks;
@@ -437,7 +438,7 @@ impl DryRunReplayBackend {
         Ok(Self {
             output,
             temp_tips: HashMap::new(),
-            temp_ref_tracks_rewritten_tip: state.strategy == Strategy::Squash,
+            temp_ref_tracks_rewritten_tip: dry_run_temp_ref_tracks_rewritten_tip(state.strategy),
         })
     }
 
