@@ -144,6 +144,36 @@ fn continue_recovers_after_final_update_committed() {
 }
 
 #[test]
+fn abort_after_final_update_committed_finishes_cleanup_without_retaining_plan() {
+    let repo = clean_stack_with_rebased_root();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let hook = write_failing_hook(&repo, "after-final-update-hook.sh");
+
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .env("GIT_CASCADE_TEST_HOOK_AFTER_FINAL_UPDATE", &hook)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "test hook `after-final-update` failed",
+        ));
+
+    assert!(matches!(read_state(&repo).phase, Phase::FinalUpdate));
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+
+    repo.cascade()
+        .arg("abort")
+        .assert()
+        .success()
+        .stdout("completed cascade cleanup\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
 fn continue_finishes_successful_deleting_state() {
     let repo = clean_stack_with_rebased_root();
     let old_pr2 = repo.rev_parse("pr-2");

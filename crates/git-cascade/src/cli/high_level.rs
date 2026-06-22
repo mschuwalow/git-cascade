@@ -1,7 +1,7 @@
 use super::handle_replay_outcome;
 use super::landed as landed_inference;
 use crate::git::Git;
-use crate::model::Strategy;
+use crate::model::{BranchName, GitRef, Strategy};
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
 use crate::replay::{ReplayOptions, dry_run, execute};
 use crate::storage::Storage;
@@ -14,7 +14,11 @@ pub(super) struct RunOptions {
     pub(super) pause_at_checkpoints: bool,
 }
 
-pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOptions) -> Result<()> {
+pub(super) fn restack(
+    branch: Option<BranchName>,
+    base: Option<GitRef>,
+    run: RunOptions,
+) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
     let branch = branch.or(git.current_branch()?).ok_or_else(|| {
@@ -24,8 +28,9 @@ pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOpti
         Some(base) => base,
         None => infer_old_base_from_default_branch(&git, &branch)?,
     };
-    let excluded_branches = excluded_target_branches(&git, &branch)?;
-    let plan_name = generated_plan_name("restack", &branch)?;
+    let branch_ref = GitRef::from(branch.clone());
+    let excluded_branches = excluded_target_branches(&git, &branch_ref)?;
+    let plan_name = generated_plan_name("restack", branch.as_str())?;
 
     generate_and_apply(GeneratedApply {
         git: &git,
@@ -33,52 +38,61 @@ pub(super) fn restack(branch: Option<String>, base: Option<String>, run: RunOpti
         generate: GenerateOptions {
             name: plan_name,
             old_base,
-            old_tip: branch.clone(),
+            old_tip: branch_ref.clone(),
             excluded_branches,
         },
-        new_tip: branch,
+        new_tip: branch_ref,
         run,
         success_message: "restacked dependent branches",
     })
 }
 
-pub(super) fn replay(old_tip: &str, old_base: &str, new_tip: &str, run: RunOptions) -> Result<()> {
+pub(super) fn replay(
+    old_tip: GitRef,
+    old_base: GitRef,
+    new_tip: GitRef,
+    run: RunOptions,
+) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let excluded_branches = excluded_target_branches(&git, new_tip)?;
-    let plan_name = generated_plan_name("replay", old_tip)?;
+    let excluded_branches = excluded_target_branches(&git, &new_tip)?;
+    let plan_name = generated_plan_name("replay", old_tip.as_str())?;
 
     generate_and_apply(GeneratedApply {
         git: &git,
         storage: &storage,
         generate: GenerateOptions {
             name: plan_name,
-            old_base: old_base.to_owned(),
-            old_tip: old_tip.to_owned(),
+            old_base,
+            old_tip,
             excluded_branches,
         },
-        new_tip: new_tip.to_owned(),
+        new_tip,
         run,
         success_message: "replayed dependent branches",
     })
 }
 
 pub(super) fn sync(
-    base: Option<String>,
-    oldest_branch: Option<String>,
+    base: Option<GitRef>,
+    oldest_branch: Option<GitRef>,
     run: RunOptions,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let base = base.or(git.default_branch_ref()?).ok_or_else(|| {
-        Error::InvalidInvocation("sync needs --base <ref> when no default branch exists".to_owned())
-    })?;
+    let base = base
+        .or(git.default_branch_ref()?.map(GitRef::new))
+        .ok_or_else(|| {
+            Error::InvalidInvocation(
+                "sync needs --base <ref> when no default branch exists".to_owned(),
+            )
+        })?;
     let old_base = match oldest_branch {
         Some(oldest_branch) => infer_old_base_from_branch(&git, &base, &oldest_branch)?,
         None => infer_old_base_from_local_fork_points(&git, &base)?,
     };
     let excluded_branches = excluded_target_branches(&git, &base)?;
-    let plan_name = generated_plan_name("sync", &base)?;
+    let plan_name = generated_plan_name("sync", base.as_str())?;
 
     generate_and_apply(GeneratedApply {
         git: &git,
@@ -96,21 +110,23 @@ pub(super) fn sync(
 }
 
 pub(super) fn landed(
-    old_tip: &str,
-    onto: Option<String>,
-    old_base: Option<String>,
+    old_tip: GitRef,
+    onto: Option<GitRef>,
+    old_base: Option<GitRef>,
     run: RunOptions,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
-    let onto = onto.or(git.default_branch_ref()?).ok_or_else(|| {
-        Error::InvalidInvocation(
-            "landed needs --onto <ref> when no default branch exists".to_owned(),
-        )
-    })?;
-    let inference = landed_inference::infer_range(&git, old_tip, &onto, old_base)?;
+    let onto = onto
+        .or(git.default_branch_ref()?.map(GitRef::new))
+        .ok_or_else(|| {
+            Error::InvalidInvocation(
+                "landed needs --onto <ref> when no default branch exists".to_owned(),
+            )
+        })?;
+    let inference = landed_inference::infer_range(&git, &old_tip, &onto, old_base)?;
     let excluded_branches = excluded_target_branches(&git, &onto)?;
-    let plan_name = generated_plan_name("landed", old_tip)?;
+    let plan_name = generated_plan_name("landed", old_tip.as_str())?;
 
     generate_and_apply(GeneratedApply {
         git: &git,
@@ -118,7 +134,7 @@ pub(super) fn landed(
         generate: GenerateOptions {
             name: plan_name,
             old_base: inference.old_base,
-            old_tip: old_tip.to_owned(),
+            old_tip,
             excluded_branches,
         },
         new_tip: inference.new_tip,
@@ -127,7 +143,7 @@ pub(super) fn landed(
     })
 }
 
-fn infer_old_base_from_branch(git: &Git, onto: &str, oldest_branch: &str) -> Result<String> {
+fn infer_old_base_from_branch(git: &Git, onto: &GitRef, oldest_branch: &GitRef) -> Result<GitRef> {
     let onto_tip = git.resolve_commit(onto)?;
     let branch_tip = git.resolve_commit(oldest_branch)?;
     let fork_point = git
@@ -138,20 +154,24 @@ fn infer_old_base_from_branch(git: &Git, onto: &str, oldest_branch: &str) -> Res
             ))
         })?;
 
-    git.commit_parents(&fork_point)?.first().cloned().ok_or_else(|| {
+    git.commit_parents(&fork_point)?.first().cloned().map(GitRef::from).ok_or_else(|| {
         Error::InvalidInvocation(format!(
             "cannot infer old base for sync; oldest fork point `{fork_point}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
         ))
     })
 }
 
-fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String> {
+fn infer_old_base_from_local_fork_points(git: &Git, onto: &GitRef) -> Result<GitRef> {
     let onto_tip = git.resolve_commit(onto)?;
     let excluded_branches = excluded_target_branches(git, onto)?;
-    let mut oldest_fork_point = None::<String>;
+    let mut oldest_fork_point = None;
 
     for branch in git.local_branches()? {
-        if excluded_branches.contains(&branch.name) || git.is_ancestor(&branch.tip, &onto_tip)? {
+        if excluded_branches
+            .iter()
+            .any(|excluded| excluded == &branch.name)
+            || git.is_ancestor(&branch.tip, &onto_tip)?
+        {
             continue;
         }
 
@@ -175,7 +195,7 @@ fn infer_old_base_from_local_fork_points(git: &Git, onto: &str) -> Result<String
     }
 
     let base = oldest_fork_point.unwrap_or_else(|| onto_tip.clone());
-    git.commit_parents(&base)?.first().cloned().ok_or_else(|| {
+    git.commit_parents(&base)?.first().cloned().map(GitRef::from).ok_or_else(|| {
         Error::InvalidInvocation(format!(
             "cannot infer old base for sync; oldest fork point `{base}` has no parent. Use `git cascade replay --old-base <ref> --old-tip {onto} --new-tip {onto}`."
         ))
@@ -186,7 +206,7 @@ struct GeneratedApply<'a> {
     git: &'a Git,
     storage: &'a Storage,
     generate: GenerateOptions,
-    new_tip: String,
+    new_tip: GitRef,
     run: RunOptions,
     success_message: &'static str,
 }
@@ -234,13 +254,13 @@ fn generated_plan_name(kind: &str, label: &str) -> Result<PlanName> {
     PlanName::new(format!("generated/{kind}/{label}/{}", uuid::Uuid::new_v4()))
 }
 
-fn infer_old_base_from_default_branch(git: &Git, old_tip: &str) -> Result<String> {
+fn infer_old_base_from_default_branch(git: &Git, old_tip: &BranchName) -> Result<GitRef> {
     if let Some(default_tip) = git.origin_default_branch_tip()? {
-        return Ok(default_tip);
+        return Ok(default_tip.into());
     }
 
     if let Some(default_tip) = git.local_default_branch_tip()? {
-        return Ok(default_tip);
+        return Ok(default_tip.into());
     }
 
     Err(Error::InvalidInvocation(format!(
@@ -248,16 +268,18 @@ fn infer_old_base_from_default_branch(git: &Git, old_tip: &str) -> Result<String
     )))
 }
 
-fn excluded_target_branches(git: &Git, target: &str) -> Result<Vec<String>> {
+fn excluded_target_branches(git: &Git, target: &GitRef) -> Result<Vec<BranchName>> {
     let mut branches = Vec::new();
     if let Some(refname) = git.symbolic_full_name(target)? {
         if let Some(branch) = refname.strip_prefix("refs/heads/") {
-            branches.push(branch.to_owned());
-        } else if let Some(branch) = refname.strip_prefix("refs/remotes/origin/") {
-            branches.push(branch.to_owned());
+            branches.push(BranchName::from_git_unchecked(branch));
+        } else if let Some(remote_ref) = refname.strip_prefix("refs/remotes/")
+            && let Some((_, branch)) = remote_ref.split_once('/')
+        {
+            branches.push(BranchName::from_git_unchecked(branch));
         }
-    } else if let Some(branch) = target.strip_prefix("origin/") {
-        branches.push(branch.to_owned());
+    } else if let Some(branch) = target.as_str().strip_prefix("origin/") {
+        branches.push(BranchName::from_git_unchecked(branch));
     }
 
     branches.sort();

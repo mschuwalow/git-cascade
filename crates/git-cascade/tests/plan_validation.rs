@@ -49,7 +49,7 @@ fn validation_rejects_tampered_commit_list() {
     let node = plan
         .nodes
         .iter_mut()
-        .find(|node| node.branch == "pr-3")
+        .find(|node| node.branch.as_str() == "pr-3")
         .unwrap();
     assert_eq!(node.parent(), Some("pr-2"));
     node.commits.push(node.commits[0].clone());
@@ -173,7 +173,7 @@ fn validation_rejects_dependency_parent_mismatch() {
     let mut plan = read_plan(&repo, "stack");
     let git = Git::new(repo.path());
 
-    plan.dependencies[0].parent = "pr-3".to_owned();
+    plan.dependencies[0].parent = "pr-3".parse().unwrap();
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 
@@ -201,11 +201,11 @@ fn validation_rejects_direct_child_at_anchor_base() {
     let node = plan
         .nodes
         .iter_mut()
-        .find(|node| node.branch == "pr-2")
+        .find(|node| node.branch.as_str() == "pr-2")
         .unwrap();
     assert_eq!(node.parent(), None);
     node.base = plan.source.base.clone();
-    node.commits = linear_commits(&repo, &node.base, &node.tip);
+    node.commits = linear_commits(&repo, node.base.as_str(), node.tip.as_str());
 
     let error = validate_plan(&git, &plan).unwrap_err().to_string();
 

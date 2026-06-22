@@ -3,6 +3,7 @@ use super::{
     Dependency, Node, PLAN_VERSION, Plan, PlanCommit, PlanId, PlanName, Repository, Source,
 };
 use crate::git::{Git, LocalBranch};
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::storage::Storage;
 use crate::{Error, Result};
 use std::collections::{HashMap, HashSet};
@@ -13,16 +14,16 @@ use time::OffsetDateTime;
 #[derive(Debug, Clone)]
 pub struct GenerateOptions {
     pub name: PlanName,
-    pub old_base: String,
-    pub old_tip: String,
-    pub excluded_branches: Vec<String>,
+    pub old_base: GitRef,
+    pub old_tip: GitRef,
+    pub excluded_branches: Vec<BranchName>,
 }
 
 #[derive(Debug, Clone)]
 struct Candidate {
     branch: LocalBranch,
-    parent_branch: Option<String>,
-    old_base: String,
+    parent_branch: Option<BranchName>,
+    old_base: CommitId,
     commits: Vec<PlanCommit>,
 }
 
@@ -30,9 +31,9 @@ struct Candidate {
 /// would otherwise be repeated for every candidate selection round.
 struct GitQueries<'a> {
     git: &'a Git,
-    merge_bases: HashMap<(String, String), Vec<String>>,
-    ancestors: HashMap<(String, String), bool>,
-    owned_commits: HashMap<(String, String), Option<Vec<PlanCommit>>>,
+    merge_bases: HashMap<(CommitId, CommitId), Vec<CommitId>>,
+    ancestors: HashMap<(CommitId, CommitId), bool>,
+    owned_commits: HashMap<(CommitId, CommitId), Option<Vec<PlanCommit>>>,
     warned_branches: HashSet<String>,
 }
 
@@ -51,11 +52,11 @@ impl<'a> GitQueries<'a> {
     /// bases (criss-cross history) are skipped with a warning.
     fn unique_merge_base(
         &mut self,
-        left: &str,
-        right: &str,
+        left: &CommitId,
+        right: &CommitId,
         branch: &str,
-    ) -> Result<Option<String>> {
-        let key = (left.to_owned(), right.to_owned());
+    ) -> Result<Option<CommitId>> {
+        let key = (left.clone(), right.clone());
         let bases = if let Some(bases) = self.merge_bases.get(&key) {
             bases.clone()
         } else {
@@ -79,8 +80,8 @@ impl<'a> GitQueries<'a> {
         }
     }
 
-    fn is_ancestor(&mut self, ancestor: &str, descendant: &str) -> Result<bool> {
-        let key = (ancestor.to_owned(), descendant.to_owned());
+    fn is_ancestor(&mut self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
+        let key = (ancestor.clone(), descendant.clone());
         if let Some(result) = self.ancestors.get(&key) {
             return Ok(*result);
         }
@@ -95,12 +96,12 @@ impl<'a> GitQueries<'a> {
     /// therefore cannot be flattened.
     fn owned_commits(
         &mut self,
-        base: &str,
-        tip: &str,
+        base: &CommitId,
+        tip: &CommitId,
         branch: &str,
-        source_old_tip: &str,
+        source_old_tip: &CommitId,
     ) -> Result<Option<Vec<PlanCommit>>> {
-        let key = (base.to_owned(), tip.to_owned());
+        let key = (base.clone(), tip.clone());
         if let Some(result) = self.owned_commits.get(&key) {
             return Ok(result.clone());
         }
@@ -132,8 +133,8 @@ impl<'a> GitQueries<'a> {
     fn first_foreign_merge_parent(
         &mut self,
         chain: &[PlanCommit],
-        tip: &str,
-    ) -> Result<Option<(String, String)>> {
+        tip: &CommitId,
+    ) -> Result<Option<(CommitId, CommitId)>> {
         for commit in chain {
             for parent in commit.parents.iter().skip(1) {
                 if !self.is_ancestor(parent, tip)? {
@@ -166,20 +167,20 @@ pub fn generate_stored_plan(
 
 pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
     let name = &options.name;
-    let old_tip_ref = options.old_tip.as_str();
+    let old_tip_ref = &options.old_tip;
     let old_tip = git.resolve_commit(old_tip_ref)?;
     let old_base_tip = git.resolve_commit(&options.old_base)?;
     let old_base = old_range_base(
         git,
         name.as_str(),
         &old_tip,
-        &options.old_base,
+        options.old_base.as_str(),
         &old_base_tip,
     )?;
 
     let mut nodes = Vec::new();
     let mut dependencies = Vec::new();
-    let mut assigned = HashSet::new();
+    let mut assigned = HashSet::<BranchName>::new();
     if let Some(local_branch) = old_tip_local_branch(git, old_tip_ref)? {
         assigned.insert(local_branch);
     }
@@ -234,10 +235,10 @@ pub fn generate_plan(git: &Git, options: &GenerateOptions) -> Result<Plan> {
 fn old_range_base(
     git: &Git,
     name: &str,
-    old_tip: &str,
+    old_tip: &CommitId,
     old_base_input: &str,
-    old_base_tip: &str,
-) -> Result<String> {
+    old_base_tip: &CommitId,
+) -> Result<CommitId> {
     git.unique_merge_base(old_tip, old_base_tip)?
         .ok_or_else(|| {
             Error::InvalidInvocation(format!(
@@ -246,10 +247,12 @@ fn old_range_base(
         })
 }
 
-fn old_tip_local_branch(git: &Git, old_tip: &str) -> Result<Option<String>> {
-    Ok(git
-        .symbolic_full_name(old_tip)?
-        .and_then(|refname| refname.strip_prefix("refs/heads/").map(str::to_owned)))
+fn old_tip_local_branch(git: &Git, old_tip: &GitRef) -> Result<Option<BranchName>> {
+    Ok(git.symbolic_full_name(old_tip)?.and_then(|refname| {
+        refname
+            .strip_prefix("refs/heads/")
+            .map(BranchName::from_git_unchecked)
+    }))
 }
 
 fn write_named_plan(storage: &Storage, name: &PlanName, plan: &Plan, replace: bool) -> Result<()> {
@@ -288,9 +291,9 @@ fn next_candidate(
     queries: &mut GitQueries<'_>,
     branches: &[LocalBranch],
     nodes: &[Node],
-    assigned: &HashSet<String>,
-    source_old_base: &str,
-    source_old_tip: &str,
+    assigned: &HashSet<BranchName>,
+    source_old_base: &CommitId,
+    source_old_tip: &CommitId,
 ) -> Result<Option<Candidate>> {
     let node_by_branch = nodes
         .iter()
@@ -309,11 +312,12 @@ fn next_candidate(
             continue;
         }
 
-        if let Some(base) = queries.unique_merge_base(source_old_tip, &branch.tip, &branch.name)?
-            && base != source_old_base
+        if let Some(base) =
+            queries.unique_merge_base(source_old_tip, &branch.tip, branch.name.as_str())?
+            && &base != source_old_base
             && queries.is_ancestor(source_old_base, &base)?
             && let Some(commits) =
-                queries.owned_commits(&base, &branch.tip, &branch.name, source_old_tip)?
+                queries.owned_commits(&base, &branch.tip, branch.name.as_str(), source_old_tip)?
             && !commits.is_empty()
         {
             let candidate = Candidate {
@@ -328,7 +332,8 @@ fn next_candidate(
         }
 
         for parent in nodes {
-            let Some(base) = queries.unique_merge_base(&parent.tip, &branch.tip, &branch.name)?
+            let Some(base) =
+                queries.unique_merge_base(&parent.tip, &branch.tip, branch.name.as_str())?
             else {
                 continue;
             };
@@ -338,7 +343,7 @@ fn next_candidate(
             }
 
             let Some(commits) =
-                queries.owned_commits(&base, &branch.tip, &branch.name, source_old_tip)?
+                queries.owned_commits(&base, &branch.tip, branch.name.as_str(), source_old_tip)?
             else {
                 continue;
             };
@@ -371,14 +376,12 @@ fn is_better_candidate(
         return true;
     };
 
-    let candidate_parent_depth = candidate
-        .parent_branch
-        .as_deref()
-        .map_or(0, |parent| parent_depth(parent, node_by_branch) + 1);
-    let current_parent_depth = current
-        .parent_branch
-        .as_deref()
-        .map_or(0, |parent| parent_depth(parent, node_by_branch) + 1);
+    let candidate_parent_depth = candidate.parent_branch.as_ref().map_or(0, |parent| {
+        parent_depth(parent.as_str(), node_by_branch) + 1
+    });
+    let current_parent_depth = current.parent_branch.as_ref().map_or(0, |parent| {
+        parent_depth(parent.as_str(), node_by_branch) + 1
+    });
     candidate_parent_depth
         .cmp(&current_parent_depth)
         .then_with(|| current.commits.len().cmp(&candidate.commits.len()))

@@ -44,7 +44,12 @@ fn cleanup_replay_artifacts(git: &Git, storage: &Storage, state: &ReplayState) -
 
 fn delete_temp_refs(git: &Git, state: &ReplayState) -> Result<()> {
     let mut refs = BTreeSet::new();
-    refs.extend(state.completed_temp_refs.iter().cloned());
+    refs.extend(
+        state
+            .completed_temp_refs
+            .iter()
+            .map(|temp_ref| temp_ref.as_str().to_owned()),
+    );
     refs.extend(git.refs_under(&format!("refs/cascade/tmp/{}", state.plan_id))?);
     for temp_ref in refs {
         git.delete_ref(&temp_ref)?;
@@ -61,7 +66,7 @@ fn remove_temporary_worktree(
         return Ok(());
     }
 
-    git.worktree_remove_force(worktree)?;
+    let _ = git.worktree_remove_force(worktree);
     if worktree.exists() {
         fs::remove_dir_all(worktree).map_err(|source| Error::IoWithPath {
             path: worktree.to_owned(),

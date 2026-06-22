@@ -1,3 +1,4 @@
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::test_hooks;
 use crate::{Error, Result};
 use std::ffi::{OsStr, OsString};
@@ -7,14 +8,14 @@ use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalBranch {
-    pub name: String,
-    pub tip: String,
+    pub name: BranchName,
+    pub tip: CommitId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeEntry {
     pub path: PathBuf,
-    pub branch: Option<String>,
+    pub branch: Option<BranchName>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,22 +157,23 @@ impl Git {
         Ok(PathBuf::from(output.trim()))
     }
 
-    pub fn head_oid(&self) -> Result<String> {
-        self.rev_parse("HEAD")
+    pub fn head_oid(&self) -> Result<CommitId> {
+        self.rev_parse(&GitRef::new("HEAD"))
     }
 
-    pub fn rev_parse(&self, rev: &str) -> Result<String> {
+    pub fn rev_parse(&self, rev: &GitRef) -> Result<CommitId> {
         Ok(self
-            .output(["rev-parse", "--verify", rev])?
+            .output(["rev-parse", "--verify", rev.as_str()])?
             .trim()
-            .to_owned())
+            .to_owned()
+            .into())
     }
 
-    pub fn resolve_commit(&self, rev: &str) -> Result<String> {
-        self.rev_parse(&format!("{rev}^{{commit}}"))
+    pub fn resolve_commit(&self, rev: &GitRef) -> Result<CommitId> {
+        self.rev_parse(&GitRef::new(format!("{}^{{commit}}", rev.as_str())))
     }
 
-    pub fn symbolic_full_name(&self, rev: &str) -> Result<Option<String>> {
+    pub fn symbolic_full_name(&self, rev: &GitRef) -> Result<Option<String>> {
         if let Some(refname) = self
             .output_allowing_status(
                 [
@@ -179,7 +181,7 @@ impl Git {
                     "--symbolic-full-name",
                     "--verify",
                     "--quiet",
-                    rev,
+                    rev.as_str(),
                 ],
                 &[1],
             )?
@@ -189,17 +191,17 @@ impl Git {
             return Ok(Some(refname));
         }
 
-        let local_branch = format!("refs/heads/{rev}");
+        let local_branch = format!("refs/heads/{}", rev.as_str());
         if self
-            .try_rev_parse(&format!("{local_branch}^{{commit}}"))?
+            .try_rev_parse(&GitRef::new(format!("{local_branch}^{{commit}}")))?
             .is_some()
         {
             return Ok(Some(local_branch));
         }
 
-        let remote_branch = format!("refs/remotes/{rev}");
+        let remote_branch = format!("refs/remotes/{}", rev.as_str());
         if self
-            .try_rev_parse(&format!("{remote_branch}^{{commit}}"))?
+            .try_rev_parse(&GitRef::new(format!("{remote_branch}^{{commit}}")))?
             .is_some()
         {
             return Ok(Some(remote_branch));
@@ -208,21 +210,22 @@ impl Git {
         Ok(None)
     }
 
-    pub fn try_rev_parse(&self, rev: &str) -> Result<Option<String>> {
+    pub fn try_rev_parse(&self, rev: &GitRef) -> Result<Option<CommitId>> {
         Ok(self
-            .output_allowing_status(["rev-parse", "--verify", "--quiet", rev], &[1])?
+            .output_allowing_status(["rev-parse", "--verify", "--quiet", rev.as_str()], &[1])?
             .map(|output| output.trim().to_owned())
-            .filter(|output| !output.is_empty()))
+            .filter(|output| !output.is_empty())
+            .map(CommitId::from))
     }
 
-    pub fn local_branch_tip(&self, branch: &str) -> Result<String> {
-        self.rev_parse(&format!("refs/heads/{branch}^{{commit}}"))
+    pub fn local_branch_tip(&self, branch: &BranchName) -> Result<CommitId> {
+        self.rev_parse(&GitRef::new(format!("refs/heads/{branch}^{{commit}}")))
     }
 
     pub fn local_branches(&self) -> Result<Vec<LocalBranch>> {
         let output = self.output([
             "for-each-ref",
-            "--format=%(refname:short)%09%(objectname)",
+            "--format=%(refname)%09%(objectname)",
             "refs/heads",
         ])?;
 
@@ -231,16 +234,19 @@ impl Git {
             let Some((name, tip)) = line.split_once('\t') else {
                 continue;
             };
+            let Some(name) = name.strip_prefix("refs/heads/") else {
+                continue;
+            };
             branches.push(LocalBranch {
-                name: name.to_owned(),
-                tip: tip.to_owned(),
+                name: BranchName::from_git_unchecked(name),
+                tip: tip.into(),
             });
         }
         branches.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(branches)
     }
 
-    pub fn checked_out_branches(&self) -> Result<Vec<String>> {
+    pub fn checked_out_branches(&self) -> Result<Vec<BranchName>> {
         let mut branches = self
             .worktrees()?
             .into_iter()
@@ -284,7 +290,7 @@ impl Git {
             let Some(name) = refname.strip_prefix("refs/heads/") else {
                 continue;
             };
-            branch = Some(name.to_owned());
+            branch = Some(BranchName::from_git_unchecked(name));
         }
 
         if let Some(path) = path {
@@ -294,11 +300,15 @@ impl Git {
         Ok(worktrees)
     }
 
-    pub fn current_branch(&self) -> Result<Option<String>> {
+    pub fn current_branch(&self) -> Result<Option<BranchName>> {
         Ok(self
-            .output_allowing_status(["symbolic-ref", "--quiet", "--short", "HEAD"], &[1])?
+            .output_allowing_status(["symbolic-ref", "--quiet", "HEAD"], &[1])?
             .map(|output| output.trim().to_owned())
-            .filter(|output| !output.is_empty()))
+            .and_then(|output| {
+                output
+                    .strip_prefix("refs/heads/")
+                    .map(BranchName::from_git_unchecked)
+            }))
     }
 
     pub fn ensure_clean_worktree(&self) -> Result<()> {
@@ -315,7 +325,7 @@ impl Git {
         Ok(self.output(["status", "--porcelain"])?.is_empty())
     }
 
-    pub fn checked_out_branches_except(&self, excluded_path: &Path) -> Result<Vec<String>> {
+    pub fn checked_out_branches_except(&self, excluded_path: &Path) -> Result<Vec<BranchName>> {
         let excluded_path = std::fs::canonicalize(excluded_path)?;
         let mut branches = Vec::new();
         for worktree in self.worktrees()? {
@@ -334,36 +344,41 @@ impl Git {
         Ok(branches)
     }
 
-    pub fn merge_base(&self, left: &str, right: &str) -> Result<Option<String>> {
+    pub fn merge_base(&self, left: &CommitId, right: &CommitId) -> Result<Option<CommitId>> {
         Ok(self
-            .output_allowing_status(["merge-base", left, right], &[1])?
+            .output_allowing_status(["merge-base", left.as_str(), right.as_str()], &[1])?
             .map(|output| output.trim().to_owned())
-            .filter(|output| !output.is_empty()))
+            .filter(|output| !output.is_empty())
+            .map(CommitId::from))
     }
 
     /// All merge bases between two commits. More than one entry indicates a
     /// criss-cross history where the fork point is ambiguous.
-    pub fn merge_bases_all(&self, left: &str, right: &str) -> Result<Vec<String>> {
+    pub fn merge_bases_all(&self, left: &CommitId, right: &CommitId) -> Result<Vec<CommitId>> {
         Ok(self
-            .output_allowing_status(["merge-base", "--all", left, right], &[1])?
-            .map(|output| output.lines().map(str::to_owned).collect())
+            .output_allowing_status(["merge-base", "--all", left.as_str(), right.as_str()], &[1])?
+            .map(|output| output.lines().map(CommitId::from).collect())
             .unwrap_or_default())
     }
 
     /// The unique merge base of two commits, or an error when the history is
     /// criss-crossed and the fork point is ambiguous.
-    pub fn unique_merge_base(&self, left: &str, right: &str) -> Result<Option<String>> {
-        unique_merge_base_from(self.merge_bases_all(left, right)?, left, right)
+    pub fn unique_merge_base(&self, left: &CommitId, right: &CommitId) -> Result<Option<CommitId>> {
+        unique_merge_base_from(
+            self.merge_bases_all(left, right)?,
+            left.as_str(),
+            right.as_str(),
+        )
     }
 
     /// First-parent chain of `base..tip` with each commit's parents,
     /// oldest first.
     pub fn rev_list_first_parent_with_parents(
         &self,
-        base: &str,
-        tip: &str,
-    ) -> Result<Vec<(String, Vec<String>)>> {
-        let range = format!("{base}..{tip}");
+        base: &CommitId,
+        tip: &CommitId,
+    ) -> Result<Vec<(CommitId, Vec<String>)>> {
+        let range = format!("{}..{}", base.as_str(), tip.as_str());
         let output = self.output([
             "rev-list",
             "--first-parent",
@@ -377,39 +392,47 @@ impl Git {
             let Some(oid) = parts.next() else {
                 continue;
             };
-            commits.push((oid, parts.collect()));
+            commits.push((oid.into(), parts.collect()));
         }
         Ok(commits)
     }
 
-    pub fn rev_list_first_parent_merges(&self, tip: &str) -> Result<Vec<String>> {
+    pub fn rev_list_first_parent_merges(&self, tip: &CommitId) -> Result<Vec<CommitId>> {
         Ok(self
-            .output(["rev-list", "--first-parent", "--merges", tip])?
+            .output(["rev-list", "--first-parent", "--merges", tip.as_str()])?
             .lines()
-            .map(str::to_owned)
+            .map(CommitId::from)
             .collect())
     }
 
-    pub fn commit_parents(&self, commit: &str) -> Result<Vec<String>> {
-        let output = self.output(["rev-list", "--parents", "-n", "1", commit])?;
+    pub fn commit_parents(&self, commit: &CommitId) -> Result<Vec<CommitId>> {
+        let output = self.output(["rev-list", "--parents", "-n", "1", commit.as_str()])?;
         Ok(output
             .split_whitespace()
             .skip(1)
-            .map(str::to_owned)
+            .map(CommitId::from)
             .collect())
     }
 
-    pub fn commit_exists(&self, oid: &str) -> Result<bool> {
+    pub fn commit_exists(&self, oid: &CommitId) -> Result<bool> {
         self.output_allowing_status(["cat-file", "-e", &format!("{oid}^{{commit}}")], &[1, 128])
             .map(|output| output.is_some())
     }
 
-    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
-        self.output_allowing_status(["merge-base", "--is-ancestor", ancestor, descendant], &[1])
-            .map(|output| output.is_some())
+    pub fn is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
+        self.output_allowing_status(
+            [
+                "merge-base",
+                "--is-ancestor",
+                ancestor.as_str(),
+                descendant.as_str(),
+            ],
+            &[1],
+        )
+        .map(|output| output.is_some())
     }
 
-    pub fn origin_default_branch_tip(&self) -> Result<Option<String>> {
+    pub fn origin_default_branch_tip(&self) -> Result<Option<CommitId>> {
         let Some(default_ref) = self.output_allowing_status(
             ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
             &[1, 128],
@@ -422,12 +445,14 @@ impl Git {
             return Ok(None);
         }
 
-        self.try_rev_parse(&format!("{default_ref}^{{commit}}"))
+        self.try_rev_parse(&GitRef::new(format!("{default_ref}^{{commit}}")))
     }
 
-    pub fn local_default_branch_tip(&self) -> Result<Option<String>> {
+    pub fn local_default_branch_tip(&self) -> Result<Option<CommitId>> {
         for branch in ["main", "master"] {
-            if let Some(tip) = self.try_rev_parse(&format!("refs/heads/{branch}^{{commit}}"))? {
+            if let Some(tip) =
+                self.try_rev_parse(&GitRef::new(format!("refs/heads/{branch}^{{commit}}")))?
+            {
                 return Ok(Some(tip));
             }
         }
@@ -448,7 +473,7 @@ impl Git {
 
         for branch in ["main", "master"] {
             if self
-                .try_rev_parse(&format!("refs/heads/{branch}^{{commit}}"))?
+                .try_rev_parse(&GitRef::new(format!("refs/heads/{branch}^{{commit}}")))?
                 .is_some()
             {
                 return Ok(Some(branch.to_owned()));
@@ -458,13 +483,13 @@ impl Git {
         Ok(None)
     }
 
-    pub fn worktree_add_detached(&self, path: &Path, commit: &str) -> Result<()> {
+    pub fn worktree_add_detached(&self, path: &Path, commit: &CommitId) -> Result<()> {
         self.run_mutating([
             OsString::from("worktree"),
             OsString::from("add"),
             OsString::from("--detach"),
             path.as_os_str().to_owned(),
-            OsString::from(commit),
+            OsString::from(commit.as_str()),
         ])
     }
 
@@ -477,16 +502,16 @@ impl Git {
         ])
     }
 
-    pub fn reset_hard(&self, commit: &str) -> Result<()> {
-        self.run_mutating(["reset", "--hard", commit])
+    pub fn reset_hard(&self, commit: &CommitId) -> Result<()> {
+        self.run_mutating(["reset", "--hard", commit.as_str()])
     }
 
-    pub fn switch_detached(&self, commit: &str) -> Result<()> {
-        self.run_mutating(["switch", "--detach", commit])
+    pub fn switch_detached(&self, commit: &CommitId) -> Result<()> {
+        self.run_mutating(["switch", "--detach", commit.as_str()])
     }
 
-    pub fn switch_detached_discarding_changes(&self, commit: &str) -> Result<()> {
-        self.run_mutating(["switch", "--discard-changes", "--detach", commit])
+    pub fn switch_detached_discarding_changes(&self, commit: &CommitId) -> Result<()> {
+        self.run_mutating(["switch", "--discard-changes", "--detach", commit.as_str()])
     }
 
     pub fn switch_branch(&self, branch: &str) -> Result<()> {
@@ -497,8 +522,8 @@ impl Git {
         self.run_mutating(["switch", "--discard-changes", branch])
     }
 
-    pub fn cherry_pick(&self, commit: &str) -> Result<()> {
-        self.run_mutating(["cherry-pick", commit])
+    pub fn cherry_pick(&self, commit: &CommitId) -> Result<()> {
+        self.run_mutating(["cherry-pick", commit.as_str()])
     }
 
     pub fn cherry_pick_continue(&self) -> Result<()> {
@@ -510,7 +535,9 @@ impl Git {
     }
 
     pub fn cherry_pick_in_progress(&self) -> Result<bool> {
-        Ok(self.try_rev_parse("CHERRY_PICK_HEAD")?.is_some())
+        Ok(self
+            .try_rev_parse(&GitRef::new("CHERRY_PICK_HEAD"))?
+            .is_some())
     }
 
     /// Reports whether the index differs from HEAD.
@@ -531,8 +558,8 @@ impl Git {
             .collect())
     }
 
-    pub fn update_ref(&self, refname: &str, new_value: &str) -> Result<()> {
-        self.run_mutating(["update-ref", refname, new_value])
+    pub fn update_ref(&self, refname: &str, new_value: &CommitId) -> Result<()> {
+        self.run_mutating(["update-ref", refname, new_value.as_str()])
     }
 
     pub fn delete_ref(&self, refname: &str) -> Result<()> {
@@ -596,10 +623,10 @@ where
 }
 
 fn unique_merge_base_from(
-    mut bases: Vec<String>,
+    mut bases: Vec<CommitId>,
     left: &str,
     right: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<CommitId>> {
     match bases.len() {
         0 => Ok(None),
         1 => Ok(Some(bases.remove(0))),

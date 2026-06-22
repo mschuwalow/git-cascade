@@ -1,4 +1,5 @@
 use crate::model::Strategy;
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
 use crate::{Error, Result};
@@ -91,8 +92,8 @@ impl std::fmt::Display for ReplayMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CurrentState {
-    pub branch: String,
-    pub commit: String,
+    pub branch: BranchName,
+    pub commit: CommitId,
     pub worktree: String,
 }
 
@@ -100,16 +101,16 @@ pub struct CurrentState {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum PausedState {
     BranchEnd {
-        branch: String,
-        rewritten_tip: String,
-        temp_ref: String,
-        mapped_commit: String,
+        branch: BranchName,
+        rewritten_tip: CommitId,
+        temp_ref: GitRef,
+        mapped_commit: CommitId,
         worktree: String,
     },
     ChildBase {
-        branch: String,
-        commit: String,
-        rewritten_tip: String,
+        branch: BranchName,
+        commit: CommitId,
+        rewritten_tip: CommitId,
         worktree: String,
     },
 }
@@ -117,14 +118,14 @@ pub enum PausedState {
 impl PausedState {
     pub fn branch(&self) -> &str {
         match self {
-            Self::BranchEnd { branch, .. } | Self::ChildBase { branch, .. } => branch,
+            Self::BranchEnd { branch, .. } | Self::ChildBase { branch, .. } => branch.as_str(),
         }
     }
 
     pub fn rewritten_tip(&self) -> &str {
         match self {
             Self::BranchEnd { rewritten_tip, .. } | Self::ChildBase { rewritten_tip, .. } => {
-                rewritten_tip
+                rewritten_tip.as_str()
             }
         }
     }
@@ -175,8 +176,8 @@ impl std::fmt::Display for WorktreeState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum RestoreState {
-    Branch { name: String, head: String },
-    Detached { head: String },
+    Branch { name: BranchName, head: CommitId },
+    Detached { head: CommitId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,15 +188,15 @@ pub struct ReplayState {
     pub plan_id: PlanId,
     pub started_at: String,
     pub updated_at: String,
-    pub new_tip: String,
+    pub new_tip: CommitId,
     pub strategy: Strategy,
     pub replay_mode: ReplayMode,
     pub worktree: WorktreeState,
-    pub completed_temp_refs: Vec<String>,
-    pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
-    pub mappings: BTreeMap<String, String>,
-    pub pending_branches: Vec<String>,
+    pub completed_temp_refs: Vec<GitRef>,
+    pub branch_tips: BTreeMap<BranchName, CommitId>,
+    pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
+    pub mappings: BTreeMap<CommitId, CommitId>,
+    pub pending_branches: Vec<BranchName>,
 }
 
 pub struct StateFile {
@@ -351,13 +352,13 @@ pub fn read_state(storage: &Storage) -> Result<Option<ReplayState>> {
 pub struct InitialReplayStateInput<'a> {
     pub plan_name: &'a PlanName,
     pub plan_id: &'a PlanId,
-    pub new_tip: &'a str,
+    pub new_tip: &'a CommitId,
     pub strategy: Strategy,
     pub replay_mode: ReplayMode,
-    pub pending_branches: Vec<String>,
-    pub branch_tips: BTreeMap<String, String>,
-    pub extra_commits: BTreeMap<String, Vec<PlanCommit>>,
-    pub mappings: BTreeMap<String, String>,
+    pub pending_branches: Vec<BranchName>,
+    pub branch_tips: BTreeMap<BranchName, CommitId>,
+    pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
+    pub mappings: BTreeMap<CommitId, CommitId>,
     pub worktree: WorktreeState,
 }
 
@@ -371,7 +372,7 @@ pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<Replay
         plan_id: *input.plan_id,
         started_at: now.clone(),
         updated_at: now,
-        new_tip: input.new_tip.to_owned(),
+        new_tip: input.new_tip.clone(),
         strategy: input.strategy,
         replay_mode: input.replay_mode,
         worktree: input.worktree,

@@ -1,8 +1,9 @@
 use super::{Node, Plan};
+use crate::model::BranchName;
 use crate::{Error, Result};
 use std::collections::{HashMap, HashSet};
 
-pub fn branches_in_topological_order(plan: &Plan) -> Result<Vec<String>> {
+pub fn branches_in_topological_order(plan: &Plan) -> Result<Vec<BranchName>> {
     let mut node_by_branch = HashMap::new();
     for node in &plan.nodes {
         if node_by_branch.insert(node.branch.as_str(), node).is_some() {
@@ -60,7 +61,7 @@ fn visit_ordered<'a>(
     children_by_parent: &HashMap<&'a str, Vec<&'a str>>,
     visiting: &mut HashSet<&'a str>,
     visited: &mut HashSet<&'a str>,
-    ordered: &mut Vec<String>,
+    ordered: &mut Vec<BranchName>,
 ) -> Result<()> {
     if visited.contains(branch) {
         return Ok(());
@@ -76,7 +77,7 @@ fn visit_ordered<'a>(
         )));
     }
 
-    ordered.push(branch.to_owned());
+    ordered.push(BranchName::from_git_unchecked(branch));
 
     if let Some(children) = children_by_parent.get(branch) {
         for child in children {
@@ -99,6 +100,7 @@ fn visit_ordered<'a>(
 #[cfg(test)]
 mod tests {
     use super::branches_in_topological_order;
+    use crate::model::BranchName;
     use crate::plan::{Dependency, Node, Plan, PlanCommit, PlanId, Repository, Source};
     use time::OffsetDateTime;
 
@@ -119,8 +121,13 @@ mod tests {
             ],
         );
 
+        let ordered = branches_in_topological_order(&plan).unwrap();
+        let ordered = ordered
+            .iter()
+            .map(|branch| branch.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(
-            branches_in_topological_order(&plan).unwrap(),
+            ordered,
             ["root-a", "child-a", "grandchild", "child-b", "root-b"]
         );
     }
@@ -167,12 +174,12 @@ mod tests {
             generated_at: OffsetDateTime::UNIX_EPOCH,
             repository: Repository {
                 git_dir: ".git".to_owned(),
-                head_at_generation: "0".repeat(40),
+                head_at_generation: "0".repeat(40).into(),
             },
             source: Source {
                 name: "root".to_owned(),
-                base: "0".repeat(40),
-                tip: "0".repeat(40),
+                base: "0".repeat(40).into(),
+                tip: "0".repeat(40).into(),
             },
             nodes,
             dependencies,
@@ -181,18 +188,18 @@ mod tests {
 
     fn node(branch: &str, parent: Option<&str>) -> Node {
         Node {
-            branch: branch.to_owned(),
-            tip: "0".repeat(40),
-            base: "0".repeat(40),
+            branch: BranchName::from_git_unchecked(branch),
+            tip: "0".repeat(40).into(),
+            base: "0".repeat(40).into(),
             commits: vec![PlanCommit::new("0".repeat(40), vec!["0".repeat(40)])],
-            parent: parent.map(str::to_owned),
+            parent: parent.map(BranchName::from_git_unchecked),
         }
     }
 
     fn dependency(parent: &str, child: &str) -> Dependency {
         Dependency {
-            parent: parent.to_owned(),
-            child: child.to_owned(),
+            parent: BranchName::from_git_unchecked(parent),
+            child: BranchName::from_git_unchecked(child),
         }
     }
 }
