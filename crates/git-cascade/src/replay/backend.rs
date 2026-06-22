@@ -406,7 +406,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 pub(crate) struct DryRunReplayBackend {
     output: String,
     temp_tips: HashMap<BranchName, CommitId>,
-    strategy: Strategy,
+    temp_ref_tracks_rewritten_tip: bool,
 }
 
 impl DryRunReplayBackend {
@@ -437,7 +437,7 @@ impl DryRunReplayBackend {
         Ok(Self {
             output,
             temp_tips: HashMap::new(),
-            strategy: state.strategy,
+            temp_ref_tracks_rewritten_tip: state.strategy == Strategy::Squash,
         })
     }
 
@@ -602,7 +602,7 @@ impl ReplayBackend for DryRunReplayBackend {
         rewritten_tip: &CommitId,
     ) -> Result<(GitRef, CommitId)> {
         let temp_ref = temp_ref(plan, node.branch.as_str());
-        let (rewritten_tip, current_tip) = if self.strategy == Strategy::Squash {
+        let (rewritten_tip, current_tip) = if self.temp_ref_tracks_rewritten_tip {
             (rewritten_tip.clone(), rewritten_tip.clone())
         } else {
             (

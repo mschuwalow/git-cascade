@@ -82,14 +82,6 @@ impl ReplayPauseMode {
             Self::Checkpoints => "checkpoints",
         }
     }
-
-    pub fn pauses_at_checkpoints(self) -> bool {
-        self == Self::Checkpoints
-    }
-
-    pub fn pauses_at_every_commit(self) -> bool {
-        self == Self::EveryCommit
-    }
 }
 
 impl std::fmt::Display for ReplayPauseMode {
