@@ -170,20 +170,15 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 .mappings
                 .insert(node.base().to_owned(), base.clone());
 
-            if base == node.base() {
-                self.skip_replay_at_existing_base(&node, &branch, &commits)?;
-                self.state.phase = Phase::Replay { current: None };
-                self.write_state()?;
-                return Ok(false);
+            if base != node.base() {
+                self.backend.prepare_branch(
+                    &self.state,
+                    branch_index,
+                    self.total_branches(),
+                    &node,
+                    &base,
+                )?;
             }
-
-            self.backend.prepare_branch(
-                &self.state,
-                branch_index,
-                self.total_branches(),
-                &node,
-                &base,
-            )?;
             (0, base)
         };
 
@@ -203,6 +198,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                 commits.len(),
                 &last_rewritten,
                 &child_base_pause_commits,
+                branch_index,
             )? {
                 CommitReplay::Continue(rewritten_commit) => last_rewritten = rewritten_commit,
                 CommitReplay::Stop => return Ok(true),
@@ -212,6 +208,7 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         self.finish_branch(&node, &branch, &commits, branch_index)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn replay_commit(
         &mut self,
         node: &Node,
@@ -220,47 +217,53 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
         total_commits: usize,
         last_rewritten: &str,
         child_base_pause_commits: &BTreeSet<String>,
+        branch_index: usize,
     ) -> Result<CommitReplay> {
-        if commit.is_merge() {
+        let kept_existing = can_keep_existing_commit(commit, last_rewritten);
+        let rewritten_commit = if kept_existing {
+            commit.oid.clone()
+        } else if commit.is_merge() {
             // The merged history is contained in the new base; flatten.
             self.backend
                 .flatten_merge(node, &commit.oid, commit_index, total_commits)?;
-            self.state
-                .mappings
-                .insert(commit.oid.clone(), last_rewritten.to_owned());
-            if child_base_pause_commits.contains(&commit.oid) {
-                self.pause_at_child_base(node, &commit.oid, last_rewritten)?;
-                return Ok(CommitReplay::Stop);
-            }
-            return Ok(CommitReplay::Continue(last_rewritten.to_owned()));
-        }
-
-        let rewritten_commit = match self.backend.cherry_pick(
-            &self.state,
-            node,
-            &commit.oid,
-            commit_index,
-            total_commits,
-        )? {
-            CherryPickOutcome::Applied(rewritten_commit) => rewritten_commit,
-            CherryPickOutcome::Conflict { message } => {
-                let current = CurrentState {
-                    branch: node.branch.clone(),
-                    commit: commit.oid.clone(),
-                    worktree: self.state.worktree.path().to_owned(),
-                };
-                self.state.phase = Phase::Conflict {
-                    current: current.clone(),
-                    message,
-                };
-                self.write_state()?;
-                return Ok(CommitReplay::Stop);
+            last_rewritten.to_owned()
+        } else {
+            match self.backend.cherry_pick(
+                &self.state,
+                node,
+                &commit.oid,
+                commit_index,
+                total_commits,
+            )? {
+                CherryPickOutcome::Applied(rewritten_commit) => rewritten_commit,
+                CherryPickOutcome::Conflict { message } => {
+                    let current = CurrentState {
+                        branch: node.branch.clone(),
+                        commit: commit.oid.clone(),
+                        worktree: self.state.worktree.path().to_owned(),
+                    };
+                    self.state.phase = Phase::Conflict {
+                        current: current.clone(),
+                        message,
+                    };
+                    self.write_state()?;
+                    return Ok(CommitReplay::Stop);
+                }
             }
         };
         self.state
             .mappings
             .insert(commit.oid.clone(), rewritten_commit.clone());
         if child_base_pause_commits.contains(&commit.oid) {
+            if kept_existing {
+                self.backend.prepare_branch(
+                    &self.state,
+                    branch_index,
+                    self.total_branches(),
+                    node,
+                    &rewritten_commit,
+                )?;
+            }
             self.pause_at_child_base(node, &commit.oid, &rewritten_commit)?;
             return Ok(CommitReplay::Stop);
         }
@@ -309,16 +312,40 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
                     Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
                 })?
         };
-        let (temp_ref, branch_tip) = self.backend.write_temp_ref(
-            self.plan,
-            node,
-            branch_index,
-            self.total_branches(),
-            &rewritten_tip,
-        )?;
+
+        let unchanged_tip = rewritten_tip == node.tip;
+        let pauses = self.state.replay_mode.pauses_at_checkpoints();
+
+        if unchanged_tip && pauses {
+            self.backend.prepare_branch(
+                &self.state,
+                branch_index,
+                self.total_branches(),
+                node,
+                &rewritten_tip,
+            )?;
+        }
+
+        let (temp_ref, branch_tip) = if unchanged_tip && !pauses {
+            self.backend.skip_replay(
+                self.plan,
+                node,
+                branch_index,
+                self.total_branches(),
+                &rewritten_tip,
+            )?
+        } else {
+            self.backend.write_temp_ref(
+                self.plan,
+                node,
+                branch_index,
+                self.total_branches(),
+                &rewritten_tip,
+            )?
+        };
         self.record_temp_ref(&node.branch, temp_ref.clone(), branch_tip.clone());
         self.remove_pending_branch(branch)?;
-        if self.state.replay_mode.pauses_at_checkpoints() {
+        if pauses {
             let paused = PausedState::BranchEnd {
                 branch: node.branch.clone(),
                 rewritten_tip: branch_tip,
@@ -472,35 +499,6 @@ impl<'plan, 'state> ReplayContext<'plan, 'state> {
             base.clone(),
             format!("replay base for child branch `{}`", child.branch),
         )))
-    }
-
-    fn skip_replay_at_existing_base(
-        &mut self,
-        node: &Node,
-        branch: &str,
-        commits: &[PlanCommit],
-    ) -> Result<()> {
-        for commit in commits {
-            self.state
-                .mappings
-                .insert(commit.oid.clone(), commit.oid.clone());
-        }
-        let current_tip = commits
-            .last()
-            .map(|commit| commit.oid.clone())
-            .ok_or_else(|| {
-                Error::InvalidPlan(format!("branch `{}` has no commits", node.branch))
-            })?;
-        let (temp_ref, branch_tip) = self.backend.skip_replay(
-            self.plan,
-            node,
-            self.branch_index(),
-            self.total_branches(),
-            &current_tip,
-        )?;
-        self.record_temp_ref(&node.branch, temp_ref, branch_tip);
-        self.remove_pending_branch(branch)?;
-        Ok(())
     }
 
     fn resume_start_commit_index(
@@ -683,6 +681,10 @@ fn child_base_pause_commits(
             .map(str::to_owned)
             .collect(),
     }
+}
+
+fn can_keep_existing_commit(commit: &PlanCommit, last_rewritten: &str) -> bool {
+    commit.parents.first().map(String::as_str) == Some(last_rewritten)
 }
 
 fn selected_bases_from_mappings(

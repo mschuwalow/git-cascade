@@ -410,6 +410,233 @@ fn branch_end_pause_allows_squashing_before_replaying_child_to_current_tip() {
 }
 
 #[test]
+fn pause_at_checkpoints_pauses_unchanged_branches_without_rewriting_if_unchanged() {
+    let repo = paused_linear_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    assert_eq!(paused_state(&state).branch(), "pr-2");
+    assert_eq!(state.pending_branches, vec!["pr-3"]);
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(!repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
+    let repo = paused_intermediate_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at child base"));
+
+    let state = read_state(&repo);
+    assert_eq!(paused_state(&state).branch(), "pr-2");
+    assert!(matches!(
+        paused_state(&state),
+        PausedState::ChildBase { .. }
+    ));
+    assert_eq!(state.pending_branches, vec!["pr-2", "pr-3"]);
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    assert!(matches!(
+        paused_state(&state),
+        PausedState::BranchEnd { .. }
+    ));
+    assert_eq!(state.pending_branches, vec!["pr-3"]);
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_eq!(repo.rev_parse("pr-2"), old_pr2);
+    assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+}
+
+#[test]
+fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
+    let repo = paused_intermediate_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at child base"));
+
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    std::fs::write(worktree.join("base-fix.txt"), "base fix\n").unwrap();
+    repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "base-fix.txt"]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "fix unchanged child base",
+    ]);
+    let fixed_child_base = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_child_base);
+    assert_eq!(repo.show("pr-2:base-fix.txt"), "base fix\n");
+    assert_eq!(repo.show("pr-3:base-fix.txt"), "base fix\n");
+    assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
+}
+
+#[test]
+fn pause_at_checkpoints_allows_rewriting_unchanged_branch_before_child() {
+    let repo = paused_multi_commit_branch_stack();
+    let old_pr2 = repo.rev_parse("pr-2");
+    let old_pr3 = repo.rev_parse("pr-3");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "move-to-current-tips",
+            "--pause-at-checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    let state = read_state(&repo);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "reset",
+        "--soft",
+        "HEAD~2",
+    ]);
+    repo.git_ok([
+        "-C",
+        worktree.to_str().unwrap(),
+        "commit",
+        "-m",
+        "squash pr-2",
+    ]);
+    let squashed_pr2 = repo
+        .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+
+    assert_ne!(repo.rev_parse("pr-2"), old_pr2);
+    assert_ne!(repo.rev_parse("pr-3"), old_pr3);
+    assert_eq!(repo.rev_parse("pr-2"), squashed_pr2);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), squashed_pr2);
+    assert_eq!(repo.show("pr-2:pr2-a.txt"), "b\n");
+    assert_eq!(repo.show("pr-2:pr2-b.txt"), "c\n");
+    assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
+}
+
+#[test]
 fn continue_refuses_dirty_paused_worktree() {
     let repo = paused_linear_stack();
     rewrite_anchor(&repo);
