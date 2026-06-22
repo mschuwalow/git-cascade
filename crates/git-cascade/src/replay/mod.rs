@@ -18,7 +18,7 @@ use crate::{Error, Result};
 use backend::{DryRunReplayBackend, GitReplayBackend};
 use cleanup::run_deleting_phase;
 use context::ReplayContext;
-pub use pause::PausePlan;
+use pause::PausePlan;
 pub use state::{
     CurrentState, PausedState, Phase, ReplayPauseMode, ReplayState, RestoreState, WorktreeState,
 };
@@ -365,7 +365,6 @@ fn start_replay_state(
         pending_branches,
         branch_tips,
         extra_commits,
-        mappings: BTreeMap::new(),
         worktree,
     })
 }

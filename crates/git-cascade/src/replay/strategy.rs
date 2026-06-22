@@ -1,14 +1,8 @@
-use super::backend::ReplayBackend;
-use super::state::ReplayState;
 use crate::model::Strategy;
 use crate::model::{BranchName, CommitId};
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-
-pub(super) fn dry_run_temp_ref_tracks_rewritten_tip(strategy: Strategy) -> bool {
-    matches!(strategy, Strategy::Squash)
-}
 
 pub(super) fn checkpoint_commits(
     strategy: Strategy,
@@ -23,67 +17,15 @@ pub(super) fn checkpoint_commits(
     }
 }
 
-pub(super) fn finalizes_branch_at_end(strategy: Strategy, commits: &[PlanCommit]) -> bool {
-    match strategy {
-        Strategy::Squash => !commits.is_empty(),
-        Strategy::PreserveForkPoints
-        | Strategy::MoveToPlannedTips
-        | Strategy::MoveToCurrentTips => false,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn finalize_branch_tip<B>(
-    strategy: Strategy,
-    backend: &mut B,
-    state: &ReplayState,
-    branch_replay_base: &CommitId,
-    total_branches: usize,
-    node: &Node,
-    commits: &[PlanCommit],
-    branch_index: usize,
-    rewritten_tip: CommitId,
-) -> Result<CommitId>
-where
-    B: ReplayBackend,
-{
-    match strategy {
-        Strategy::Squash if commits.len() > 1 => {
-            let first_commit = commits
-                .first()
-                .expect("non-empty commits has a first commit")
-                .oid
-                .clone();
-            let rewritten_tip = backend.squash_branch(
-                state,
-                node,
-                branch_index,
-                total_branches,
-                branch_replay_base,
-                &first_commit,
-                &rewritten_tip,
-            )?;
-            Ok(rewritten_tip)
-        }
-        Strategy::PreserveForkPoints
-        | Strategy::MoveToPlannedTips
-        | Strategy::MoveToCurrentTips
-        | Strategy::Squash => Ok(rewritten_tip),
-    }
-}
-
 pub(super) fn actual_child_base(
     strategy: Strategy,
     parent: &Node,
     child: &Node,
-    selected_bases: &HashMap<BranchName, CommitId>,
     mappings: &BTreeMap<CommitId, CommitId>,
     temp_tips: &HashMap<BranchName, CommitId>,
 ) -> Result<CommitId> {
     match strategy {
-        Strategy::PreserveForkPoints => {
-            preserve_fork_point_child_base(parent, child, selected_bases, mappings)
-        }
+        Strategy::PreserveForkPoints => preserve_fork_point_child_base(parent, child, mappings),
         Strategy::MoveToPlannedTips => planned_parent_tip(parent, mappings),
         Strategy::MoveToCurrentTips | Strategy::Squash => current_parent_tip(parent, temp_tips),
     }
@@ -93,14 +35,11 @@ pub(super) fn required_child_replay_base(
     strategy: Strategy,
     parent: &Node,
     child: &Node,
-    selected_bases: &HashMap<BranchName, CommitId>,
     mappings: &BTreeMap<CommitId, CommitId>,
 ) -> Result<Option<(CommitId, String)>> {
     match strategy {
-        Strategy::PreserveForkPoints => {
-            preserve_fork_point_child_base(parent, child, selected_bases, mappings)
-                .map(|base| Some(child_replay_base_requirement(child, base)))
-        }
+        Strategy::PreserveForkPoints => preserve_fork_point_child_base(parent, child, mappings)
+            .map(|base| Some(child_replay_base_requirement(child, base))),
         Strategy::MoveToPlannedTips => planned_parent_tip(parent, mappings)
             .map(|base| Some(child_replay_base_requirement(child, base))),
         Strategy::MoveToCurrentTips | Strategy::Squash => Ok(None),
@@ -172,11 +111,10 @@ fn child_replay_bases<'plan>(
 fn preserve_fork_point_child_base(
     parent: &Node,
     child: &Node,
-    selected_bases: &HashMap<BranchName, CommitId>,
     mappings: &BTreeMap<CommitId, CommitId>,
 ) -> Result<CommitId> {
     if child.base() == parent.base() {
-        return selected_bases.get(&parent.branch).cloned().ok_or_else(|| {
+        return mappings.get(&parent.base).cloned().ok_or_else(|| {
             Error::InvalidPlan(format!("parent `{}` has no selected base", parent.branch))
         });
     }

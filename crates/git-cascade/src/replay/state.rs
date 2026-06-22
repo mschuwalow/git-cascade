@@ -1,7 +1,7 @@
+use super::pause::PausePlan;
 use crate::model::Strategy;
 use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{PlanCommit, PlanId, PlanName};
-use crate::replay::PausePlan;
 use crate::storage::Storage;
 use crate::{Error, Result};
 use clap::ValueEnum;
@@ -192,11 +192,11 @@ pub struct ReplayState {
     pub new_tip: CommitId,
     pub strategy: Strategy,
     pub replay_mode: ReplayPauseMode,
-    pub pause_plan: PausePlan,
+    pub(super) pause_plan: PausePlan,
     pub worktree: WorktreeState,
     pub completed_temp_refs: Vec<GitRef>,
-    pub branch_tips: BTreeMap<BranchName, CommitId>,
-    pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
+    pub(super) branch_tips: BTreeMap<BranchName, CommitId>,
+    pub(super) extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
     pub mappings: BTreeMap<CommitId, CommitId>,
     pub pending_branches: Vec<BranchName>,
 }
@@ -351,7 +351,7 @@ pub fn read_state(storage: &Storage) -> Result<Option<ReplayState>> {
     Ok(Some(serde_yaml::from_str(&content)?))
 }
 
-pub struct InitialReplayStateInput<'a> {
+pub(super) struct InitialReplayStateInput<'a> {
     pub plan_name: &'a PlanName,
     pub plan_id: &'a PlanId,
     pub new_tip: &'a CommitId,
@@ -361,11 +361,10 @@ pub struct InitialReplayStateInput<'a> {
     pub pending_branches: Vec<BranchName>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
     pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
-    pub mappings: BTreeMap<CommitId, CommitId>,
     pub worktree: WorktreeState,
 }
 
-pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<ReplayState> {
+pub(super) fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<ReplayState> {
     let now = timestamp()?;
 
     Ok(ReplayState {
@@ -383,7 +382,7 @@ pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<Replay
         completed_temp_refs: Vec::new(),
         branch_tips: input.branch_tips,
         extra_commits: input.extra_commits,
-        mappings: input.mappings,
+        mappings: BTreeMap::new(),
         pending_branches: input.pending_branches,
     })
 }

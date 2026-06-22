@@ -3,7 +3,7 @@ use super::state::{CurrentState, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
 use super::strategy;
 use super::{ReplayOutcome, replay_commits_from_extra};
-use crate::model::{BranchName, CommitId, GitRef};
+use crate::model::{BranchName, CommitId, GitRef, Strategy};
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -18,9 +18,7 @@ where
     state_writer: &'state mut W,
     backend: &'state mut B,
     state: ReplayState,
-    nodes: HashMap<BranchName, usize>,
     temp_tips: HashMap<BranchName, CommitId>,
-    selected_bases: HashMap<BranchName, CommitId>,
 }
 
 struct BranchReplayStart {
@@ -40,23 +38,14 @@ where
         backend: &'state mut B,
         state: ReplayState,
     ) -> Result<Self> {
-        let nodes = plan
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(index, node)| (node.branch.clone(), index))
-            .collect::<HashMap<_, _>>();
         let temp_tips = backend.temp_tips(&state.completed_temp_refs)?;
-        let selected_bases = selected_bases_from_mappings(plan, &state.mappings);
 
         Ok(Self {
             plan,
             state_writer,
             backend,
             state,
-            nodes,
             temp_tips,
-            selected_bases,
         })
     }
 
@@ -95,7 +84,6 @@ where
                 }
                 Phase::ContinueAfterConflict { current } => {
                     self.resolve_conflict(current.clone())?;
-                    self.write_state()?;
                 }
                 Phase::Paused { paused } => {
                     return Ok(ReplayOutcome::Paused {
@@ -184,9 +172,8 @@ where
         commits: &[PlanCommit],
         branch_index: usize,
     ) -> Result<BranchReplayStart> {
-        if let Some(current) = self.replay_current() {
+        if let Some(current) = self.take_replay_current() {
             let commit_index = self.resume_start_commit_index(node, &current, commits)?;
-            self.state.phase = Phase::Replay { current: None };
             return Ok(BranchReplayStart {
                 commit_index,
                 last_rewritten: self.resume_last_rewritten(node, commits, commit_index)?,
@@ -195,8 +182,6 @@ where
         }
 
         let base = self.actual_replay_base(node)?;
-        self.selected_bases
-            .insert(node.branch.clone(), base.clone());
         self.state.mappings.insert(node.base.clone(), base.clone());
         if base != node.base {
             self.backend.prepare_branch(
@@ -335,25 +320,15 @@ where
         let rewritten_tip = if let Some(commit) = commits.last() {
             self.mapped_commit(&commit.oid)?.clone()
         } else {
-            self.selected_bases
-                .get(&node.branch)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
-                })?
+            self.branch_replay_base(node)?.clone()
         };
 
         let branch_replay_base = self.branch_replay_base(node)?.clone();
-        let total_branches = self.total_branches();
-        let rewritten_tip = strategy::finalize_branch_tip(
-            self.state.strategy,
-            self.backend,
-            &self.state,
-            &branch_replay_base,
-            total_branches,
+        let rewritten_tip = self.finalize_branch_tip(
             node,
             commits,
             branch_index,
+            &branch_replay_base,
             rewritten_tip,
         )?;
         if let Some(last_commit) = commits.last() {
@@ -366,6 +341,38 @@ where
             self.pause_branch_end(node, commits, branch_index, &rewritten_tip)
         } else {
             self.complete_branch(node, branch_index, &rewritten_tip)
+        }
+    }
+
+    fn finalize_branch_tip(
+        &mut self,
+        node: &Node,
+        commits: &[PlanCommit],
+        branch_index: usize,
+        branch_replay_base: &CommitId,
+        rewritten_tip: CommitId,
+    ) -> Result<CommitId> {
+        match self.state.strategy {
+            Strategy::Squash if commits.len() > 1 => {
+                let first_commit = commits
+                    .first()
+                    .expect("non-empty commits has a first commit")
+                    .oid
+                    .clone();
+                self.backend.squash_branch(
+                    &self.state,
+                    node,
+                    branch_index,
+                    self.total_branches(),
+                    branch_replay_base,
+                    &first_commit,
+                    &rewritten_tip,
+                )
+            }
+            Strategy::PreserveForkPoints
+            | Strategy::MoveToPlannedTips
+            | Strategy::MoveToCurrentTips
+            | Strategy::Squash => Ok(rewritten_tip),
         }
     }
 
@@ -550,7 +557,7 @@ where
     }
 
     fn branch_replay_base(&self, node: &Node) -> Result<&CommitId> {
-        self.selected_bases.get(&node.branch).ok_or_else(|| {
+        self.state.mappings.get(&node.base).ok_or_else(|| {
             Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
         })
     }
@@ -564,7 +571,6 @@ where
             self.state.strategy,
             parent,
             child,
-            &self.selected_bases,
             &self.state.mappings,
         )
     }
@@ -614,7 +620,6 @@ where
             self.state.strategy,
             parent,
             node,
-            &self.selected_bases,
             &self.state.mappings,
             &self.temp_tips,
         )
@@ -638,19 +643,16 @@ where
     }
 
     fn node(&self, branch: &str) -> Result<&Node> {
-        let index = self
-            .nodes
-            .get(&BranchName::from_git_unchecked(branch))
-            .ok_or_else(|| Error::InvalidPlan(format!("unknown branch `{branch}`")))?;
         self.plan
             .nodes
-            .get(*index)
+            .iter()
+            .find(|node| node.branch.as_str() == branch)
             .ok_or_else(|| Error::InvalidPlan(format!("unknown branch `{branch}`")))
     }
 
-    fn replay_current(&self) -> Option<CurrentState> {
-        match &self.state.phase {
-            Phase::Replay { current } => current.clone(),
+    fn take_replay_current(&mut self) -> Option<CurrentState> {
+        match &mut self.state.phase {
+            Phase::Replay { current } => current.take(),
             _ => None,
         }
     }
@@ -676,18 +678,4 @@ where
     fn can_keep_existing_commit(&self, commit: &PlanCommit, last_rewritten: &CommitId) -> bool {
         commit.parents.first() == Some(last_rewritten)
     }
-}
-
-fn selected_bases_from_mappings(
-    plan: &Plan,
-    mappings: &BTreeMap<CommitId, CommitId>,
-) -> HashMap<BranchName, CommitId> {
-    plan.nodes
-        .iter()
-        .filter_map(|node| {
-            mappings
-                .get(&node.base)
-                .map(|base| (node.branch.clone(), base.clone()))
-        })
-        .collect()
 }
