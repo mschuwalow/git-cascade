@@ -43,7 +43,7 @@ fn status_reports_conflict_state() {
             .and(predicate::str::contains("phase: conflict"))
             .and(predicate::str::contains("plan: stack"))
             .and(predicate::str::contains("new-tip:"))
-            .and(predicate::str::contains("strategy: preserve-fork-points"))
+            .and(predicate::str::contains("strategy: move-to-current-tips"))
             .and(predicate::str::contains("current-branch: pr-2"))
             .and(predicate::str::contains("current-commit:"))
             .and(predicate::str::contains("worktree:"))
@@ -615,6 +615,8 @@ fn pause_at_checkpoints_walks_unchanged_commit_pause_before_branch_end() {
             "stack",
             "--new-tip",
             "pr-1",
+            "--strategy",
+            "preserve-fork-points",
             "--pause-at",
             "checkpoints",
         ])
@@ -672,6 +674,8 @@ fn unchanged_commit_pause_allows_fix_before_remaining_branch() {
             "stack",
             "--new-tip",
             "pr-1",
+            "--strategy",
+            "preserve-fork-points",
             "--pause-at",
             "checkpoints",
         ])
@@ -916,6 +920,8 @@ fn pause_at_checkpoints_stops_at_commit_before_branch_end() {
             "stack",
             "--new-tip",
             "pr-1",
+            "--strategy",
+            "preserve-fork-points",
             "--pause-at",
             "checkpoints",
         ])
@@ -1006,6 +1012,8 @@ fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
             "stack",
             "--new-tip",
             "pr-1",
+            "--strategy",
+            "preserve-fork-points",
             "--pause-at",
             "checkpoints",
         ])

@@ -37,7 +37,7 @@ fn apply_dry_run_linear_stack_prints_commands_without_mutating_refs() {
         .success()
         .stdout(
             predicate::str::contains("# git-cascade apply --dry-run")
-                .and(predicate::str::contains("strategy preserve-fork-points"))
+                .and(predicate::str::contains("strategy move-to-current-tips"))
                 .and(predicate::str::contains("# branch pr-2"))
                 .and(
                     predicate::str::contains("git -C ").and(predicate::str::contains(format!(
@@ -92,7 +92,16 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["plan", "apply", "stack", "--new-tip", "pr-1", "--dry-run"])
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "preserve-fork-points",
+            "--dry-run",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(

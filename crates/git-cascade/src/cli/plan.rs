@@ -34,7 +34,7 @@ pub(super) enum Command {
         #[arg(long, value_name = "REF")]
         new_tip: GitRef,
         /// Replay strategy for dependent branches.
-        #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]

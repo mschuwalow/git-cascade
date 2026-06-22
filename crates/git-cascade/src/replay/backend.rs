@@ -46,6 +46,7 @@ pub(crate) trait ReplayBackend {
         commit_index: usize,
         total_commits: usize,
     ) -> Result<()>;
+    #[allow(clippy::too_many_arguments)]
     fn squash_branch(
         &mut self,
         state: &ReplayState,

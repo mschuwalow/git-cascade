@@ -63,7 +63,15 @@ fn apply_preserves_intermediate_fork_point() {
     rewrite_anchor(&repo);
 
     repo.cascade()
-        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "preserve-fork-points",
+        ])
         .assert()
         .success();
 
