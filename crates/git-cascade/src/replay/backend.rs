@@ -808,7 +808,7 @@ fn temp_tips_from_refs(git: &Git, temp_refs: &[GitRef]) -> Result<HashMap<Branch
     Ok(temp_tips)
 }
 
-fn temp_ref(plan: &Plan, branch: &str) -> GitRef {
+pub(super) fn temp_ref(plan: &Plan, branch: &str) -> GitRef {
     GitRef::new(format!(
         "refs/cascade/tmp/{}/{}",
         plan.plan_id,
