@@ -141,25 +141,6 @@ fn apply_dry_run_strategy_changes_dependent_base_descriptions() {
         .stdout(predicate::str::contains(
             "replay-base <rewritten pr-2 current tip>",
         ));
-
-    repo.cascade()
-        .args([
-            "plan",
-            "apply",
-            "stack",
-            "--new-tip",
-            "pr-1",
-            "--strategy",
-            "squash",
-            "--dry-run",
-        ])
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("git -C ")
-                .and(predicate::str::contains(format!("commit -C {pr2_first}")))
-                .and(predicate::str::contains("replay-base <squashed pr-2 tip>")),
-        );
 }
 
 #[test]

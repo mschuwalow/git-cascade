@@ -7,12 +7,13 @@ use crate::Result;
 use crate::git::Git;
 use crate::model::{BranchName, GitRef, Strategy};
 use crate::replay::{
-    AbortOutcome, PausedState, ReplayOutcome, ReplayPauseMode, abort as abort_apply,
+    AbortOutcome, PausedState, ReplayOutcome, ReplayPauseLocation, abort as abort_apply,
     continue_replay,
 };
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
+use std::collections::BTreeSet;
 use std::process::ExitCode;
 
 #[derive(Debug, Parser)]
@@ -49,9 +50,14 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode for replay.
-        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
-        pause_at: ReplayPauseMode,
+        /// Replay locations to pause at. May be repeated or comma-separated.
+        #[arg(
+            long = "pause-at",
+            value_enum,
+            value_name = "LOCATION",
+            value_delimiter = ','
+        )]
+        pause_at: Vec<ReplayPauseLocation>,
     },
     /// Replay dependents from an old root tip onto an arbitrary replacement tip.
     Replay {
@@ -73,9 +79,14 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode for replay.
-        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
-        pause_at: ReplayPauseMode,
+        /// Replay locations to pause at. May be repeated or comma-separated.
+        #[arg(
+            long = "pause-at",
+            value_enum,
+            value_name = "LOCATION",
+            value_delimiter = ','
+        )]
+        pause_at: Vec<ReplayPauseLocation>,
     },
     /// Update branches after the default branch advanced.
     Sync {
@@ -94,9 +105,14 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode for replay.
-        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
-        pause_at: ReplayPauseMode,
+        /// Replay locations to pause at. May be repeated or comma-separated.
+        #[arg(
+            long = "pause-at",
+            value_enum,
+            value_name = "LOCATION",
+            value_delimiter = ','
+        )]
+        pause_at: Vec<ReplayPauseLocation>,
     },
     /// Move dependents of a branch that landed on the default branch.
     Landed {
@@ -118,9 +134,14 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode for replay.
-        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
-        pause_at: ReplayPauseMode,
+        /// Replay locations to pause at. May be repeated or comma-separated.
+        #[arg(
+            long = "pause-at",
+            value_enum,
+            value_name = "LOCATION",
+            value_delimiter = ','
+        )]
+        pause_at: Vec<ReplayPauseLocation>,
     },
     /// Show the active cascade operation, if any.
     Status,
@@ -169,7 +190,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at,
+                pause_at: pause_locations(pause_at),
             },
         ),
         Command::Replay {
@@ -188,7 +209,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at,
+                pause_at: pause_locations(pause_at),
             },
         ),
         Command::Sync {
@@ -205,7 +226,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at,
+                pause_at: pause_locations(pause_at),
             },
         ),
         Command::Landed {
@@ -224,7 +245,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                replay_mode: pause_at,
+                pause_at: pause_locations(pause_at),
             },
         ),
         Command::Status => status::status(),
@@ -239,6 +260,10 @@ fn completions(shell: Shell) -> Result<()> {
     generate(shell, &mut command, "git-cascade", &mut std::io::stdout());
 
     Ok(())
+}
+
+fn pause_locations(locations: Vec<ReplayPauseLocation>) -> BTreeSet<ReplayPauseLocation> {
+    locations.into_iter().collect()
 }
 
 fn continue_operation() -> Result<()> {

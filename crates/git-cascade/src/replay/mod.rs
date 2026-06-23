@@ -20,12 +20,13 @@ use cleanup::run_deleting_phase;
 use context::ReplayContext;
 use pause::PausePlan;
 pub use state::{
-    BranchReplayState, PauseReason, PausedKind, PausedState, Phase, ReplayPauseMode, ReplayState,
-    RestoreState, WorktreeState,
+    BranchReplayState, PauseReason, PausedKind, PausedState, Phase, ReplayPauseLocation,
+    ReplayState, RestoreState, WorktreeState, pause_location_list,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
 use state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 
 #[derive(Debug, Clone)]
@@ -34,7 +35,7 @@ pub struct ReplayOptions {
     pub new_tip_input: GitRef,
     pub strategy: Strategy,
     pub in_place: bool,
-    pub replay_mode: ReplayPauseMode,
+    pub pause_at: BTreeSet<ReplayPauseLocation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,15 +356,14 @@ fn start_replay_state(
     worktree: WorktreeState,
 ) -> Result<ReplayState> {
     let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
-    let pause_plan =
-        PausePlan::for_plan(options.replay_mode, options.strategy, plan, &extra_commits);
+    let pause_plan = PausePlan::for_plan(&options.pause_at, options.strategy, plan, &extra_commits);
 
     initial_replay_state(InitialReplayStateInput {
         plan_name: &options.plan_name,
         plan_id: &plan.plan_id,
         new_tip,
         strategy: options.strategy,
-        replay_mode: options.replay_mode,
+        pause_at: options.pause_at.clone(),
         pause_plan,
         pending_branches,
         branch_tips,

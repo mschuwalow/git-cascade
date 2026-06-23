@@ -82,30 +82,41 @@ impl std::fmt::Display for Phase {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
-pub enum ReplayPauseMode {
-    #[default]
-    Never,
-    EveryCommit,
-    Checkpoints,
+pub enum ReplayPauseLocation {
+    Commits,
+    ChildBases,
+    BranchEnds,
 }
 
-impl ReplayPauseMode {
+impl ReplayPauseLocation {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Never => "never",
-            Self::EveryCommit => "every-commit",
-            Self::Checkpoints => "checkpoints",
+            Self::Commits => "commits",
+            Self::ChildBases => "child-bases",
+            Self::BranchEnds => "branch-ends",
         }
     }
 }
 
-impl std::fmt::Display for ReplayPauseMode {
+impl std::fmt::Display for ReplayPauseLocation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
+}
+
+pub fn pause_location_list(locations: &BTreeSet<ReplayPauseLocation>) -> String {
+    if locations.is_empty() {
+        return "none".to_owned();
+    }
+
+    locations
+        .iter()
+        .map(|location| location.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -230,7 +241,7 @@ pub struct ReplayState {
     pub updated_at: String,
     pub new_tip: CommitId,
     pub strategy: Strategy,
-    pub replay_mode: ReplayPauseMode,
+    pub pause_at: BTreeSet<ReplayPauseLocation>,
     pub(super) pause_plan: PausePlan,
     pub worktree: WorktreeState,
     pub completed_temp_refs: Vec<GitRef>,
@@ -395,7 +406,7 @@ pub(super) struct InitialReplayStateInput<'a> {
     pub plan_id: &'a PlanId,
     pub new_tip: &'a CommitId,
     pub strategy: Strategy,
-    pub replay_mode: ReplayPauseMode,
+    pub pause_at: BTreeSet<ReplayPauseLocation>,
     pub pause_plan: PausePlan,
     pub pending_branches: Vec<BranchName>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
@@ -415,7 +426,7 @@ pub(super) fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result
         updated_at: now,
         new_tip: input.new_tip.clone(),
         strategy: input.strategy,
-        replay_mode: input.replay_mode,
+        pause_at: input.pause_at,
         pause_plan: input.pause_plan,
         worktree: input.worktree,
         completed_temp_refs: Vec::new(),

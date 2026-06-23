@@ -3,7 +3,7 @@ use super::state::{BranchReplayState, PauseReason, PausedKind, PausedState, Phas
 use super::state_writer::StateWriter;
 use super::strategy;
 use super::{ReplayOutcome, replay_commits_from_extra};
-use crate::model::{BranchName, CommitId, GitRef, Strategy};
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -361,14 +361,6 @@ where
             self.branch_replay_base(node)?.clone()
         };
 
-        let branch_replay_base = self.branch_replay_base(node)?.clone();
-        let rewritten_tip = self.finalize_branch_tip(
-            node,
-            commits,
-            branch_index,
-            &branch_replay_base,
-            rewritten_tip.clone(),
-        )?;
         if let Some(last_commit) = commits.last() {
             self.state
                 .mappings
@@ -387,38 +379,6 @@ where
                 .map(|commit| commit.oid.clone())
                 .unwrap_or_else(|| node.base.clone());
             self.complete_branch(node, mapped_commit, branch_index, &rewritten_tip)
-        }
-    }
-
-    fn finalize_branch_tip(
-        &mut self,
-        node: &Node,
-        commits: &[PlanCommit],
-        branch_index: usize,
-        branch_replay_base: &CommitId,
-        rewritten_tip: CommitId,
-    ) -> Result<CommitId> {
-        match self.state.strategy {
-            Strategy::Squash if commits.len() > 1 => {
-                let first_commit = commits
-                    .first()
-                    .expect("non-empty commits has a first commit")
-                    .oid
-                    .clone();
-                self.backend.squash_branch(
-                    &self.state,
-                    node,
-                    branch_index,
-                    self.total_branches(),
-                    branch_replay_base,
-                    &first_commit,
-                    &rewritten_tip,
-                )
-            }
-            Strategy::PreserveForkPoints
-            | Strategy::MoveToPlannedTips
-            | Strategy::MoveToCurrentTips
-            | Strategy::Squash => Ok(rewritten_tip),
         }
     }
 

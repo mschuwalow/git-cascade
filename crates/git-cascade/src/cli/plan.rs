@@ -4,9 +4,10 @@ use crate::git::Git;
 use crate::model::{GitRef, Strategy};
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::replay::state::read_state;
-use crate::replay::{ReplayOptions, ReplayPauseMode, dry_run, execute};
+use crate::replay::{ReplayOptions, ReplayPauseLocation, dry_run, execute};
 use crate::storage::Storage;
 use clap::Subcommand;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Subcommand)]
 pub(super) enum Command {
@@ -42,9 +43,14 @@ pub(super) enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Pause mode for replay.
-        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
-        pause_at: ReplayPauseMode,
+        /// Replay locations to pause at. May be repeated or comma-separated.
+        #[arg(
+            long = "pause-at",
+            value_enum,
+            value_name = "LOCATION",
+            value_delimiter = ','
+        )]
+        pause_at: Vec<ReplayPauseLocation>,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -109,7 +115,7 @@ fn apply(
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
-    replay_mode: ReplayPauseMode,
+    pause_at: Vec<ReplayPauseLocation>,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
@@ -119,7 +125,7 @@ fn apply(
         new_tip_input: new_tip,
         strategy,
         in_place,
-        replay_mode,
+        pause_at: pause_at.into_iter().collect::<BTreeSet<_>>(),
     };
 
     if is_dry_run {

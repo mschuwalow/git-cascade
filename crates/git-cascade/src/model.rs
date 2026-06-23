@@ -155,8 +155,6 @@ pub enum Strategy {
     MoveToPlannedTips,
     /// Replay each dependent branch onto its parent's rewritten apply-time tip.
     MoveToCurrentTips,
-    /// Collapse each replayed branch into one commit before moving its children.
-    Squash,
 }
 
 impl Strategy {
@@ -165,7 +163,6 @@ impl Strategy {
             Self::PreserveForkPoints => "preserve-fork-points",
             Self::MoveToPlannedTips => "move-to-planned-tips",
             Self::MoveToCurrentTips => "move-to-current-tips",
-            Self::Squash => "squash",
         }
     }
 }
