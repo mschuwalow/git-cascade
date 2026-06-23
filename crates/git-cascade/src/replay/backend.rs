@@ -1,6 +1,4 @@
-use super::{
-    CurrentState, PauseReason, PausedKind, PausedState, ReplayState, RestoreState, WorktreeState,
-};
+use super::{PauseReason, PausedKind, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::model::{BranchName, CommitId, GitRef, Strategy};
@@ -61,7 +59,9 @@ pub(crate) trait ReplayBackend {
     fn continue_cherry_pick(
         &mut self,
         state: &ReplayState,
-        current: &CurrentState,
+        worktree: &str,
+        branch: &BranchName,
+        commit: &CommitId,
     ) -> Result<CommitId>;
     fn resume_paused_branch(
         &mut self,
@@ -299,9 +299,11 @@ impl ReplayBackend for GitReplayBackend<'_> {
     fn continue_cherry_pick(
         &mut self,
         _state: &ReplayState,
-        current: &CurrentState,
+        worktree: &str,
+        _branch: &BranchName,
+        commit: &CommitId,
     ) -> Result<CommitId> {
-        let worktree = std::path::PathBuf::from(&current.worktree);
+        let worktree = std::path::PathBuf::from(worktree);
         let worktree_git = Git::new(&worktree);
         if !worktree_git.unmerged_entries()?.is_empty() {
             return Err(Error::InvalidInvocation(format!(
@@ -314,7 +316,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
             worktree_git.cherry_pick_skip()?;
             eprintln!(
                 "  skipped empty commit {}; the resolution matches the current tree",
-                short_oid(&current.commit)
+                short_oid(commit)
             );
             return worktree_git.head_oid();
         }
@@ -611,12 +613,11 @@ impl ReplayBackend for DryRunReplayBackend {
     fn continue_cherry_pick(
         &mut self,
         _state: &ReplayState,
-        current: &CurrentState,
+        _worktree: &str,
+        branch: &BranchName,
+        commit: &CommitId,
     ) -> Result<CommitId> {
-        Ok(CommitId::new(format!(
-            "<rewritten {}:{}>",
-            current.branch, current.commit
-        )))
+        Ok(CommitId::new(format!("<rewritten {branch}:{commit}>")))
     }
 
     fn resume_paused_branch(

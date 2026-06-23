@@ -31,9 +31,9 @@ fn status_output(storage: &Storage) -> Result<String> {
             output.push_str(&format!("current-branch: {}\n", replay.branch));
             output.push_str("current-commit: none\n");
         }
-        Phase::Conflict { current, .. } | Phase::ContinueAfterConflict { current, .. } => {
-            output.push_str(&format!("current-branch: {}\n", current.branch));
-            output.push_str(&format!("current-commit: {}\n", current.commit));
+        Phase::Conflict { replay, .. } | Phase::ContinueAfterConflict { replay } => {
+            output.push_str(&format!("current-branch: {}\n", replay.branch));
+            output.push_str("current-commit: none\n");
         }
         _ => output.push_str("current: none\n"),
     }

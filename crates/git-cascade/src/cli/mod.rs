@@ -252,14 +252,12 @@ pub(super) fn handle_replay_outcome(outcome: ReplayOutcome, success_message: &st
     match outcome {
         ReplayOutcome::Complete => println!("{success_message}"),
         ReplayOutcome::Paused { paused } => print_paused_message(&paused),
-        ReplayOutcome::Conflict { current, message } => {
-            print_conflict_message(
-                &current.branch,
-                &current.commit,
-                &current.worktree,
-                &message,
-            );
-        }
+        ReplayOutcome::Conflict {
+            branch,
+            commit,
+            worktree,
+            message,
+        } => print_conflict_message(&branch, &commit, &worktree, &message),
     }
 
     Ok(())

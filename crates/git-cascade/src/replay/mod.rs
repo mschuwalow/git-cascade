@@ -20,7 +20,7 @@ use cleanup::run_deleting_phase;
 use context::ReplayContext;
 use pause::PausePlan;
 pub use state::{
-    CurrentState, PauseReason, PausedKind, PausedState, Phase, ReplayPauseMode, ReplayState,
+    BranchReplayState, PauseReason, PausedKind, PausedState, Phase, ReplayPauseMode, ReplayState,
     RestoreState, WorktreeState,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
@@ -41,7 +41,9 @@ pub struct ReplayOptions {
 pub enum ReplayOutcome {
     Complete,
     Conflict {
-        current: CurrentState,
+        branch: BranchName,
+        commit: CommitId,
+        worktree: String,
         message: String,
     },
     Paused {

@@ -29,12 +29,10 @@ pub enum Phase {
         branch_tip: CommitId,
     },
     Conflict {
-        current: CurrentState,
         replay: BranchReplayState,
         message: String,
     },
     ContinueAfterConflict {
-        current: CurrentState,
         replay: BranchReplayState,
     },
     Paused {
@@ -108,13 +106,6 @@ impl std::fmt::Display for ReplayPauseMode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CurrentState {
-    pub branch: BranchName,
-    pub commit: CommitId,
-    pub worktree: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

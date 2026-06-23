@@ -1,7 +1,5 @@
 use super::backend::{CherryPickOutcome, ReplayBackend, RequiredAncestor, temp_ref};
-use super::state::{
-    BranchReplayState, CurrentState, PauseReason, PausedKind, PausedState, Phase, ReplayState,
-};
+use super::state::{BranchReplayState, PauseReason, PausedKind, PausedState, Phase, ReplayState};
 use super::state_writer::StateWriter;
 use super::strategy;
 use super::{ReplayOutcome, replay_commits_from_extra};
@@ -95,16 +93,17 @@ where
                     self.write_state()?;
                     test_hooks::run("after-deleting-state-written")?;
                 }
-                Phase::Conflict {
-                    current, message, ..
-                } => {
+                Phase::Conflict { replay, message } => {
+                    let commit = self.current_replay_commit(replay)?;
                     return Ok(ReplayOutcome::Conflict {
-                        current: current.clone(),
+                        branch: replay.branch.clone(),
+                        commit,
+                        worktree: self.state.worktree.path().to_owned(),
                         message: message.clone(),
                     });
                 }
-                Phase::ContinueAfterConflict { current, replay } => {
-                    self.resolve_conflict(current.clone(), replay.clone())?;
+                Phase::ContinueAfterConflict { replay } => {
+                    self.resolve_conflict(replay.clone())?;
                 }
                 Phase::Paused { paused } => {
                     return Ok(ReplayOutcome::Paused {
@@ -125,11 +124,8 @@ where
 
     pub(super) fn continue_after_pause_or_conflict(&mut self) {
         match &self.state.phase {
-            Phase::Conflict {
-                current, replay, ..
-            } => {
+            Phase::Conflict { replay, .. } => {
                 self.state.phase = Phase::ContinueAfterConflict {
-                    current: current.clone(),
                     replay: replay.clone(),
                 };
             }
@@ -286,13 +282,7 @@ where
         )? {
             CherryPickOutcome::Applied(rewritten_commit) => Ok(Some(rewritten_commit)),
             CherryPickOutcome::Conflict { message } => {
-                let current = CurrentState {
-                    branch: node.branch.clone(),
-                    commit: commit.oid.clone(),
-                    worktree: self.state.worktree.path().to_owned(),
-                };
                 self.state.phase = Phase::Conflict {
-                    current: current.clone(),
                     replay: self.replay_after_commit(node, commit_index, last_rewritten.clone()),
                     message,
                 };
@@ -497,15 +487,15 @@ where
         Ok(())
     }
 
-    fn resolve_conflict(
-        &mut self,
-        current: CurrentState,
-        mut replay: BranchReplayState,
-    ) -> Result<()> {
-        let rewritten_commit = self.backend.continue_cherry_pick(&self.state, &current)?;
-        self.state
-            .mappings
-            .insert(current.commit.clone(), rewritten_commit.clone());
+    fn resolve_conflict(&mut self, mut replay: BranchReplayState) -> Result<()> {
+        let commit = self.current_replay_commit(&replay)?;
+        let rewritten_commit = self.backend.continue_cherry_pick(
+            &self.state,
+            self.state.worktree.path(),
+            &replay.branch,
+            &commit,
+        )?;
+        self.state.mappings.insert(commit, rewritten_commit.clone());
         replay.last_rewritten = rewritten_commit;
         self.state.phase = Phase::ContinueReplay { replay };
         self.write_state()?;
@@ -513,18 +503,6 @@ where
     }
 
     fn resume_paused_branch(&mut self, paused: PausedState) -> Result<()> {
-        if !self
-            .plan
-            .nodes
-            .iter()
-            .any(|node| node.branch.as_str() == paused.branch())
-        {
-            return Err(Error::InvalidPlan(format!(
-                "paused branch `{}` is not in the active plan",
-                paused.branch()
-            )));
-        }
-
         let required_ancestors = self.resume_requirements(&paused)?;
         let rewritten_tip =
             self.backend
@@ -619,6 +597,26 @@ where
         self.state.mappings.get(&node.base).ok_or_else(|| {
             Error::InvalidPlan(format!("branch `{}` has no selected base", node.branch))
         })
+    }
+
+    fn current_replay_commit(&self, replay: &BranchReplayState) -> Result<CommitId> {
+        let node = self.node(replay.branch.as_str())?;
+        let commits = replay_commits_from_extra(node, &self.state.extra_commits);
+        let index = replay.commit_index.checked_sub(1).ok_or_else(|| {
+            Error::InvalidPlan(format!(
+                "replay state for branch `{}` has no current commit",
+                replay.branch
+            ))
+        })?;
+        commits
+            .get(index)
+            .map(|commit| commit.oid.clone())
+            .ok_or_else(|| {
+                Error::InvalidPlan(format!(
+                    "replay state for branch `{}` points past replay commits",
+                    replay.branch
+                ))
+            })
     }
 
     fn required_child_replay_base(
