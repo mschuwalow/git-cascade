@@ -10,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct PausePlan {
     commit_pauses: BTreeMap<CommitId, BTreeSet<PauseReason>>,
-    branch_end_commit_pauses: BTreeSet<CommitId>,
     branch_end_pauses: BTreeMap<BranchName, BTreeSet<PauseReason>>,
 }
 
@@ -23,7 +22,6 @@ impl PausePlan {
     ) -> Self {
         let mut pause_plan = Self {
             commit_pauses: BTreeMap::new(),
-            branch_end_commit_pauses: BTreeSet::new(),
             branch_end_pauses: BTreeMap::new(),
         };
 
@@ -46,7 +44,6 @@ impl PausePlan {
                     } else if let Some(last_commit) = commits.last() {
                         pause_plan
                             .add_commit_reason(last_commit.oid.clone(), PauseReason::BranchEnd);
-                        pause_plan.add_branch_end_commit_pause(last_commit.oid.clone());
                     }
                 }
                 ReplayPauseMode::Checkpoints => {
@@ -61,7 +58,6 @@ impl PausePlan {
                     } else if let Some(last_commit) = commits.last() {
                         pause_plan
                             .add_commit_reason(last_commit.oid.clone(), PauseReason::BranchEnd);
-                        pause_plan.add_branch_end_commit_pause(last_commit.oid.clone());
                     }
                 }
             }
@@ -74,10 +70,6 @@ impl PausePlan {
         self.commit_pauses.get(commit)
     }
 
-    pub(super) fn is_branch_end_commit_pause(&self, commit: &CommitId) -> bool {
-        self.branch_end_commit_pauses.contains(commit)
-    }
-
     pub(super) fn branch_end_pause_reasons(
         &self,
         branch: &BranchName,
@@ -87,10 +79,6 @@ impl PausePlan {
 
     fn add_commit_reason(&mut self, commit: CommitId, reason: PauseReason) {
         self.commit_pauses.entry(commit).or_default().insert(reason);
-    }
-
-    fn add_branch_end_commit_pause(&mut self, commit: CommitId) {
-        self.branch_end_commit_pauses.insert(commit);
     }
 
     fn add_branch_end_reason(&mut self, branch: BranchName, reason: PauseReason) {

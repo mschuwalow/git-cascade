@@ -238,20 +238,6 @@ where
             .insert(commit.oid.clone(), rewritten_commit.clone());
         if let Some(pause_reasons) = self.state.pause_plan.commit_pause_reasons(&commit.oid) {
             let pause_reasons = pause_reasons.clone();
-            if self
-                .state
-                .pause_plan
-                .is_branch_end_commit_pause(&commit.oid)
-            {
-                self.pause_branch_end(
-                    node,
-                    commit.oid.clone(),
-                    branch_index,
-                    &rewritten_commit,
-                    pause_reasons,
-                )?;
-                return Ok(None);
-            }
             if self.can_keep_existing_commit(commit, last_rewritten) {
                 self.backend.prepare_branch(
                     &self.state,
@@ -364,27 +350,22 @@ where
         };
 
         let branch_replay_base = self.branch_replay_base(node)?.clone();
-        let pre_finalize_tip = rewritten_tip.clone();
-        let rewritten_tip = self.finalize_branch_tip(
+        let finalized_tip = self.finalize_branch_tip(
             node,
             commits,
             branch_index,
             &branch_replay_base,
-            rewritten_tip,
+            rewritten_tip.clone(),
         )?;
+        let branch_tip_was_rewritten = finalized_tip.is_some();
+        let rewritten_tip = finalized_tip.unwrap_or(rewritten_tip);
         if let Some(last_commit) = commits.last() {
             self.state
                 .mappings
                 .insert(last_commit.oid.clone(), rewritten_tip.clone());
         }
 
-        if self.branch_was_squashed(
-            commits,
-            &branch_replay_base,
-            &pre_finalize_tip,
-            &rewritten_tip,
-        ) && let Some(reasons) = self.branch_end_pause_reasons(node)
-        {
+        if branch_tip_was_rewritten && let Some(reasons) = self.branch_end_pause_reasons(node) {
             let mapped_commit = commits
                 .last()
                 .map(|commit| commit.oid.clone())
@@ -395,19 +376,6 @@ where
         }
     }
 
-    fn branch_was_squashed(
-        &self,
-        commits: &[PlanCommit],
-        branch_replay_base: &CommitId,
-        pre_finalize_tip: &CommitId,
-        rewritten_tip: &CommitId,
-    ) -> bool {
-        self.state.strategy == Strategy::Squash
-            && commits.len() > 1
-            && rewritten_tip != branch_replay_base
-            && rewritten_tip != pre_finalize_tip
-    }
-
     fn finalize_branch_tip(
         &mut self,
         node: &Node,
@@ -415,7 +383,7 @@ where
         branch_index: usize,
         branch_replay_base: &CommitId,
         rewritten_tip: CommitId,
-    ) -> Result<CommitId> {
+    ) -> Result<Option<CommitId>> {
         match self.state.strategy {
             Strategy::Squash if commits.len() > 1 => {
                 let first_commit = commits
@@ -423,7 +391,7 @@ where
                     .expect("non-empty commits has a first commit")
                     .oid
                     .clone();
-                self.backend.squash_branch(
+                let finalized_tip = self.backend.squash_branch(
                     &self.state,
                     node,
                     branch_index,
@@ -431,12 +399,17 @@ where
                     branch_replay_base,
                     &first_commit,
                     &rewritten_tip,
-                )
+                )?;
+                if finalized_tip == rewritten_tip {
+                    Ok(None)
+                } else {
+                    Ok(Some(finalized_tip))
+                }
             }
             Strategy::PreserveForkPoints
             | Strategy::MoveToPlannedTips
             | Strategy::MoveToCurrentTips
-            | Strategy::Squash => Ok(rewritten_tip),
+            | Strategy::Squash => Ok(None),
         }
     }
 
