@@ -1606,7 +1606,7 @@ fn deleting_phase() -> Phase {
 
 fn conflict_commit(state: &ReplayState) -> CommitId {
     match &state.phase {
-        Phase::Conflict { replay, .. } => replay.current_commit.clone().unwrap(),
+        Phase::Conflict { replay, .. } => replay.last_replayed_commit.clone().unwrap(),
         phase => panic!("expected conflict phase, got {phase:?}"),
     }
 }

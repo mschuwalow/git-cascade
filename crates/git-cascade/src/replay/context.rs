@@ -163,7 +163,7 @@ where
             &node,
             commits.len(),
             replay.commit_index,
-            replay.current_commit.is_some(),
+            replay.last_replayed_commit.is_some(),
         )?;
         for (commit_index, commit) in commits.iter().enumerate().skip(replay.commit_index) {
             match self.replay_commit(
@@ -186,13 +186,13 @@ where
         &self,
         node: &Node,
         commit_index: usize,
-        current_commit: CommitId,
+        last_replayed_commit: CommitId,
         last_rewritten: CommitId,
     ) -> BranchReplayState {
         BranchReplayState {
             branch: node.branch.clone(),
             commit_index: commit_index + 1,
-            current_commit: Some(current_commit),
+            last_replayed_commit: Some(last_replayed_commit),
             last_rewritten,
         }
     }
@@ -217,7 +217,7 @@ where
         Ok(BranchReplayState {
             branch: node.branch.clone(),
             commit_index: 0,
-            current_commit: None,
+            last_replayed_commit: None,
             last_rewritten: base,
         })
     }
@@ -607,7 +607,7 @@ where
     }
 
     fn current_replay_commit(&self, replay: &BranchReplayState) -> Result<CommitId> {
-        replay.current_commit.clone().ok_or_else(|| {
+        replay.last_replayed_commit.clone().ok_or_else(|| {
             Error::InvalidPlan(format!(
                 "replay state for branch `{}` has no current commit",
                 replay.branch

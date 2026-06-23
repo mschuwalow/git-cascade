@@ -631,7 +631,7 @@ impl ReplayBackend for DryRunReplayBackend {
             writeln!(self.output, "# pause after branch {}", paused.branch).unwrap();
         } else if let PausedKind::MidBranch { replay } = &paused.kind {
             let commit = replay
-                .current_commit
+                .last_replayed_commit
                 .as_ref()
                 .expect("mid-branch pause has current commit");
             let kind = if paused.reasons().contains(&PauseReason::ChildBase) {

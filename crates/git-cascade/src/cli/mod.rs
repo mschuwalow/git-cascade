@@ -287,7 +287,7 @@ pub(super) fn print_paused_message(paused: &PausedState) {
         );
     } else if let crate::replay::PausedKind::MidBranch { replay } = &paused.kind {
         let commit = replay
-            .current_commit
+            .last_replayed_commit
             .as_ref()
             .expect("mid-branch pause has current commit");
         let kind = if paused

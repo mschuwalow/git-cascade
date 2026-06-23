@@ -29,7 +29,7 @@ fn status_output(storage: &Storage) -> Result<String> {
     match &state.phase {
         Phase::ContinueReplay { replay } => {
             output.push_str(&format!("current-branch: {}\n", replay.branch));
-            if let Some(commit) = &replay.current_commit {
+            if let Some(commit) = &replay.last_replayed_commit {
                 output.push_str(&format!("current-commit: {commit}\n"));
             } else {
                 output.push_str("current-commit: none\n");
@@ -37,7 +37,7 @@ fn status_output(storage: &Storage) -> Result<String> {
         }
         Phase::Conflict { replay, .. } | Phase::ContinueAfterConflict { replay } => {
             output.push_str(&format!("current-branch: {}\n", replay.branch));
-            if let Some(commit) = &replay.current_commit {
+            if let Some(commit) = &replay.last_replayed_commit {
                 output.push_str(&format!("current-commit: {commit}\n"));
             } else {
                 output.push_str("current-commit: none\n");
@@ -54,7 +54,7 @@ fn status_output(storage: &Storage) -> Result<String> {
             } else {
                 output.push_str("paused-kind: commit\n");
             }
-            if let Some(commit) = &replay.current_commit {
+            if let Some(commit) = &replay.last_replayed_commit {
                 output.push_str(&format!("paused-commit: {commit}\n"));
             }
         }

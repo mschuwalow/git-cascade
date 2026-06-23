@@ -55,7 +55,7 @@ pub enum Phase {
 pub struct BranchReplayState {
     pub branch: BranchName,
     pub commit_index: usize,
-    pub current_commit: Option<CommitId>,
+    pub last_replayed_commit: Option<CommitId>,
     pub last_rewritten: CommitId,
 }
 
