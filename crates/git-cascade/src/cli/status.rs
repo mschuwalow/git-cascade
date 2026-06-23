@@ -49,8 +49,9 @@ fn status_output(storage: &Storage) -> Result<String> {
         _ => output.push_str("current: none\n"),
     }
     if let Phase::Paused { paused } | Phase::ContinueAfterPause { paused } = &state.phase {
-        if paused.reasons().contains(&PauseReason::BranchEnd) {
+        if let PausedKind::BranchEnd { replay_base, .. } = &paused.kind {
             output.push_str("paused-kind: branch-end\n");
+            output.push_str(&format!("paused-base: {replay_base}\n"));
         } else if let PausedKind::MidBranch { replay } = &paused.kind {
             if paused.reasons().contains(&PauseReason::ChildBase) {
                 output.push_str("paused-kind: child-base\n");

@@ -66,11 +66,11 @@ fn planned_tip_checkpoint(node: &Node, commits: &[PlanCommit]) -> BTreeSet<Commi
     let Some(last_commit) = commits.last() else {
         return BTreeSet::new();
     };
-    let commit_oids = commits
-        .iter()
-        .map(|commit| commit.oid.as_str())
-        .collect::<BTreeSet<_>>();
-    if node.tip != last_commit.oid && commit_oids.contains(node.tip.as_str()) {
+    if node.tip != last_commit.oid
+        && commits
+            .iter()
+            .any(|commit| commit.oid.as_str() == node.tip.as_str())
+    {
         BTreeSet::from([node.tip.clone()])
     } else {
         BTreeSet::new()

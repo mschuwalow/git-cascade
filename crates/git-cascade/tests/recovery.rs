@@ -282,7 +282,10 @@ fn pause_at_child_bases_and_branch_ends_allows_fix_before_replaying_child() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+        .stdout(
+            predicate::str::contains("paused after branch `pr-2`")
+                .and(predicate::str::contains("rewritten base")),
+        );
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
@@ -292,6 +295,10 @@ fn pause_at_child_bases_and_branch_ends_allows_fix_before_replaying_child() {
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
+    repo.cascade().arg("status").assert().success().stdout(
+        predicate::str::contains("paused-kind: branch-end")
+            .and(predicate::str::contains("paused-base:")),
+    );
 
     let worktree = std::path::PathBuf::from(state.worktree.path());
     std::fs::write(worktree.join("fix.txt"), "fix\n").unwrap();

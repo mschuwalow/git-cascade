@@ -42,7 +42,7 @@ impl PausePlan {
                 }
             }
             if pause_at.contains(&ReplayPauseLocation::BranchEnds) {
-                pause_plan.add_branch_end_reason(node.branch.clone(), PauseReason::BranchEnd);
+                pause_plan.add_branch_end_reason(node.branch.clone());
             }
         }
 
@@ -64,10 +64,10 @@ impl PausePlan {
         self.commit_pauses.entry(commit).or_default().insert(reason);
     }
 
-    fn add_branch_end_reason(&mut self, branch: BranchName, reason: PauseReason) {
+    fn add_branch_end_reason(&mut self, branch: BranchName) {
         self.branch_end_pauses
             .entry(branch)
             .or_default()
-            .insert(reason);
+            .insert(PauseReason::BranchEnd);
     }
 }

@@ -300,12 +300,9 @@ fn print_conflict_message(
 }
 
 pub(super) fn print_paused_message(paused: &PausedState) {
-    if paused
-        .reasons()
-        .contains(&crate::replay::PauseReason::BranchEnd)
-    {
+    if let crate::replay::PausedKind::BranchEnd { replay_base, .. } = &paused.kind {
         println!(
-            "paused after branch `{}`; run checks in {}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`\nstop reasons: {}",
+            "paused after branch `{}`; rewritten base `{replay_base}`; run checks in {}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`\nstop reasons: {}",
             paused.branch,
             paused.worktree,
             paused.reason_list(),

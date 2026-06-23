@@ -50,14 +50,12 @@ pub(crate) trait ReplayBackend {
     ) -> Result<()>;
     fn continue_cherry_pick(
         &mut self,
-        state: &ReplayState,
         worktree: &str,
         branch: &BranchName,
         commit: &CommitId,
     ) -> Result<CommitId>;
     fn resume_paused_branch(
         &mut self,
-        state: &ReplayState,
         paused: &PausedState,
         required_ancestors: &[RequiredAncestor],
     ) -> Result<CommitId>;
@@ -75,7 +73,7 @@ pub(crate) trait ReplayBackend {
         node: &Node,
         branch_index: usize,
         total_branches: usize,
-        _rewritten_tip: &CommitId,
+        rewritten_tip: &CommitId,
     ) -> Result<(GitRef, CommitId)>;
     fn final_update(&mut self, plan: &Plan, state: &ReplayState) -> Result<()>;
     fn restore_checkout(&mut self, state: &ReplayState, force_checkout: bool) -> Result<()>;
@@ -256,7 +254,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn continue_cherry_pick(
         &mut self,
-        _state: &ReplayState,
         worktree: &str,
         _branch: &BranchName,
         commit: &CommitId,
@@ -295,7 +292,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
 
     fn resume_paused_branch(
         &mut self,
-        _state: &ReplayState,
         paused: &PausedState,
         required_ancestors: &[RequiredAncestor],
     ) -> Result<CommitId> {
@@ -539,7 +535,6 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn continue_cherry_pick(
         &mut self,
-        _state: &ReplayState,
         _worktree: &str,
         branch: &BranchName,
         commit: &CommitId,
@@ -549,13 +544,13 @@ impl ReplayBackend for DryRunReplayBackend {
 
     fn resume_paused_branch(
         &mut self,
-        _state: &ReplayState,
         paused: &PausedState,
         _required_ancestors: &[RequiredAncestor],
     ) -> Result<CommitId> {
         writeln!(self.output).unwrap();
-        if paused.reasons().contains(&PauseReason::BranchEnd) {
+        if let PausedKind::BranchEnd { replay_base, .. } = &paused.kind {
             writeln!(self.output, "# pause after branch {}", paused.branch).unwrap();
+            writeln!(self.output, "# rewritten base: {replay_base}").unwrap();
         } else if let PausedKind::MidBranch { replay } = &paused.kind {
             let commit = replay
                 .last_replayed_commit

@@ -155,6 +155,7 @@ pub enum PausedKind {
     BranchEnd {
         temp_ref: GitRef,
         mapped_commit: CommitId,
+        replay_base: CommitId,
     },
 }
 
