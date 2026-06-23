@@ -280,7 +280,7 @@ pub(super) fn print_paused_message(paused: &PausedState) {
         .contains(&crate::replay::PauseReason::BranchEnd)
     {
         println!(
-            "paused after branch `{}`; run checks in {}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`\npause reasons: {}",
+            "paused after branch `{}`; run checks in {}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`\nstop reasons: {}",
             paused.branch,
             paused.worktree,
             paused.reason_list(),
@@ -295,7 +295,7 @@ pub(super) fn print_paused_message(paused: &PausedState) {
             "commit"
         };
         println!(
-            "paused at {kind} `{commit}` on branch `{}`; run checks in {}, commit any fixes, then run `git cascade continue`\npause reasons: {}",
+            "paused at {kind} `{commit}` on branch `{}`; run checks in {}, commit any fixes, then run `git cascade continue`\nstop reasons: {}",
             paused.branch,
             paused.worktree,
             paused.reason_list(),

@@ -429,7 +429,7 @@ fn pause_every_commit_with_squash_pauses_before_and_after_squash() {
         .success()
         .stdout(
             predicate::str::contains("paused at commit")
-                .and(predicate::str::contains("pause reasons: commit")),
+                .and(predicate::str::contains("stop reasons: commit")),
         );
     let state = read_state(&repo);
     assert!(!paused_state(&state).is_branch_end());
@@ -437,16 +437,15 @@ fn pause_every_commit_with_squash_pauses_before_and_after_squash() {
 
     repo.cascade().arg("continue").assert().success().stdout(
         predicate::str::contains("paused at commit")
-            .and(predicate::str::contains("pause reasons: commit")),
+            .and(predicate::str::contains("stop reasons: commit")),
     );
     let state = read_state(&repo);
     assert!(!paused_state(&state).is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 
     repo.cascade().arg("continue").assert().success().stdout(
-        predicate::str::contains("paused after branch `pr-2`").and(predicate::str::contains(
-            "pause reasons: commit, branch-end",
-        )),
+        predicate::str::contains("paused after branch `pr-2`")
+            .and(predicate::str::contains("stop reasons: commit, branch-end")),
     );
     let state = read_state(&repo);
     assert!(paused_state(&state).is_branch_end());
@@ -488,16 +487,15 @@ fn pause_every_commit_with_squash_pauses_after_single_commit_branch() {
         .success()
         .stdout(
             predicate::str::contains("paused at commit")
-                .and(predicate::str::contains("pause reasons: commit")),
+                .and(predicate::str::contains("stop reasons: commit")),
         );
     let state = read_state(&repo);
     assert!(!paused_state(&state).is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 
     repo.cascade().arg("continue").assert().success().stdout(
-        predicate::str::contains("paused after branch `pr-2`").and(predicate::str::contains(
-            "pause reasons: commit, branch-end",
-        )),
+        predicate::str::contains("paused after branch `pr-2`")
+            .and(predicate::str::contains("stop reasons: commit, branch-end")),
     );
     let state = read_state(&repo);
     assert!(paused_state(&state).is_branch_end());
@@ -527,7 +525,7 @@ fn pause_at_checkpoints_pauses_after_empty_branch() {
 
     repo.cascade().arg("continue").assert().success().stdout(
         predicate::str::contains("paused after branch `pr-empty`")
-            .and(predicate::str::contains("pause reasons: branch-end")),
+            .and(predicate::str::contains("stop reasons: branch-end")),
     );
     let state = read_state(&repo);
     let paused = paused_state(&state);
@@ -567,7 +565,7 @@ fn pause_every_commit_with_squash_pauses_after_empty_branch() {
 
     repo.cascade().arg("continue").assert().success().stdout(
         predicate::str::contains("paused after branch `pr-empty`")
-            .and(predicate::str::contains("pause reasons: branch-end")),
+            .and(predicate::str::contains("stop reasons: branch-end")),
     );
     let state = read_state(&repo);
     let paused = paused_state(&state);
