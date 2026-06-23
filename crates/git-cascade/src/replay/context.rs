@@ -3,7 +3,7 @@ use super::state::{BranchReplayState, PauseReason, PausedKind, PausedState, Phas
 use super::state_writer::StateWriter;
 use super::strategy;
 use super::{ReplayOutcome, replay_commits_from_extra};
-use crate::model::{BranchName, CommitId, GitRef, Strategy};
+use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{Node, Plan, PlanCommit};
 use crate::test_hooks;
 use crate::{Error, Result};
@@ -329,26 +329,6 @@ where
         self.write_state()
     }
 
-    fn paused_branch_end_state(
-        &self,
-        node: &Node,
-        mapped_commit: CommitId,
-        branch_tip: CommitId,
-        temp_ref: GitRef,
-        reasons: BTreeSet<PauseReason>,
-    ) -> PausedState {
-        PausedState {
-            branch: node.branch.clone(),
-            rewritten_tip: branch_tip,
-            worktree: self.state.worktree.path().to_owned(),
-            reasons,
-            kind: PausedKind::BranchEnd {
-                temp_ref,
-                mapped_commit,
-            },
-        }
-    }
-
     fn finish_branch(
         &mut self,
         node: &Node,
@@ -361,72 +341,26 @@ where
             self.branch_replay_base(node)?.clone()
         };
 
-        let branch_replay_base = self.branch_replay_base(node)?.clone();
-        let rewritten_tip = self.finalize_branch_tip(
-            node,
-            commits,
-            branch_index,
-            &branch_replay_base,
-            rewritten_tip.clone(),
-        )?;
         if let Some(last_commit) = commits.last() {
             self.state
                 .mappings
                 .insert(last_commit.oid.clone(), rewritten_tip.clone());
         }
+        let mapped_commit = commits
+            .last()
+            .map(|commit| commit.oid.clone())
+            .unwrap_or_else(|| node.base.clone());
 
-        if let Some(reasons) = self.branch_end_pause_reasons(node) {
-            let mapped_commit = commits
-                .last()
-                .map(|commit| commit.oid.clone())
-                .unwrap_or_else(|| node.base.clone());
-            self.pause_branch_end(node, mapped_commit, branch_index, &rewritten_tip, reasons)
-        } else {
-            let mapped_commit = commits
-                .last()
-                .map(|commit| commit.oid.clone())
-                .unwrap_or_else(|| node.base.clone());
-            self.complete_branch(node, mapped_commit, branch_index, &rewritten_tip)
-        }
-    }
-
-    fn finalize_branch_tip(
-        &mut self,
-        node: &Node,
-        commits: &[PlanCommit],
-        branch_index: usize,
-        branch_replay_base: &CommitId,
-        rewritten_tip: CommitId,
-    ) -> Result<CommitId> {
-        match self.state.strategy {
-            Strategy::Squash if commits.len() > 1 => {
-                let first_commit = commits
-                    .first()
-                    .expect("non-empty commits has a first commit")
-                    .oid
-                    .clone();
-                self.backend.squash_branch(
-                    &self.state,
-                    node,
-                    branch_index,
-                    self.total_branches(),
-                    branch_replay_base,
-                    &first_commit,
-                    &rewritten_tip,
-                )
-            }
-            Strategy::PreserveForkPoints
-            | Strategy::MoveToPlannedTips
-            | Strategy::MoveToCurrentTips
-            | Strategy::Squash => Ok(rewritten_tip),
-        }
-    }
-
-    fn branch_end_pause_reasons(&self, node: &Node) -> Option<BTreeSet<PauseReason>> {
-        self.state
+        if let Some(reasons) = self
+            .state
             .pause_plan
             .branch_end_pause_reasons(&node.branch)
             .cloned()
+        {
+            self.pause_branch_end(node, mapped_commit, branch_index, &rewritten_tip, reasons)
+        } else {
+            self.complete_branch(node, mapped_commit, branch_index, &rewritten_tip)
+        }
     }
 
     fn complete_branch(
@@ -473,6 +407,7 @@ where
         rewritten_tip: &CommitId,
         reasons: BTreeSet<PauseReason>,
     ) -> Result<()> {
+        let replay_base = self.branch_replay_base(node)?.clone();
         self.backend.prepare_branch(
             &self.state,
             branch_index,
@@ -481,13 +416,17 @@ where
             rewritten_tip,
         )?;
         self.state.phase = Phase::Paused {
-            paused: self.paused_branch_end_state(
-                node,
-                mapped_commit,
-                rewritten_tip.clone(),
-                temp_ref(self.plan, node.branch.as_str()),
+            paused: PausedState {
+                branch: node.branch.clone(),
+                rewritten_tip: rewritten_tip.clone(),
+                worktree: self.state.worktree.path().to_owned(),
                 reasons,
-            ),
+                kind: PausedKind::BranchEnd {
+                    temp_ref: temp_ref(self.plan, node.branch.as_str()),
+                    mapped_commit,
+                    replay_base,
+                },
+            },
         };
         self.write_state()?;
         Ok(())
@@ -496,7 +435,6 @@ where
     fn resolve_conflict(&mut self, mut replay: BranchReplayState) -> Result<()> {
         let commit = self.current_replay_commit(&replay)?;
         let rewritten_commit = self.backend.continue_cherry_pick(
-            &self.state,
             self.state.worktree.path(),
             &replay.branch,
             &commit,
@@ -510,13 +448,14 @@ where
 
     fn resume_paused_branch(&mut self, paused: PausedState) -> Result<()> {
         let required_ancestors = self.resume_requirements(&paused)?;
-        let rewritten_tip =
-            self.backend
-                .resume_paused_branch(&self.state, &paused, &required_ancestors)?;
+        let rewritten_tip = self
+            .backend
+            .resume_paused_branch(&paused, &required_ancestors)?;
         match paused.kind {
             PausedKind::BranchEnd {
                 temp_ref,
                 mapped_commit,
+                ..
             } => {
                 self.state.phase = Phase::FinalizeBranch {
                     branch: paused.branch,

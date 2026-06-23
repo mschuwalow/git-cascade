@@ -115,48 +115,6 @@ fn apply_move_to_current_tips_replays_child_on_parent_tip() {
 }
 
 #[test]
-fn apply_squash_collapses_parent_before_replaying_child() {
-    let repo = intermediate_stack();
-    repo.cascade()
-        .args([
-            "plan",
-            "create",
-            "stack",
-            "--old-base",
-            "main",
-            "--old-tip",
-            "pr-1",
-        ])
-        .assert()
-        .success();
-    rewrite_anchor(&repo);
-
-    repo.cascade()
-        .args([
-            "plan",
-            "apply",
-            "stack",
-            "--new-tip",
-            "pr-1",
-            "--strategy",
-            "squash",
-        ])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Squashing branch 1/2 `pr-2`"));
-
-    assert_eq!(repo.rev_list_reverse("pr-1..pr-2").len(), 1);
-    assert_eq!(repo.merge_base("pr-2", "pr-3"), repo.rev_parse("pr-2"));
-    assert_eq!(repo.show("pr-2:pr2-a.txt"), "b\n");
-    assert_eq!(repo.show("pr-2:pr2-b.txt"), "c\n");
-    assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
-    assert_eq!(
-        repo.git_output(["log", "-1", "--format=%s", "pr-2"]).trim(),
-        "pr-2 a"
-    );
-}
-
-#[test]
 fn apply_move_to_planned_tips_ignores_parent_commits_added_after_planning() {
     let repo = intermediate_stack();
     repo.cascade()

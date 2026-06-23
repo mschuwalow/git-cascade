@@ -13,7 +13,7 @@ pub(super) fn checkpoint_commits(
     match strategy {
         Strategy::PreserveForkPoints => preserve_fork_point_checkpoints(plan, node, commits),
         Strategy::MoveToPlannedTips => planned_tip_checkpoint(node, commits),
-        Strategy::MoveToCurrentTips | Strategy::Squash => BTreeSet::new(),
+        Strategy::MoveToCurrentTips => BTreeSet::new(),
     }
 }
 
@@ -27,7 +27,7 @@ pub(super) fn actual_child_base(
     match strategy {
         Strategy::PreserveForkPoints => preserve_fork_point_child_base(parent, child, mappings),
         Strategy::MoveToPlannedTips => planned_parent_tip(parent, mappings),
-        Strategy::MoveToCurrentTips | Strategy::Squash => current_parent_tip(parent, temp_tips),
+        Strategy::MoveToCurrentTips => current_parent_tip(parent, temp_tips),
     }
 }
 
@@ -42,7 +42,7 @@ pub(super) fn required_child_replay_base(
             .map(|base| Some(child_replay_base_requirement(child, base))),
         Strategy::MoveToPlannedTips => planned_parent_tip(parent, mappings)
             .map(|base| Some(child_replay_base_requirement(child, base))),
-        Strategy::MoveToCurrentTips | Strategy::Squash => Ok(None),
+        Strategy::MoveToCurrentTips => Ok(None),
     }
 }
 
@@ -66,11 +66,11 @@ fn planned_tip_checkpoint(node: &Node, commits: &[PlanCommit]) -> BTreeSet<Commi
     let Some(last_commit) = commits.last() else {
         return BTreeSet::new();
     };
-    let commit_oids = commits
-        .iter()
-        .map(|commit| commit.oid.as_str())
-        .collect::<BTreeSet<_>>();
-    if node.tip != last_commit.oid && commit_oids.contains(node.tip.as_str()) {
+    if node.tip != last_commit.oid
+        && commits
+            .iter()
+            .any(|commit| commit.oid.as_str() == node.tip.as_str())
+    {
         BTreeSet::from([node.tip.clone()])
     } else {
         BTreeSet::new()
