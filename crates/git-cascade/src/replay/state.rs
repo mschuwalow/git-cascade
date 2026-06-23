@@ -17,9 +17,9 @@ use time::format_description::well_known::Rfc3339;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
-    Replay {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        current: Option<CurrentState>,
+    Replay,
+    ContinueReplay {
+        current: CurrentState,
     },
     Conflict {
         current: CurrentState,
@@ -47,7 +47,8 @@ pub enum Phase {
 impl Phase {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Replay { .. } => "replay",
+            Self::Replay => "replay",
+            Self::ContinueReplay { .. } => "continue_replay",
             Self::Conflict { .. } => "conflict",
             Self::ContinueAfterConflict { .. } => "continue_after_conflict",
             Self::Paused { .. } => "paused",
@@ -398,7 +399,7 @@ pub(super) fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result
 
     Ok(ReplayState {
         version: 1,
-        phase: Phase::Replay { current: None },
+        phase: Phase::Replay,
         plan_name: input.plan_name.clone(),
         plan_id: *input.plan_id,
         started_at: now.clone(),

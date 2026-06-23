@@ -58,8 +58,11 @@ where
         self.backend.start(&self.state)?;
         loop {
             match &self.state.phase {
-                Phase::Replay { .. } => {
-                    self.replay_pending_branches()?;
+                Phase::Replay => {
+                    self.replay_pending_branches(None)?;
+                }
+                Phase::ContinueReplay { current } => {
+                    self.replay_pending_branches(Some(current.clone()))?;
                 }
                 Phase::FinalUpdate => {
                     self.backend.final_update(self.plan, &self.state)?;
@@ -123,13 +126,14 @@ where
         };
     }
 
-    fn replay_pending_branches(&mut self) -> Result<()> {
+    fn replay_pending_branches(&mut self, replay_current: Option<CurrentState>) -> Result<()> {
         if self.total_branches() == 0 {
             self.backend.no_branches()?;
         }
 
+        let mut replay_current = replay_current;
         while let Some(branch) = self.state.pending_branches.first().cloned() {
-            if self.replay_branch(branch)? {
+            if self.replay_branch(branch, replay_current.take().as_ref())? {
                 return Ok(());
             }
         }
@@ -139,11 +143,16 @@ where
         Ok(())
     }
 
-    fn replay_branch(&mut self, branch: BranchName) -> Result<bool> {
+    fn replay_branch(
+        &mut self,
+        branch: BranchName,
+        replay_current: Option<&CurrentState>,
+    ) -> Result<bool> {
         let node = self.node(branch.as_str())?.clone();
         let branch_index = self.branch_index();
         let commits = replay_commits_from_extra(&node, &self.state.extra_commits);
-        let mut start = self.prepare_branch_replay(&node, &commits, branch_index)?;
+        let mut start =
+            self.prepare_branch_replay(&node, &commits, branch_index, replay_current)?;
 
         self.backend.start_replay(
             branch_index,
@@ -175,16 +184,33 @@ where
         node: &Node,
         commits: &[PlanCommit],
         branch_index: usize,
+        replay_current: Option<&CurrentState>,
     ) -> Result<BranchReplayStart> {
-        if let Some(current) = self.take_replay_current() {
-            let commit_index = self.resume_start_commit_index(node, &current, commits)?;
-            return Ok(BranchReplayStart {
-                commit_index,
-                last_rewritten: self.resume_last_rewritten(node, commits, commit_index)?,
-                was_resuming: true,
-            });
+        match replay_current {
+            Some(current) => self.resume_branch_replay(node, current, commits),
+            None => self.start_branch_replay(node, branch_index),
         }
+    }
 
+    fn resume_branch_replay(
+        &self,
+        node: &Node,
+        current: &CurrentState,
+        commits: &[PlanCommit],
+    ) -> Result<BranchReplayStart> {
+        let commit_index = self.resume_start_commit_index(node, current, commits)?;
+        Ok(BranchReplayStart {
+            commit_index,
+            last_rewritten: self.resume_last_rewritten(node, commits, commit_index)?,
+            was_resuming: true,
+        })
+    }
+
+    fn start_branch_replay(
+        &mut self,
+        node: &Node,
+        branch_index: usize,
+    ) -> Result<BranchReplayStart> {
         let base = self.actual_replay_base(node)?;
         self.state.mappings.insert(node.base.clone(), base.clone());
         if base != node.base {
@@ -448,7 +474,7 @@ where
         };
         self.record_temp_ref(&node.branch, temp_ref, branch_tip);
         self.remove_pending_branch(&node.branch)?;
-        self.state.phase = Phase::Replay { current: None };
+        self.state.phase = Phase::Replay;
         self.write_state()?;
         Ok(false)
     }
@@ -486,9 +512,7 @@ where
         self.state
             .mappings
             .insert(current.commit.clone(), rewritten_commit);
-        self.state.phase = Phase::Replay {
-            current: Some(current),
-        };
+        self.state.phase = Phase::ContinueReplay { current };
         self.write_state()?;
         Ok(())
     }
@@ -519,16 +543,16 @@ where
                 self.record_temp_ref(&branch, temp_ref, rewritten_tip.clone());
                 self.state.mappings.insert(mapped_commit, rewritten_tip);
                 self.remove_pending_branch(&branch)?;
-                self.state.phase = Phase::Replay { current: None };
+                self.state.phase = Phase::Replay;
             }
             PausedKind::MidBranch { commit } => {
                 self.state.mappings.insert(commit.clone(), rewritten_tip);
-                self.state.phase = Phase::Replay {
-                    current: Some(CurrentState {
+                self.state.phase = Phase::ContinueReplay {
+                    current: CurrentState {
                         branch: paused.branch,
                         commit,
                         worktree: paused.worktree,
-                    }),
+                    },
                 };
             }
         }
@@ -674,13 +698,6 @@ where
             .iter()
             .find(|node| node.branch.as_str() == branch)
             .ok_or_else(|| Error::InvalidPlan(format!("unknown branch `{branch}`")))
-    }
-
-    fn take_replay_current(&mut self) -> Option<CurrentState> {
-        match &mut self.state.phase {
-            Phase::Replay { current } => current.take(),
-            _ => None,
-        }
     }
 
     fn branch_index(&self) -> usize {

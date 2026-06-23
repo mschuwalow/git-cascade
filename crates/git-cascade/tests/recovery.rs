@@ -1278,10 +1278,10 @@ fn continue_resumes_replay_phase_after_crash() {
         .assert()
         .success();
 
-    // Simulate a crash mid-replay: the persisted phase is `replay` with no
-    // current commit, and the worktree still has a cherry-pick in progress.
+    // Simulate a crash mid-replay: the persisted phase is `replay`, and the
+    // worktree still has a cherry-pick in progress.
     let mut state = read_state(&repo);
-    state.phase = Phase::Replay { current: None };
+    state.phase = Phase::Replay;
     state.mappings.clear();
     write_state(&repo, &state);
 
@@ -1609,10 +1609,7 @@ fn deleting_phase() -> Phase {
 
 fn conflict_current(state: &ReplayState) -> CurrentState {
     match &state.phase {
-        Phase::Conflict { current, .. }
-        | Phase::Replay {
-            current: Some(current),
-        } => current.clone(),
+        Phase::Conflict { current, .. } | Phase::ContinueReplay { current } => current.clone(),
         phase => panic!("expected conflict or replay current phase, got {phase:?}"),
     }
 }
