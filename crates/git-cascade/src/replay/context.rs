@@ -186,11 +186,13 @@ where
         &self,
         node: &Node,
         commit_index: usize,
+        current_commit: CommitId,
         last_rewritten: CommitId,
     ) -> BranchReplayState {
         BranchReplayState {
             branch: node.branch.clone(),
             commit_index: commit_index + 1,
+            current_commit: Some(current_commit),
             last_rewritten,
             was_resuming: true,
         }
@@ -216,6 +218,7 @@ where
         Ok(BranchReplayState {
             branch: node.branch.clone(),
             commit_index: 0,
+            current_commit: None,
             last_rewritten: base,
             was_resuming: false,
         })
@@ -244,10 +247,14 @@ where
             self.pause_at_commit(
                 node,
                 branch_index,
-                &commit.oid,
                 &rewritten_commit,
                 pause_reasons,
-                self.replay_after_commit(node, commit_index, rewritten_commit.clone()),
+                self.replay_after_commit(
+                    node,
+                    commit_index,
+                    commit.oid.clone(),
+                    rewritten_commit.clone(),
+                ),
             )?;
             return Ok(CommitReplay::Stopped);
         }
@@ -283,7 +290,12 @@ where
             CherryPickOutcome::Applied(rewritten_commit) => Ok(Some(rewritten_commit)),
             CherryPickOutcome::Conflict { message } => {
                 self.state.phase = Phase::Conflict {
-                    replay: self.replay_after_commit(node, commit_index, last_rewritten.clone()),
+                    replay: self.replay_after_commit(
+                        node,
+                        commit_index,
+                        commit.oid.clone(),
+                        last_rewritten.clone(),
+                    ),
                     message,
                 };
                 self.write_state()?;
@@ -296,7 +308,6 @@ where
         &mut self,
         node: &Node,
         branch_index: usize,
-        commit: &CommitId,
         rewritten_tip: &CommitId,
         reasons: BTreeSet<PauseReason>,
         replay: BranchReplayState,
@@ -314,10 +325,7 @@ where
             rewritten_tip: rewritten_tip.clone(),
             worktree,
             reasons,
-            kind: PausedKind::MidBranch {
-                commit: commit.clone(),
-                replay,
-            },
+            kind: PausedKind::MidBranch { replay },
         };
         self.state.phase = Phase::Paused { paused };
         self.write_state()
@@ -520,7 +528,8 @@ where
                     branch_tip: rewritten_tip,
                 };
             }
-            PausedKind::MidBranch { commit, mut replay } => {
+            PausedKind::MidBranch { mut replay } => {
+                let commit = self.current_replay_commit(&replay)?;
                 self.state
                     .mappings
                     .insert(commit.clone(), rewritten_tip.clone());
@@ -600,23 +609,12 @@ where
     }
 
     fn current_replay_commit(&self, replay: &BranchReplayState) -> Result<CommitId> {
-        let node = self.node(replay.branch.as_str())?;
-        let commits = replay_commits_from_extra(node, &self.state.extra_commits);
-        let index = replay.commit_index.checked_sub(1).ok_or_else(|| {
+        replay.current_commit.clone().ok_or_else(|| {
             Error::InvalidPlan(format!(
                 "replay state for branch `{}` has no current commit",
                 replay.branch
             ))
-        })?;
-        commits
-            .get(index)
-            .map(|commit| commit.oid.clone())
-            .ok_or_else(|| {
-                Error::InvalidPlan(format!(
-                    "replay state for branch `{}` points past replay commits",
-                    replay.branch
-                ))
-            })
+        })
     }
 
     fn required_child_replay_base(

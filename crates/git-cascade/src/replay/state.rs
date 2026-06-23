@@ -55,6 +55,7 @@ pub enum Phase {
 pub struct BranchReplayState {
     pub branch: BranchName,
     pub commit_index: usize,
+    pub current_commit: Option<CommitId>,
     pub last_rewritten: CommitId,
     pub was_resuming: bool,
 }
@@ -139,7 +140,6 @@ pub struct PausedState {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum PausedKind {
     MidBranch {
-        commit: CommitId,
         replay: BranchReplayState,
     },
     BranchEnd {

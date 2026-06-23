@@ -285,7 +285,11 @@ pub(super) fn print_paused_message(paused: &PausedState) {
             paused.worktree,
             paused.reason_list(),
         );
-    } else if let crate::replay::PausedKind::MidBranch { commit, .. } = &paused.kind {
+    } else if let crate::replay::PausedKind::MidBranch { replay } = &paused.kind {
+        let commit = replay
+            .current_commit
+            .as_ref()
+            .expect("mid-branch pause has current commit");
         let kind = if paused
             .reasons()
             .contains(&crate::replay::PauseReason::ChildBase)

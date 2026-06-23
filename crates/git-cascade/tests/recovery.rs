@@ -1351,7 +1351,7 @@ fn continue_can_stop_again_on_later_conflict() {
         .assert()
         .success();
     let first_state = read_state(&repo);
-    let first_conflict = conflict_commit(&repo, &first_state);
+    let first_conflict = conflict_commit(&first_state);
     let worktree = std::path::PathBuf::from(first_state.worktree.path());
     std::fs::write(worktree.join("a.txt"), "resolved a\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "a.txt"]);
@@ -1363,7 +1363,7 @@ fn continue_can_stop_again_on_later_conflict() {
 
     let second_state = read_state(&repo);
     assert!(matches!(second_state.phase, Phase::Conflict { .. }));
-    let second_conflict = conflict_commit(&repo, &second_state);
+    let second_conflict = conflict_commit(&second_state);
     assert_ne!(second_conflict, first_conflict);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
 }
@@ -1604,20 +1604,9 @@ fn deleting_phase() -> Phase {
     Phase::Deleting { delete_plan: false }
 }
 
-fn conflict_commit(repo: &TestRepo, state: &ReplayState) -> CommitId {
+fn conflict_commit(state: &ReplayState) -> CommitId {
     match &state.phase {
-        Phase::Conflict { replay, .. } => {
-            let plan = Plan::from_yaml(
-                &std::fs::read_to_string(repo.plan_path(state.plan_name.as_str())).unwrap(),
-            )
-            .unwrap();
-            let node = plan
-                .nodes
-                .iter()
-                .find(|node| node.branch == replay.branch)
-                .unwrap();
-            node.commits[replay.commit_index - 1].oid.clone()
-        }
+        Phase::Conflict { replay, .. } => replay.current_commit.clone().unwrap(),
         phase => panic!("expected conflict phase, got {phase:?}"),
     }
 }
