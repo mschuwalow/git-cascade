@@ -7,7 +7,7 @@ use crate::{Error, Result};
 use clap::ValueEnum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -98,43 +98,64 @@ pub struct CurrentState {
     pub worktree: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum PauseReason {
+    Commit,
+    ChildBase,
+    BranchEnd,
+}
+
+impl PauseReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::ChildBase => "child-base",
+            Self::BranchEnd => "branch-end",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PausedState {
+    pub branch: BranchName,
+    pub rewritten_tip: CommitId,
+    pub worktree: String,
+    pub reasons: BTreeSet<PauseReason>,
+    pub kind: PausedKind,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-pub enum PausedState {
+pub enum PausedKind {
+    MidBranch {
+        commit: CommitId,
+    },
     BranchEnd {
-        branch: BranchName,
-        rewritten_tip: CommitId,
         temp_ref: GitRef,
         mapped_commit: CommitId,
-        worktree: String,
-    },
-    Commit {
-        branch: BranchName,
-        commit: CommitId,
-        rewritten_tip: CommitId,
-        worktree: String,
     },
 }
 
 impl PausedState {
     pub fn branch(&self) -> &str {
-        match self {
-            Self::BranchEnd { branch, .. } | Self::Commit { branch, .. } => branch.as_str(),
-        }
+        self.branch.as_str()
     }
 
     pub fn rewritten_tip(&self) -> &str {
-        match self {
-            Self::BranchEnd { rewritten_tip, .. } | Self::Commit { rewritten_tip, .. } => {
-                rewritten_tip.as_str()
-            }
-        }
+        self.rewritten_tip.as_str()
     }
 
     pub fn worktree(&self) -> &str {
-        match self {
-            Self::BranchEnd { worktree, .. } | Self::Commit { worktree, .. } => worktree,
-        }
+        &self.worktree
+    }
+
+    pub fn reasons(&self) -> &BTreeSet<PauseReason> {
+        &self.reasons
+    }
+
+    pub fn is_branch_end(&self) -> bool {
+        matches!(self.kind, PausedKind::BranchEnd { .. })
     }
 }
 

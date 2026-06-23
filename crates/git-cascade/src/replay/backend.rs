@@ -1,4 +1,6 @@
-use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
+use super::{
+    CurrentState, PauseReason, PausedKind, PausedState, ReplayState, RestoreState, WorktreeState,
+};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
 use crate::model::{BranchName, CommitId, GitRef, Strategy};
@@ -364,7 +366,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
                 required.commit
             )));
         }
-        if let PausedState::BranchEnd { temp_ref, .. } = paused {
+        if let PausedKind::BranchEnd { temp_ref, .. } = &paused.kind {
             self.git.update_ref(temp_ref.as_str(), &head)?;
         }
         eprintln!(
@@ -634,13 +636,27 @@ impl ReplayBackend for DryRunReplayBackend {
         _required_ancestors: &[RequiredAncestor],
     ) -> Result<CommitId> {
         writeln!(self.output).unwrap();
-        match paused {
-            PausedState::BranchEnd { branch, .. } => {
-                writeln!(self.output, "# pause after branch {branch}").unwrap();
-            }
-            PausedState::Commit { branch, commit, .. } => {
-                writeln!(self.output, "# pause at commit {branch}:{commit}").unwrap();
-            }
+        if paused.reasons().contains(&PauseReason::BranchEnd) {
+            writeln!(
+                self.output,
+                "# pause after branch {} ({})",
+                paused.branch,
+                pause_reasons(paused)
+            )
+            .unwrap();
+        } else if let PausedKind::MidBranch { commit } = &paused.kind {
+            let kind = if paused.reasons().contains(&PauseReason::ChildBase) {
+                "child base"
+            } else {
+                "commit"
+            };
+            writeln!(
+                self.output,
+                "# pause at {kind} {}:{commit} ({})",
+                paused.branch,
+                pause_reasons(paused)
+            )
+            .unwrap();
         }
         writeln!(
             self.output,
@@ -699,6 +715,15 @@ impl ReplayBackend for DryRunReplayBackend {
         }
         Ok(())
     }
+}
+
+fn pause_reasons(paused: &PausedState) -> String {
+    paused
+        .reasons()
+        .iter()
+        .map(|reason| reason.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Detects a cherry-pick that stopped because it became empty: the pick is

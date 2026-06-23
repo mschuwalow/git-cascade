@@ -20,7 +20,8 @@ use cleanup::run_deleting_phase;
 use context::ReplayContext;
 use pause::PausePlan;
 pub use state::{
-    CurrentState, PausedState, Phase, ReplayPauseMode, ReplayState, RestoreState, WorktreeState,
+    CurrentState, PauseReason, PausedKind, PausedState, Phase, ReplayPauseMode, ReplayState,
+    RestoreState, WorktreeState,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
 use state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};

@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::git::Git;
 use crate::replay::state::read_state;
-use crate::replay::{PausedState, Phase};
+use crate::replay::{PauseReason, PausedKind, Phase};
 use crate::storage::Storage;
 
 pub(super) fn status() -> Result<()> {
@@ -38,15 +38,25 @@ fn status_output(storage: &Storage) -> Result<String> {
         _ => output.push_str("current: none\n"),
     }
     if let Phase::Paused { paused } | Phase::ContinueAfterPause { paused } = &state.phase {
-        match paused {
-            PausedState::BranchEnd { .. } => {
-                output.push_str("paused-kind: branch-end\n");
-            }
-            PausedState::Commit { commit, .. } => {
+        if paused.reasons().contains(&PauseReason::BranchEnd) {
+            output.push_str("paused-kind: branch-end\n");
+        } else if let PausedKind::MidBranch { commit } = &paused.kind {
+            if paused.reasons().contains(&PauseReason::ChildBase) {
+                output.push_str("paused-kind: child-base\n");
+            } else {
                 output.push_str("paused-kind: commit\n");
-                output.push_str(&format!("paused-commit: {commit}\n"));
             }
+            output.push_str(&format!("paused-commit: {commit}\n"));
         }
+        output.push_str(&format!(
+            "paused-reasons: {}\n",
+            paused
+                .reasons()
+                .iter()
+                .map(|reason| reason.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
         output.push_str(&format!("paused-branch: {}\n", paused.branch()));
         output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip()));
     }

@@ -277,21 +277,41 @@ fn print_conflict_message(
 }
 
 pub(super) fn print_paused_message(paused: &PausedState) {
-    match paused {
-        PausedState::BranchEnd {
-            branch, worktree, ..
-        } => println!(
-            "paused after branch `{branch}`; run checks in {worktree}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`"
-        ),
-        PausedState::Commit {
-            branch,
-            commit,
-            worktree,
-            ..
-        } => println!(
-            "paused at commit `{commit}` on branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
-        ),
+    if paused
+        .reasons()
+        .contains(&crate::replay::PauseReason::BranchEnd)
+    {
+        println!(
+            "paused after branch `{}` ({}); run checks in {}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`",
+            paused.branch,
+            pause_reasons(paused),
+            paused.worktree,
+        );
+    } else if let crate::replay::PausedKind::MidBranch { commit } = &paused.kind {
+        let kind = if paused
+            .reasons()
+            .contains(&crate::replay::PauseReason::ChildBase)
+        {
+            "child base commit"
+        } else {
+            "commit"
+        };
+        println!(
+            "paused at {kind} `{commit}` on branch `{}` ({}); run checks in {}, commit any fixes, then run `git cascade continue`",
+            paused.branch,
+            pause_reasons(paused),
+            paused.worktree,
+        );
     }
+}
+
+fn pause_reasons(paused: &PausedState) -> String {
+    paused
+        .reasons()
+        .iter()
+        .map(|reason| reason.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn abort() -> Result<()> {

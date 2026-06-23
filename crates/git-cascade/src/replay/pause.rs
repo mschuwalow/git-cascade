@@ -1,5 +1,5 @@
 use super::replay_commits_from_extra;
-use super::state::ReplayPauseMode;
+use super::state::{PauseReason, ReplayPauseMode};
 use super::strategy as branch_strategy;
 use crate::model::Strategy;
 use crate::model::{BranchName, CommitId};
@@ -9,8 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct PausePlan {
-    pauses: BTreeSet<CommitId>,
-    branch_end_pauses: BTreeSet<BranchName>,
+    commit_pauses: BTreeMap<CommitId, BTreeSet<PauseReason>>,
+    branch_end_commit_pauses: BTreeSet<CommitId>,
+    branch_end_pauses: BTreeMap<BranchName, BTreeSet<PauseReason>>,
 }
 
 impl PausePlan {
@@ -21,8 +22,9 @@ impl PausePlan {
         extra_commits: &BTreeMap<BranchName, Vec<PlanCommit>>,
     ) -> Self {
         let mut pause_plan = Self {
-            pauses: BTreeSet::new(),
-            branch_end_pauses: BTreeSet::new(),
+            commit_pauses: BTreeMap::new(),
+            branch_end_commit_pauses: BTreeSet::new(),
+            branch_end_pauses: BTreeMap::new(),
         };
 
         if mode == ReplayPauseMode::Never {
@@ -34,20 +36,33 @@ impl PausePlan {
             match mode {
                 ReplayPauseMode::Never => unreachable!("handled before collecting pause points"),
                 ReplayPauseMode::EveryCommit => {
-                    pause_plan
-                        .pauses
-                        .extend(commits.iter().map(|commit| commit.oid.clone()));
-                    if matches!(strategy, Strategy::Squash) && !commits.is_empty() {
-                        pause_plan.branch_end_pauses.insert(node.branch.clone());
+                    for commit in &commits {
+                        pause_plan.add_commit_reason(commit.oid.clone(), PauseReason::Commit);
+                    }
+                    if matches!(strategy, Strategy::Squash) && commits.len() > 1 {
+                        pause_plan
+                            .add_branch_end_reason(node.branch.clone(), PauseReason::BranchEnd);
+                        pause_plan.add_branch_end_reason(node.branch.clone(), PauseReason::Commit);
+                    } else if let Some(last_commit) = commits.last() {
+                        pause_plan
+                            .add_commit_reason(last_commit.oid.clone(), PauseReason::BranchEnd);
+                        pause_plan.add_branch_end_commit_pause(last_commit.oid.clone());
                     }
                 }
                 ReplayPauseMode::Checkpoints => {
-                    pause_plan
-                        .pauses
-                        .extend(branch_strategy::checkpoint_commits(
-                            strategy, plan, node, &commits,
-                        ));
-                    pause_plan.branch_end_pauses.insert(node.branch.clone());
+                    for commit in
+                        branch_strategy::checkpoint_commits(strategy, plan, node, &commits)
+                    {
+                        pause_plan.add_commit_reason(commit, PauseReason::ChildBase);
+                    }
+                    if matches!(strategy, Strategy::Squash) && commits.len() > 1 {
+                        pause_plan
+                            .add_branch_end_reason(node.branch.clone(), PauseReason::BranchEnd);
+                    } else if let Some(last_commit) = commits.last() {
+                        pause_plan
+                            .add_commit_reason(last_commit.oid.clone(), PauseReason::BranchEnd);
+                        pause_plan.add_branch_end_commit_pause(last_commit.oid.clone());
+                    }
                 }
             }
         }
@@ -55,11 +70,33 @@ impl PausePlan {
         pause_plan
     }
 
-    pub(super) fn pauses_at_commit(&self, commit: &CommitId) -> bool {
-        self.pauses.contains(commit)
+    pub(super) fn commit_pause_reasons(&self, commit: &CommitId) -> Option<&BTreeSet<PauseReason>> {
+        self.commit_pauses.get(commit)
     }
 
-    pub(super) fn pauses_at_branch_end(&self, branch: &BranchName) -> bool {
-        self.branch_end_pauses.contains(branch)
+    pub(super) fn is_branch_end_commit_pause(&self, commit: &CommitId) -> bool {
+        self.branch_end_commit_pauses.contains(commit)
+    }
+
+    pub(super) fn branch_end_pause_reasons(
+        &self,
+        branch: &BranchName,
+    ) -> Option<&BTreeSet<PauseReason>> {
+        self.branch_end_pauses.get(branch)
+    }
+
+    fn add_commit_reason(&mut self, commit: CommitId, reason: PauseReason) {
+        self.commit_pauses.entry(commit).or_default().insert(reason);
+    }
+
+    fn add_branch_end_commit_pause(&mut self, commit: CommitId) {
+        self.branch_end_commit_pauses.insert(commit);
+    }
+
+    fn add_branch_end_reason(&mut self, branch: BranchName, reason: PauseReason) {
+        self.branch_end_pauses
+            .entry(branch)
+            .or_default()
+            .insert(reason);
     }
 }
