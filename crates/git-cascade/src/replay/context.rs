@@ -95,14 +95,16 @@ where
                     self.write_state()?;
                     test_hooks::run("after-deleting-state-written")?;
                 }
-                Phase::Conflict { current, message } => {
+                Phase::Conflict {
+                    current, message, ..
+                } => {
                     return Ok(ReplayOutcome::Conflict {
                         current: current.clone(),
                         message: message.clone(),
                     });
                 }
-                Phase::ContinueAfterConflict { current } => {
-                    self.resolve_conflict(current.clone())?;
+                Phase::ContinueAfterConflict { current, replay } => {
+                    self.resolve_conflict(current.clone(), replay.clone())?;
                 }
                 Phase::Paused { paused } => {
                     return Ok(ReplayOutcome::Paused {
@@ -123,9 +125,12 @@ where
 
     pub(super) fn continue_after_pause_or_conflict(&mut self) {
         match &self.state.phase {
-            Phase::Conflict { current, .. } => {
+            Phase::Conflict {
+                current, replay, ..
+            } => {
                 self.state.phase = Phase::ContinueAfterConflict {
                     current: current.clone(),
+                    replay: replay.clone(),
                 };
             }
             Phase::Paused { paused } => {
@@ -138,10 +143,6 @@ where
     }
 
     fn prepare_next_branch_replay(&mut self) -> Result<()> {
-        if self.total_branches() == 0 {
-            self.backend.no_branches()?;
-        }
-
         let Some(branch) = self.state.pending_branches.first().cloned() else {
             self.state.phase = Phase::FinalUpdate;
             self.write_state()?;
@@ -185,28 +186,18 @@ where
         self.finish_branch(&node, &commits, branch_index)
     }
 
-    fn resume_branch_replay(
+    fn replay_after_commit(
         &self,
         node: &Node,
-        current: &CurrentState,
-        commits: &[PlanCommit],
-    ) -> Result<BranchReplayState> {
-        let commit_index = self.resume_start_commit_index(node, current, commits)?;
-        Ok(BranchReplayState {
+        commit_index: usize,
+        last_rewritten: CommitId,
+    ) -> BranchReplayState {
+        BranchReplayState {
             branch: node.branch.clone(),
-            commit_index,
-            last_rewritten: self.resume_last_rewritten(node, commits, commit_index)?,
+            commit_index: commit_index + 1,
+            last_rewritten,
             was_resuming: true,
-        })
-    }
-
-    fn resume_branch_replay_from_current(
-        &self,
-        current: &CurrentState,
-    ) -> Result<BranchReplayState> {
-        let node = self.node(current.branch.as_str())?;
-        let commits = replay_commits_from_extra(node, &self.state.extra_commits);
-        self.resume_branch_replay(node, current, &commits)
+        }
     }
 
     fn start_branch_replay(
@@ -232,24 +223,6 @@ where
             last_rewritten: base,
             was_resuming: false,
         })
-    }
-
-    fn resume_last_rewritten(
-        &self,
-        node: &Node,
-        commits: &[PlanCommit],
-        start_commit_index: usize,
-    ) -> Result<CommitId> {
-        commits
-            .get(start_commit_index.wrapping_sub(1))
-            .and_then(|commit| self.state.mappings.get(&commit.oid))
-            .cloned()
-            .ok_or_else(|| {
-                Error::InvalidPlan(format!(
-                    "branch `{}` has no rewritten commit to resume from",
-                    node.branch
-                ))
-            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -278,6 +251,7 @@ where
                 &commit.oid,
                 &rewritten_commit,
                 pause_reasons,
+                self.replay_after_commit(node, commit_index, rewritten_commit.clone()),
             )?;
             return Ok(CommitReplay::Stopped);
         }
@@ -319,6 +293,7 @@ where
                 };
                 self.state.phase = Phase::Conflict {
                     current: current.clone(),
+                    replay: self.replay_after_commit(node, commit_index, last_rewritten.clone()),
                     message,
                 };
                 self.write_state()?;
@@ -334,6 +309,7 @@ where
         commit: &CommitId,
         rewritten_tip: &CommitId,
         reasons: BTreeSet<PauseReason>,
+        replay: BranchReplayState,
     ) -> Result<()> {
         self.backend.prepare_branch(
             &self.state,
@@ -350,6 +326,7 @@ where
             reasons,
             kind: PausedKind::MidBranch {
                 commit: commit.clone(),
+                replay,
             },
         };
         self.state.phase = Phase::Paused { paused };
@@ -520,14 +497,17 @@ where
         Ok(())
     }
 
-    fn resolve_conflict(&mut self, current: CurrentState) -> Result<()> {
+    fn resolve_conflict(
+        &mut self,
+        current: CurrentState,
+        mut replay: BranchReplayState,
+    ) -> Result<()> {
         let rewritten_commit = self.backend.continue_cherry_pick(&self.state, &current)?;
         self.state
             .mappings
-            .insert(current.commit.clone(), rewritten_commit);
-        self.state.phase = Phase::ContinueReplay {
-            replay: self.resume_branch_replay_from_current(&current)?,
-        };
+            .insert(current.commit.clone(), rewritten_commit.clone());
+        replay.last_rewritten = rewritten_commit;
+        self.state.phase = Phase::ContinueReplay { replay };
         self.write_state()?;
         Ok(())
     }
@@ -562,16 +542,12 @@ where
                     branch_tip: rewritten_tip,
                 };
             }
-            PausedKind::MidBranch { commit } => {
-                self.state.mappings.insert(commit.clone(), rewritten_tip);
-                let current = CurrentState {
-                    branch: paused.branch,
-                    commit,
-                    worktree: paused.worktree,
-                };
-                self.state.phase = Phase::ContinueReplay {
-                    replay: self.resume_branch_replay_from_current(&current)?,
-                };
+            PausedKind::MidBranch { commit, mut replay } => {
+                self.state
+                    .mappings
+                    .insert(commit.clone(), rewritten_tip.clone());
+                replay.last_rewritten = rewritten_tip;
+                self.state.phase = Phase::ContinueReplay { replay };
             }
         }
         self.write_state()?;
@@ -656,37 +632,6 @@ where
             child,
             &self.state.mappings,
         )
-    }
-
-    fn resume_start_commit_index(
-        &self,
-        node: &Node,
-        current: &CurrentState,
-        commits: &[PlanCommit],
-    ) -> Result<usize> {
-        if current.branch != node.branch {
-            return Err(Error::InvalidPlan(format!(
-                "current branch `{}` is not the next pending branch `{}`",
-                current.branch, node.branch
-            )));
-        }
-        if !self.state.mappings.contains_key(&current.commit) {
-            return Err(Error::InvalidPlan(format!(
-                "current commit `{}` for branch `{}` has no rewritten mapping",
-                current.commit, current.branch
-            )));
-        }
-
-        commits
-            .iter()
-            .position(|commit| commit.oid == current.commit)
-            .map(|index| index + 1)
-            .ok_or_else(|| {
-                Error::InvalidPlan(format!(
-                    "current commit `{}` is not part of branch `{}`",
-                    current.commit, current.branch
-                ))
-            })
     }
 
     fn actual_replay_base(&self, node: &Node) -> Result<CommitId> {

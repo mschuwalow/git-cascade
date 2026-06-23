@@ -66,6 +66,7 @@ pub fn dry_run(
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
     let ordered = branches_in_topological_order(plan)?;
+    ensure_branches_to_replay(&ordered)?;
     let worktree = if options.in_place {
         git.worktree_root()?
     } else {
@@ -117,6 +118,7 @@ pub fn execute(
     let new_tip = git.resolve_commit(&options.new_tip_input)?;
     validate_merge_parents_for_apply(git, plan, &branch_refs, &new_tip)?;
     let ordered = branches_in_topological_order(plan)?;
+    ensure_branches_to_replay(&ordered)?;
     let (worktree_state, worktree) = if options.in_place {
         let worktree = git.worktree_root()?;
         git.ensure_clean_worktree()?;
@@ -256,6 +258,15 @@ fn ensure_plan_matches_state(plan: &Plan, state: &ReplayState) -> Result<()> {
             "active apply state references plan id `{}`, but plan `{}` has id `{}`",
             state.plan_id, state.plan_name, plan.plan_id
         )));
+    }
+    Ok(())
+}
+
+fn ensure_branches_to_replay(branches: &[BranchName]) -> Result<()> {
+    if branches.is_empty() {
+        return Err(Error::InvalidPlan(
+            "plan has no branches to replay".to_owned(),
+        ));
     }
     Ok(())
 }

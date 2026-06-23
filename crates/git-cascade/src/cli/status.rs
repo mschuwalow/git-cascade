@@ -31,7 +31,7 @@ fn status_output(storage: &Storage) -> Result<String> {
             output.push_str(&format!("current-branch: {}\n", replay.branch));
             output.push_str("current-commit: none\n");
         }
-        Phase::Conflict { current, .. } | Phase::ContinueAfterConflict { current } => {
+        Phase::Conflict { current, .. } | Phase::ContinueAfterConflict { current, .. } => {
             output.push_str(&format!("current-branch: {}\n", current.branch));
             output.push_str(&format!("current-commit: {}\n", current.commit));
         }
@@ -40,7 +40,7 @@ fn status_output(storage: &Storage) -> Result<String> {
     if let Phase::Paused { paused } | Phase::ContinueAfterPause { paused } = &state.phase {
         if paused.reasons().contains(&PauseReason::BranchEnd) {
             output.push_str("paused-kind: branch-end\n");
-        } else if let PausedKind::MidBranch { commit } = &paused.kind {
+        } else if let PausedKind::MidBranch { commit, .. } = &paused.kind {
             if paused.reasons().contains(&PauseReason::ChildBase) {
                 output.push_str("paused-kind: child-base\n");
             } else {

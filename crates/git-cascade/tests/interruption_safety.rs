@@ -3,6 +3,7 @@ mod common;
 use common::repo::TestRepo;
 use git_cascade::replay::{Phase, ReplayState};
 use indoc::indoc;
+use predicates::prelude::*;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -30,24 +31,18 @@ fn recovers_linear_stack_after_git_operation_interruptions() {
 }
 
 #[test]
-fn recovers_no_dependent_branches_after_git_operation_interruptions() {
-    let mut fail_at = 1;
-    loop {
-        let repo = root_only_stack();
-        let interrupted = apply_with_interruption_at(
-            &repo,
-            fail_at,
-            ["plan", "apply", "stack", "--new-tip", "pr-1"],
-        );
+fn apply_with_no_dependent_branches_fails_before_interruption_points() {
+    let repo = root_only_stack();
 
-        assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
-        assert_clean_cascade_state(&repo);
-
-        if !interrupted {
-            break;
-        }
-        fail_at += 1;
-    }
+    repo.cascade()
+        .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("plan has no branches to replay"));
+    assert_eq!(repo.show("pr-1:pr1.txt"), "a\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.plan_path("stack").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
 }
 
 #[test]

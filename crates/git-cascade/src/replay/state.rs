@@ -30,10 +30,12 @@ pub enum Phase {
     },
     Conflict {
         current: CurrentState,
+        replay: BranchReplayState,
         message: String,
     },
     ContinueAfterConflict {
         current: CurrentState,
+        replay: BranchReplayState,
     },
     Paused {
         paused: PausedState,
@@ -147,6 +149,7 @@ pub struct PausedState {
 pub enum PausedKind {
     MidBranch {
         commit: CommitId,
+        replay: BranchReplayState,
     },
     BranchEnd {
         temp_ref: GitRef,

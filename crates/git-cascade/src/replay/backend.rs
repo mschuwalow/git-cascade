@@ -13,7 +13,6 @@ use std::fmt::Write as _;
 
 pub(crate) trait ReplayBackend {
     fn start(&mut self, state: &ReplayState) -> Result<()>;
-    fn no_branches(&mut self) -> Result<()>;
     fn temp_tips(&mut self, temp_refs: &[GitRef]) -> Result<HashMap<BranchName, CommitId>>;
     fn prepare_branch(
         &mut self,
@@ -116,11 +115,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
             "Applying cascade plan `{}` with strategy `{}` in {} worktree mode ({})",
             state.plan_name, state.strategy, state.worktree, state.replay_mode
         );
-        Ok(())
-    }
-
-    fn no_branches(&mut self) -> Result<()> {
-        eprintln!("No branches to replay");
         Ok(())
     }
 
@@ -454,10 +448,6 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
-    fn no_branches(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     fn temp_tips(&mut self, _temp_refs: &[GitRef]) -> Result<HashMap<BranchName, CommitId>> {
         Ok(self.temp_tips.clone())
     }
@@ -638,7 +628,7 @@ impl ReplayBackend for DryRunReplayBackend {
         writeln!(self.output).unwrap();
         if paused.reasons().contains(&PauseReason::BranchEnd) {
             writeln!(self.output, "# pause after branch {}", paused.branch).unwrap();
-        } else if let PausedKind::MidBranch { commit } = &paused.kind {
+        } else if let PausedKind::MidBranch { commit, .. } = &paused.kind {
             let kind = if paused.reasons().contains(&PauseReason::ChildBase) {
                 "child base"
             } else {

@@ -294,7 +294,7 @@ fn apply_dry_run_in_place_includes_restore_checkout() {
 }
 
 #[test]
-fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
+fn apply_without_dry_run_with_no_dependents_fails_before_replay() {
     let repo = TestRepo::new();
     repo.commit_file("README.md", "base\n", "initial");
     repo.switch_new("pr-1");
@@ -317,8 +317,9 @@ fn apply_without_dry_run_with_no_dependents_is_a_safe_noop() {
     repo.cascade()
         .args(["plan", "apply", "stack", "--new-tip", "pr-1"])
         .assert()
-        .success()
-        .stdout("applied cascade plan\n");
+        .failure()
+        .stderr(predicate::str::contains("plan has no branches to replay"));
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
 }
 
 #[test]
