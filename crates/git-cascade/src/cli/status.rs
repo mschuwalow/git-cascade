@@ -27,9 +27,11 @@ fn status_output(storage: &Storage) -> Result<String> {
     output.push_str(&format!("replay-mode: {}\n", state.replay_mode));
     output.push_str(&format!("worktree-mode: {}\n", state.worktree));
     match &state.phase {
-        Phase::ContinueReplay { current }
-        | Phase::Conflict { current, .. }
-        | Phase::ContinueAfterConflict { current } => {
+        Phase::ContinueReplay { replay } => {
+            output.push_str(&format!("current-branch: {}\n", replay.branch));
+            output.push_str("current-commit: none\n");
+        }
+        Phase::Conflict { current, .. } | Phase::ContinueAfterConflict { current } => {
             output.push_str(&format!("current-branch: {}\n", current.branch));
             output.push_str(&format!("current-commit: {}\n", current.commit));
         }

@@ -1609,8 +1609,8 @@ fn deleting_phase() -> Phase {
 
 fn conflict_current(state: &ReplayState) -> CurrentState {
     match &state.phase {
-        Phase::Conflict { current, .. } | Phase::ContinueReplay { current } => current.clone(),
-        phase => panic!("expected conflict or replay current phase, got {phase:?}"),
+        Phase::Conflict { current, .. } => current.clone(),
+        phase => panic!("expected conflict phase, got {phase:?}"),
     }
 }
 

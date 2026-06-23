@@ -19,7 +19,14 @@ use time::format_description::well_known::Rfc3339;
 pub enum Phase {
     Replay,
     ContinueReplay {
-        current: CurrentState,
+        replay: BranchReplayState,
+    },
+    FinalizeBranch {
+        branch: BranchName,
+        temp_ref: GitRef,
+        mapped_commit: CommitId,
+        mapped_tip: CommitId,
+        branch_tip: CommitId,
     },
     Conflict {
         current: CurrentState,
@@ -44,11 +51,20 @@ pub enum Phase {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BranchReplayState {
+    pub branch: BranchName,
+    pub commit_index: usize,
+    pub last_rewritten: CommitId,
+    pub was_resuming: bool,
+}
+
 impl Phase {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Replay => "replay",
             Self::ContinueReplay { .. } => "continue_replay",
+            Self::FinalizeBranch { .. } => "finalize_branch",
             Self::Conflict { .. } => "conflict",
             Self::ContinueAfterConflict { .. } => "continue_after_conflict",
             Self::Paused { .. } => "paused",

@@ -240,8 +240,8 @@ fn assert_clean_cascade_state(repo: &TestRepo) {
 
 fn conflict_current(state: &ReplayState) -> git_cascade::replay::CurrentState {
     match &state.phase {
-        Phase::Conflict { current, .. } | Phase::ContinueReplay { current } => current.clone(),
-        phase => panic!("expected conflict or replay current phase, got {phase:?}"),
+        Phase::Conflict { current, .. } => current.clone(),
+        phase => panic!("expected conflict phase, got {phase:?}"),
     }
 }
 
