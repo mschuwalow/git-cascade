@@ -637,27 +637,16 @@ impl ReplayBackend for DryRunReplayBackend {
     ) -> Result<CommitId> {
         writeln!(self.output).unwrap();
         if paused.reasons().contains(&PauseReason::BranchEnd) {
-            writeln!(
-                self.output,
-                "# pause after branch {} ({})",
-                paused.branch,
-                pause_reasons(paused)
-            )
-            .unwrap();
+            writeln!(self.output, "# pause after branch {}", paused.branch).unwrap();
         } else if let PausedKind::MidBranch { commit } = &paused.kind {
             let kind = if paused.reasons().contains(&PauseReason::ChildBase) {
                 "child base"
             } else {
                 "commit"
             };
-            writeln!(
-                self.output,
-                "# pause at {kind} {}:{commit} ({})",
-                paused.branch,
-                pause_reasons(paused)
-            )
-            .unwrap();
+            writeln!(self.output, "# pause at {kind} {}:{commit}", paused.branch).unwrap();
         }
+        writeln!(self.output, "# pause reasons: {}", paused.reason_list()).unwrap();
         writeln!(
             self.output,
             "# run checks in {}, commit fixes, then git cascade continue",
@@ -715,15 +704,6 @@ impl ReplayBackend for DryRunReplayBackend {
         }
         Ok(())
     }
-}
-
-fn pause_reasons(paused: &PausedState) -> String {
-    paused
-        .reasons()
-        .iter()
-        .map(|reason| reason.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Detects a cherry-pick that stopped because it became empty: the pick is

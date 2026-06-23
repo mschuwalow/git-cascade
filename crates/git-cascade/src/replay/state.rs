@@ -154,6 +154,14 @@ impl PausedState {
         &self.reasons
     }
 
+    pub fn reason_list(&self) -> String {
+        self.reasons
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn is_branch_end(&self) -> bool {
         matches!(self.kind, PausedKind::BranchEnd { .. })
     }

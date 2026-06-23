@@ -404,25 +404,27 @@ fn pause_every_commit_with_squash_pauses_before_and_after_squash() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused at commit"));
+        .stdout(
+            predicate::str::contains("paused at commit")
+                .and(predicate::str::contains("pause reasons: commit")),
+        );
     let state = read_state(&repo);
     assert!(!paused_state(&state).is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 
-    repo.cascade()
-        .arg("continue")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("paused at commit"));
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused at commit")
+            .and(predicate::str::contains("pause reasons: commit")),
+    );
     let state = read_state(&repo);
     assert!(!paused_state(&state).is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 
-    repo.cascade()
-        .arg("continue")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused after branch `pr-2`").and(predicate::str::contains(
+            "pause reasons: commit, branch-end",
+        )),
+    );
     let state = read_state(&repo);
     assert!(paused_state(&state).is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
@@ -461,19 +463,22 @@ fn pause_every_commit_with_squash_pauses_after_single_commit_branch() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+        .stdout(
+            predicate::str::contains("paused at commit")
+                .and(predicate::str::contains("pause reasons: commit")),
+        );
     let state = read_state(&repo);
     assert!(!paused_state(&state).is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 
-    repo.cascade()
-        .arg("continue")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused after branch `pr-2`").and(predicate::str::contains(
+            "pause reasons: commit, branch-end",
+        )),
+    );
     let state = read_state(&repo);
-    assert!(!paused_state(&state).is_branch_end());
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert!(paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 
     repo.cascade().arg("abort").assert().success();
 }

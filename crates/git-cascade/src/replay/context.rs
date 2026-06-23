@@ -355,7 +355,6 @@ where
         };
 
         let branch_replay_base = self.branch_replay_base(node)?.clone();
-        let pre_finalize_tip = rewritten_tip.clone();
         let rewritten_tip = self.finalize_branch_tip(
             node,
             commits,
@@ -369,9 +368,7 @@ where
                 .insert(last_commit.oid.clone(), rewritten_tip.clone());
         }
 
-        if rewritten_tip != pre_finalize_tip
-            && let Some(reasons) = self.post_rewrite_branch_end_pause_reasons(node)
-        {
+        if let Some(reasons) = self.branch_end_pause_reasons(node) {
             let mapped_commit = commits
                 .last()
                 .map(|commit| commit.oid.clone())
@@ -414,10 +411,10 @@ where
         }
     }
 
-    fn post_rewrite_branch_end_pause_reasons(&self, node: &Node) -> Option<BTreeSet<PauseReason>> {
+    fn branch_end_pause_reasons(&self, node: &Node) -> Option<BTreeSet<PauseReason>> {
         self.state
             .pause_plan
-            .post_rewrite_branch_end_pause_reasons(&node.branch)
+            .branch_end_pause_reasons(&node.branch)
             .cloned()
     }
 

@@ -48,15 +48,7 @@ fn status_output(storage: &Storage) -> Result<String> {
             }
             output.push_str(&format!("paused-commit: {commit}\n"));
         }
-        output.push_str(&format!(
-            "paused-reasons: {}\n",
-            paused
-                .reasons()
-                .iter()
-                .map(|reason| reason.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+        output.push_str(&format!("paused-reasons: {}\n", paused.reason_list()));
         output.push_str(&format!("paused-branch: {}\n", paused.branch()));
         output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip()));
     }
