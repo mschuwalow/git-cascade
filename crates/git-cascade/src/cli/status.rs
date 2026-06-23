@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::git::Git;
 use crate::replay::state::read_state;
-use crate::replay::{PausedState, Phase};
+use crate::replay::{PauseReason, PausedKind, Phase};
 use crate::storage::Storage;
 
 pub(super) fn status() -> Result<()> {
@@ -27,26 +27,38 @@ fn status_output(storage: &Storage) -> Result<String> {
     output.push_str(&format!("replay-mode: {}\n", state.replay_mode));
     output.push_str(&format!("worktree-mode: {}\n", state.worktree));
     match &state.phase {
-        Phase::Replay {
-            current: Some(current),
+        Phase::ContinueReplay { replay } => {
+            output.push_str(&format!("current-branch: {}\n", replay.branch));
+            if let Some(commit) = &replay.last_replayed_commit {
+                output.push_str(&format!("current-commit: {commit}\n"));
+            } else {
+                output.push_str("current-commit: none\n");
+            }
         }
-        | Phase::Conflict { current, .. }
-        | Phase::ContinueAfterConflict { current } => {
-            output.push_str(&format!("current-branch: {}\n", current.branch));
-            output.push_str(&format!("current-commit: {}\n", current.commit));
+        Phase::Conflict { replay, .. } | Phase::ContinueAfterConflict { replay } => {
+            output.push_str(&format!("current-branch: {}\n", replay.branch));
+            if let Some(commit) = &replay.last_replayed_commit {
+                output.push_str(&format!("current-commit: {commit}\n"));
+            } else {
+                output.push_str("current-commit: none\n");
+            }
         }
         _ => output.push_str("current: none\n"),
     }
     if let Phase::Paused { paused } | Phase::ContinueAfterPause { paused } = &state.phase {
-        match paused {
-            PausedState::BranchEnd { .. } => {
-                output.push_str("paused-kind: branch-end\n");
-            }
-            PausedState::ChildBase { commit, .. } => {
+        if paused.reasons().contains(&PauseReason::BranchEnd) {
+            output.push_str("paused-kind: branch-end\n");
+        } else if let PausedKind::MidBranch { replay } = &paused.kind {
+            if paused.reasons().contains(&PauseReason::ChildBase) {
                 output.push_str("paused-kind: child-base\n");
+            } else {
+                output.push_str("paused-kind: commit\n");
+            }
+            if let Some(commit) = &replay.last_replayed_commit {
                 output.push_str(&format!("paused-commit: {commit}\n"));
             }
         }
+        output.push_str(&format!("paused-reasons: {}\n", paused.reason_list()));
         output.push_str(&format!("paused-branch: {}\n", paused.branch()));
         output.push_str(&format!("paused-tip: {}\n", paused.rewritten_tip()));
     }

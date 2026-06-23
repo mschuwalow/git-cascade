@@ -1,7 +1,7 @@
-use super::{CurrentState, PausedState, ReplayState, RestoreState, WorktreeState};
+use super::{PauseReason, PausedKind, PausedState, ReplayState, RestoreState, WorktreeState};
 use crate::encoding::{decode_component, encode_component};
 use crate::git::Git;
-use crate::model::{BranchName, CommitId, GitRef};
+use crate::model::{BranchName, CommitId, GitRef, Strategy};
 use crate::plan::{Node, Plan};
 use crate::storage::Storage;
 use crate::test_hooks;
@@ -11,7 +11,6 @@ use std::fmt::Write as _;
 
 pub(crate) trait ReplayBackend {
     fn start(&mut self, state: &ReplayState) -> Result<()>;
-    fn no_branches(&mut self) -> Result<()>;
     fn temp_tips(&mut self, temp_refs: &[GitRef]) -> Result<HashMap<BranchName, CommitId>>;
     fn prepare_branch(
         &mut self,
@@ -46,10 +45,23 @@ pub(crate) trait ReplayBackend {
         commit_index: usize,
         total_commits: usize,
     ) -> Result<()>;
+    #[allow(clippy::too_many_arguments)]
+    fn squash_branch(
+        &mut self,
+        state: &ReplayState,
+        node: &Node,
+        branch_index: usize,
+        total_branches: usize,
+        base: &CommitId,
+        first_commit: &CommitId,
+        rewritten_tip: &CommitId,
+    ) -> Result<CommitId>;
     fn continue_cherry_pick(
         &mut self,
         state: &ReplayState,
-        current: &CurrentState,
+        worktree: &str,
+        branch: &BranchName,
+        commit: &CommitId,
     ) -> Result<CommitId>;
     fn resume_paused_branch(
         &mut self,
@@ -103,11 +115,6 @@ impl ReplayBackend for GitReplayBackend<'_> {
             "Applying cascade plan `{}` with strategy `{}` in {} worktree mode ({})",
             state.plan_name, state.strategy, state.worktree, state.replay_mode
         );
-        Ok(())
-    }
-
-    fn no_branches(&mut self) -> Result<()> {
-        eprintln!("No branches to replay");
         Ok(())
     }
 
@@ -216,6 +223,43 @@ impl ReplayBackend for GitReplayBackend<'_> {
         Ok(())
     }
 
+    fn squash_branch(
+        &mut self,
+        state: &ReplayState,
+        node: &Node,
+        branch_index: usize,
+        total_branches: usize,
+        base: &CommitId,
+        first_commit: &CommitId,
+        rewritten_tip: &CommitId,
+    ) -> Result<CommitId> {
+        if rewritten_tip == base {
+            eprintln!(
+                "Squashed branch {branch_index}/{total_branches} `{}` has no changes; keeping {}",
+                node.branch,
+                short_oid(base)
+            );
+            return Ok(base.clone());
+        }
+
+        eprintln!(
+            "Squashing branch {branch_index}/{total_branches} `{}` into one commit",
+            node.branch
+        );
+        let worktree = std::path::PathBuf::from(state.worktree.path());
+        let worktree_git = Git::new(&worktree);
+        if worktree_git.head_oid()? != *rewritten_tip {
+            worktree_git.reset_hard(rewritten_tip)?;
+        }
+        worktree_git.reset_soft(base)?;
+        if !worktree_git.has_staged_changes()? {
+            worktree_git.reset_hard(base)?;
+            return Ok(base.clone());
+        }
+        worktree_git.commit_reusing(first_commit)?;
+        worktree_git.head_oid()
+    }
+
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -255,9 +299,11 @@ impl ReplayBackend for GitReplayBackend<'_> {
     fn continue_cherry_pick(
         &mut self,
         _state: &ReplayState,
-        current: &CurrentState,
+        worktree: &str,
+        _branch: &BranchName,
+        commit: &CommitId,
     ) -> Result<CommitId> {
-        let worktree = std::path::PathBuf::from(&current.worktree);
+        let worktree = std::path::PathBuf::from(worktree);
         let worktree_git = Git::new(&worktree);
         if !worktree_git.unmerged_entries()?.is_empty() {
             return Err(Error::InvalidInvocation(format!(
@@ -270,7 +316,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
             worktree_git.cherry_pick_skip()?;
             eprintln!(
                 "  skipped empty commit {}; the resolution matches the current tree",
-                short_oid(&current.commit)
+                short_oid(commit)
             );
             return worktree_git.head_oid();
         }
@@ -316,7 +362,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
                 required.commit
             )));
         }
-        if let PausedState::BranchEnd { temp_ref, .. } = paused {
+        if let PausedKind::BranchEnd { temp_ref, .. } = &paused.kind {
             self.git.update_ref(temp_ref.as_str(), &head)?;
         }
         eprintln!(
@@ -359,6 +405,7 @@ impl ReplayBackend for GitReplayBackend<'_> {
 pub(crate) struct DryRunReplayBackend {
     output: String,
     temp_tips: HashMap<BranchName, CommitId>,
+    temp_ref_tracks_rewritten_tip: bool,
 }
 
 impl DryRunReplayBackend {
@@ -389,6 +436,7 @@ impl DryRunReplayBackend {
         Ok(Self {
             output,
             temp_tips: HashMap::new(),
+            temp_ref_tracks_rewritten_tip: matches!(state.strategy, Strategy::Squash),
         })
     }
 
@@ -399,10 +447,6 @@ impl DryRunReplayBackend {
 
 impl ReplayBackend for DryRunReplayBackend {
     fn start(&mut self, _state: &ReplayState) -> Result<()> {
-        Ok(())
-    }
-
-    fn no_branches(&mut self) -> Result<()> {
         Ok(())
     }
 
@@ -497,6 +541,31 @@ impl ReplayBackend for DryRunReplayBackend {
         Ok(())
     }
 
+    fn squash_branch(
+        &mut self,
+        state: &ReplayState,
+        node: &Node,
+        _branch_index: usize,
+        _total_branches: usize,
+        base: &CommitId,
+        first_commit: &CommitId,
+        _rewritten_tip: &CommitId,
+    ) -> Result<CommitId> {
+        writeln!(
+            self.output,
+            "git -C {} reset --soft {base}",
+            state.worktree.path()
+        )
+        .unwrap();
+        writeln!(
+            self.output,
+            "git -C {} commit -C {first_commit}",
+            state.worktree.path()
+        )
+        .unwrap();
+        Ok(CommitId::new(format!("<squashed {} tip>", node.branch)))
+    }
+
     fn skip_replay(
         &mut self,
         plan: &Plan,
@@ -525,11 +594,17 @@ impl ReplayBackend for DryRunReplayBackend {
         node: &Node,
         _branch_index: usize,
         _total_branches: usize,
-        _rewritten_tip: &CommitId,
+        rewritten_tip: &CommitId,
     ) -> Result<(GitRef, CommitId)> {
         let temp_ref = temp_ref(plan, node.branch.as_str());
-        let rewritten_tip = CommitId::new(format!("<rewritten {} tip>", node.branch));
-        let current_tip = CommitId::new(format!("<rewritten {} current tip>", node.branch));
+        let (rewritten_tip, current_tip) = if self.temp_ref_tracks_rewritten_tip {
+            (rewritten_tip.clone(), rewritten_tip.clone())
+        } else {
+            (
+                CommitId::new(format!("<rewritten {} tip>", node.branch)),
+                CommitId::new(format!("<rewritten {} current tip>", node.branch)),
+            )
+        };
         writeln!(self.output, "git update-ref {temp_ref} HEAD").unwrap();
         self.temp_tips.insert(node.branch.clone(), rewritten_tip);
         Ok((temp_ref, current_tip))
@@ -538,12 +613,11 @@ impl ReplayBackend for DryRunReplayBackend {
     fn continue_cherry_pick(
         &mut self,
         _state: &ReplayState,
-        current: &CurrentState,
+        _worktree: &str,
+        branch: &BranchName,
+        commit: &CommitId,
     ) -> Result<CommitId> {
-        Ok(CommitId::new(format!(
-            "<rewritten {}:{}>",
-            current.branch, current.commit
-        )))
+        Ok(CommitId::new(format!("<rewritten {branch}:{commit}>")))
     }
 
     fn resume_paused_branch(
@@ -553,14 +627,21 @@ impl ReplayBackend for DryRunReplayBackend {
         _required_ancestors: &[RequiredAncestor],
     ) -> Result<CommitId> {
         writeln!(self.output).unwrap();
-        match paused {
-            PausedState::BranchEnd { branch, .. } => {
-                writeln!(self.output, "# pause after branch {branch}").unwrap();
-            }
-            PausedState::ChildBase { branch, commit, .. } => {
-                writeln!(self.output, "# pause at child base {branch}:{commit}").unwrap();
-            }
+        if paused.reasons().contains(&PauseReason::BranchEnd) {
+            writeln!(self.output, "# pause after branch {}", paused.branch).unwrap();
+        } else if let PausedKind::MidBranch { replay } = &paused.kind {
+            let commit = replay
+                .last_replayed_commit
+                .as_ref()
+                .expect("mid-branch pause has current commit");
+            let kind = if paused.reasons().contains(&PauseReason::ChildBase) {
+                "child base"
+            } else {
+                "commit"
+            };
+            writeln!(self.output, "# pause at {kind} {}:{commit}", paused.branch).unwrap();
         }
+        writeln!(self.output, "# pause reasons: {}", paused.reason_list()).unwrap();
         writeln!(
             self.output,
             "# run checks in {}, commit fixes, then git cascade continue",
@@ -702,7 +783,7 @@ fn temp_tips_from_refs(git: &Git, temp_refs: &[GitRef]) -> Result<HashMap<Branch
     Ok(temp_tips)
 }
 
-fn temp_ref(plan: &Plan, branch: &str) -> GitRef {
+pub(super) fn temp_ref(plan: &Plan, branch: &str) -> GitRef {
     GitRef::new(format!(
         "refs/cascade/tmp/{}/{}",
         plan.plan_id,

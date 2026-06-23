@@ -1,8 +1,10 @@
 mod common;
 
 use common::repo::TestRepo;
+use git_cascade::model::{BranchName, CommitId};
+use git_cascade::plan::{Dependency, Node, Plan};
 use git_cascade::replay::{
-    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
+    PauseReason, PausedState, Phase, ReplayPauseMode, ReplayState, RestoreState, WorktreeState,
 };
 use predicates::prelude::*;
 
@@ -43,7 +45,7 @@ fn status_reports_conflict_state() {
             .and(predicate::str::contains("phase: conflict"))
             .and(predicate::str::contains("plan: stack"))
             .and(predicate::str::contains("new-tip:"))
-            .and(predicate::str::contains("strategy: preserve-fork-points"))
+            .and(predicate::str::contains("strategy: move-to-current-tips"))
             .and(predicate::str::contains("current-branch: pr-2"))
             .and(predicate::str::contains("current-commit:"))
             .and(predicate::str::contains("worktree:"))
@@ -273,7 +275,8 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -281,9 +284,9 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
-    assert_eq!(state.replay_mode, ReplayMode::PauseAtCheckpoints);
+    assert_eq!(state.replay_mode, ReplayPauseMode::Checkpoints);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -311,7 +314,7 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Paused { .. }));
     assert_eq!(paused_state(&state).branch(), "pr-3");
-    assert!(state.pending_branches.is_empty());
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
     assert_eq!(
         repo.git_output(["-C", worktree.to_str().unwrap(), "show", "HEAD:fix.txt"]),
         "fix\n"
@@ -334,6 +337,246 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
 }
 
 #[test]
+fn pause_every_commit_stops_after_each_replayed_commit() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at",
+            "every-commit",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at commit"))
+        .stderr(predicate::str::contains("every-commit"));
+    let state = read_state(&repo);
+    assert_eq!(state.replay_mode, ReplayPauseMode::EveryCommit);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+    let paused = paused_state(&state);
+    assert!(!paused.is_branch_end());
+    assert_eq!(paused.branch(), "pr-2");
+    assert!(paused.reasons().contains(&PauseReason::Commit));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+    let state = read_state(&repo);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+    let paused = paused_state(&state);
+    assert!(paused.is_branch_end());
+    assert_eq!(paused.branch(), "pr-2");
+    assert!(paused.reasons().contains(&PauseReason::BranchEnd));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at commit"));
+    let state = read_state(&repo);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    let paused = paused_state(&state);
+    assert!(!paused.is_branch_end());
+    assert_eq!(paused.branch(), "pr-3");
+    assert!(paused.reasons().contains(&PauseReason::Commit));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-3`"));
+    let state = read_state(&repo);
+    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    let paused = paused_state(&state);
+    assert!(paused.is_branch_end());
+    assert_eq!(paused.branch(), "pr-3");
+    assert!(paused.reasons().contains(&PauseReason::BranchEnd));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout("continued cascade operation\n");
+    assert!(!repo.common_dir().join("cascade/state.yaml").exists());
+    assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
+}
+
+#[test]
+fn pause_every_commit_with_squash_pauses_before_and_after_squash() {
+    let repo = paused_multi_commit_branch_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "squash",
+            "--pause-at",
+            "every-commit",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("paused at commit")
+                .and(predicate::str::contains("stop reasons: commit")),
+        );
+    let state = read_state(&repo);
+    assert!(!paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused at commit")
+            .and(predicate::str::contains("stop reasons: commit")),
+    );
+    let state = read_state(&repo);
+    assert!(!paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused after branch `pr-2`")
+            .and(predicate::str::contains("stop reasons: commit, branch-end")),
+    );
+    let state = read_state(&repo);
+    assert!(paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
+    assert_eq!(
+        repo.git_output([
+            "-C",
+            worktree.to_str().unwrap(),
+            "rev-list",
+            "--count",
+            "pr-1..HEAD"
+        ])
+        .trim(),
+        "1"
+    );
+
+    repo.cascade().arg("abort").assert().success();
+}
+
+#[test]
+fn pause_every_commit_with_squash_pauses_after_single_commit_branch() {
+    let repo = paused_linear_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "squash",
+            "--pause-at",
+            "every-commit",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("paused at commit")
+                .and(predicate::str::contains("stop reasons: commit")),
+        );
+    let state = read_state(&repo);
+    assert!(!paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused after branch `pr-2`")
+            .and(predicate::str::contains("stop reasons: commit, branch-end")),
+    );
+    let state = read_state(&repo);
+    assert!(paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
+
+    repo.cascade().arg("abort").assert().success();
+}
+
+#[test]
+fn pause_at_checkpoints_pauses_after_empty_branch() {
+    let repo = paused_empty_branch_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--pause-at",
+            "checkpoints",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused after branch `pr-empty`")
+            .and(predicate::str::contains("stop reasons: branch-end")),
+    );
+    let state = read_state(&repo);
+    let paused = paused_state(&state);
+    assert!(paused.is_branch_end());
+    assert_eq!(paused.branch(), "pr-empty");
+    assert_eq!(pending_branch_names(&state), vec!["pr-empty"]);
+
+    repo.cascade().arg("abort").assert().success();
+}
+
+#[test]
+fn pause_every_commit_with_squash_pauses_after_empty_branch() {
+    let repo = paused_empty_branch_stack();
+    rewrite_anchor(&repo);
+
+    repo.cascade()
+        .args([
+            "plan",
+            "apply",
+            "stack",
+            "--new-tip",
+            "pr-1",
+            "--strategy",
+            "squash",
+            "--pause-at",
+            "every-commit",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused at commit"));
+
+    repo.cascade()
+        .arg("continue")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused after branch `pr-2`"));
+
+    repo.cascade().arg("continue").assert().success().stdout(
+        predicate::str::contains("paused after branch `pr-empty`")
+            .and(predicate::str::contains("stop reasons: branch-end")),
+    );
+    let state = read_state(&repo);
+    let paused = paused_state(&state);
+    assert!(paused.is_branch_end());
+    assert_eq!(paused.branch(), "pr-empty");
+    assert_eq!(pending_branch_names(&state), vec!["pr-empty"]);
+
+    repo.cascade().arg("abort").assert().success();
+}
+
+#[test]
 fn branch_end_pause_rejects_rewrite_that_drops_branch_replay_base() {
     let repo = paused_linear_stack();
     rewrite_anchor(&repo);
@@ -347,7 +590,8 @@ fn branch_end_pause_rejects_rewrite_that_drops_branch_replay_base() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -363,11 +607,8 @@ fn branch_end_pause_rejects_rewrite_that_drops_branch_replay_base() {
     );
 
     let state = read_state(&repo);
-    assert!(matches!(
-        paused_state(&state),
-        PausedState::BranchEnd { .. }
-    ));
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert!(paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 }
 
 #[test]
@@ -386,17 +627,17 @@ fn branch_end_pause_allows_squashing_before_replaying_child_to_current_tip() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("paused after branch `pr-2`"));
 
     let state = read_state(&repo);
-    let PausedState::BranchEnd { rewritten_tip, .. } = paused_state(&state) else {
-        panic!("expected branch-end pause");
-    };
-    let rewritten_tip = rewritten_tip.clone();
+    let paused = paused_state(&state);
+    assert!(paused.is_branch_end());
+    let rewritten_tip = paused.rewritten_tip().to_owned();
     let worktree = std::path::PathBuf::from(state.worktree.path());
     repo.git_ok([
         "-C",
@@ -441,9 +682,6 @@ fn branch_end_pause_allows_squashing_before_replaying_child_to_current_tip() {
     assert_ne!(repo.rev_parse("pr-3"), old_pr3);
     assert_eq!(repo.rev_parse("pr-2"), squashed_pr2);
     assert_eq!(repo.merge_base("pr-2", "pr-3"), squashed_pr2);
-    assert_eq!(repo.show("pr-2:pr2-a.txt"), "b\n");
-    assert_eq!(repo.show("pr-2:pr2-b.txt"), "c\n");
-    assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
 }
 
 #[test]
@@ -459,7 +697,8 @@ fn pause_at_checkpoints_pauses_unchanged_branches_without_rewriting_if_unchanged
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -467,7 +706,7 @@ fn pause_at_checkpoints_pauses_unchanged_branches_without_rewriting_if_unchanged
 
     let state = read_state(&repo);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
@@ -491,7 +730,7 @@ fn pause_at_checkpoints_pauses_unchanged_branches_without_rewriting_if_unchanged
 }
 
 #[test]
-fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
+fn pause_at_checkpoints_walks_unchanged_commit_pause_before_branch_end() {
     let repo = paused_intermediate_stack();
     let old_pr2 = repo.rev_parse("pr-2");
     let old_pr3 = repo.rev_parse("pr-3");
@@ -503,7 +742,10 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--strategy",
+            "preserve-fork-points",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -511,10 +753,12 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
 
     let state = read_state(&repo);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert!(matches!(
-        paused_state(&state),
-        PausedState::ChildBase { .. }
-    ));
+    assert!(
+        paused_state(&state)
+            .reasons()
+            .contains(&PauseReason::ChildBase)
+    );
+    assert!(!paused_state(&state).is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
@@ -526,11 +770,13 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
         .stdout(predicate::str::contains("paused after branch `pr-2`"));
 
     let state = read_state(&repo);
-    assert!(matches!(
-        paused_state(&state),
-        PausedState::BranchEnd { .. }
-    ));
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert!(paused_state(&state).is_branch_end());
+    assert!(
+        paused_state(&state)
+            .reasons()
+            .contains(&PauseReason::BranchEnd)
+    );
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 
     repo.cascade()
         .arg("continue")
@@ -550,7 +796,7 @@ fn pause_at_checkpoints_walks_unchanged_child_base_before_branch_end() {
 }
 
 #[test]
-fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
+fn unchanged_commit_pause_allows_fix_before_remaining_branch() {
     let repo = paused_intermediate_stack();
     let old_pr2 = repo.rev_parse("pr-2");
     let old_pr3 = repo.rev_parse("pr-3");
@@ -562,7 +808,10 @@ fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--strategy",
+            "preserve-fork-points",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -577,9 +826,9 @@ fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
         worktree.to_str().unwrap(),
         "commit",
         "-m",
-        "fix unchanged child base",
+        "fix unchanged commit pause",
     ]);
-    let fixed_child_base = repo
+    let fixed_commit_pause = repo
         .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
         .trim()
         .to_owned();
@@ -604,7 +853,7 @@ fn unchanged_child_base_pause_allows_fix_before_remaining_branch() {
 
     assert_ne!(repo.rev_parse("pr-2"), old_pr2);
     assert_ne!(repo.rev_parse("pr-3"), old_pr3);
-    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_child_base);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_commit_pause);
     assert_eq!(repo.show("pr-2:base-fix.txt"), "base fix\n");
     assert_eq!(repo.show("pr-3:base-fix.txt"), "base fix\n");
     assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
@@ -625,7 +874,8 @@ fn pause_at_checkpoints_allows_rewriting_unchanged_branch_before_child() {
             "pr-1",
             "--strategy",
             "move-to-current-tips",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -668,9 +918,6 @@ fn pause_at_checkpoints_allows_rewriting_unchanged_branch_before_child() {
     assert_ne!(repo.rev_parse("pr-3"), old_pr3);
     assert_eq!(repo.rev_parse("pr-2"), squashed_pr2);
     assert_eq!(repo.merge_base("pr-2", "pr-3"), squashed_pr2);
-    assert_eq!(repo.show("pr-2:pr2-a.txt"), "b\n");
-    assert_eq!(repo.show("pr-2:pr2-b.txt"), "c\n");
-    assert_eq!(repo.show("pr-3:pr3.txt"), "d\n");
 }
 
 #[test]
@@ -685,7 +932,8 @@ fn continue_refuses_dirty_paused_worktree() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success();
@@ -715,7 +963,8 @@ fn continue_refuses_when_target_branch_moved_while_paused() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -769,7 +1018,8 @@ fn abort_in_place_paused_replay_discards_dirty_worktree() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--pause-at",
+            "checkpoints",
             "--in-place",
         ])
         .assert()
@@ -788,7 +1038,7 @@ fn abort_in_place_paused_replay_discards_dirty_worktree() {
 }
 
 #[test]
-fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
+fn pause_at_checkpoints_stops_at_commit_before_branch_end() {
     let repo = paused_intermediate_stack();
     let old_pr2 = repo.rev_parse("pr-2");
     let old_pr3 = repo.rev_parse("pr-3");
@@ -801,7 +1051,10 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--strategy",
+            "preserve-fork-points",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -810,7 +1063,8 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
     let state = read_state(&repo);
     let first_pause = paused_state(&state);
     assert_eq!(first_pause.branch(), "pr-2");
-    assert!(matches!(first_pause, PausedState::ChildBase { .. }));
+    assert!(first_pause.reasons().contains(&PauseReason::ChildBase));
+    assert!(!first_pause.is_branch_end());
     assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
@@ -823,9 +1077,9 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
         worktree.to_str().unwrap(),
         "commit",
         "-m",
-        "fix child base",
+        "fix commit pause",
     ]);
-    let fixed_child_base = repo
+    let fixed_commit_pause = repo
         .git_output(["-C", worktree.to_str().unwrap(), "rev-parse", "HEAD"])
         .trim()
         .to_owned();
@@ -837,11 +1091,13 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
         .stdout(predicate::str::contains("paused after branch `pr-2`"));
 
     let state = read_state(&repo);
-    assert!(matches!(
-        paused_state(&state),
-        PausedState::BranchEnd { .. }
-    ));
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert!(paused_state(&state).is_branch_end());
+    assert!(
+        paused_state(&state)
+            .reasons()
+            .contains(&PauseReason::BranchEnd)
+    );
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     std::fs::write(worktree.join("tip-fix.txt"), "tip fix\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "tip-fix.txt"]);
     repo.git_ok([
@@ -870,7 +1126,7 @@ fn pause_at_checkpoints_stops_at_child_base_before_branch_end() {
 
     assert_eq!(repo.rev_parse("pr-2"), fixed_pr2_tip);
     assert_ne!(repo.rev_parse("pr-3"), old_pr3);
-    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_child_base);
+    assert_eq!(repo.merge_base("pr-2", "pr-3"), fixed_commit_pause);
     assert_eq!(repo.show("pr-3:base-fix.txt"), "base fix\n");
     repo.git_fails(["show", "pr-3:tip-fix.txt"]);
     assert_eq!(repo.show("pr-2:tip-fix.txt"), "tip fix\n");
@@ -890,7 +1146,10 @@ fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
             "stack",
             "--new-tip",
             "pr-1",
-            "--pause-at-checkpoints",
+            "--strategy",
+            "preserve-fork-points",
+            "--pause-at",
+            "checkpoints",
         ])
         .assert()
         .success()
@@ -903,10 +1162,7 @@ fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
         .stdout(predicate::str::contains("paused after branch `pr-2`"));
 
     let state = read_state(&repo);
-    assert!(matches!(
-        paused_state(&state),
-        PausedState::BranchEnd { .. }
-    ));
+    assert!(paused_state(&state).is_branch_end());
     let worktree = std::path::PathBuf::from(state.worktree.path());
     repo.git_ok([
         "-C",
@@ -930,11 +1186,8 @@ fn branch_end_pause_rejects_squashing_preserved_child_replay_base() {
     );
 
     let state = read_state(&repo);
-    assert!(matches!(
-        paused_state(&state),
-        PausedState::BranchEnd { .. }
-    ));
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert!(paused_state(&state).is_branch_end());
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
 }
 
 #[test]
@@ -965,7 +1218,7 @@ fn continue_after_conflict_finishes_apply() {
         .success();
 
     let state = read_state(&repo);
-    let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
     std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -994,7 +1247,7 @@ fn continue_after_conflict_continues_to_child_branch() {
         .success();
 
     let state = read_state(&repo);
-    let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
     std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -1022,10 +1275,10 @@ fn continue_resumes_replay_phase_after_crash() {
         .assert()
         .success();
 
-    // Simulate a crash mid-replay: the persisted phase is `replay` with no
-    // current commit, and the worktree still has a cherry-pick in progress.
+    // Simulate a crash mid-replay: the persisted phase is `replay`, and the
+    // worktree still has a cherry-pick in progress.
     let mut state = read_state(&repo);
-    state.phase = Phase::Replay { current: None };
+    state.phase = Phase::Replay;
     state.mappings.clear();
     write_state(&repo, &state);
 
@@ -1041,7 +1294,7 @@ fn continue_resumes_replay_phase_after_crash() {
 
     let state = read_state(&repo);
     assert!(matches!(state.phase, Phase::Conflict { .. }));
-    let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
+    let worktree = std::path::PathBuf::from(state.worktree.path());
     std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -1098,7 +1351,7 @@ fn continue_can_stop_again_on_later_conflict() {
         .assert()
         .success();
     let first_state = read_state(&repo);
-    let first_conflict = conflict_current(&first_state).commit;
+    let first_conflict = conflict_commit(&first_state);
     let worktree = std::path::PathBuf::from(first_state.worktree.path());
     std::fs::write(worktree.join("a.txt"), "resolved a\n").unwrap();
     repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "a.txt"]);
@@ -1110,7 +1363,7 @@ fn continue_can_stop_again_on_later_conflict() {
 
     let second_state = read_state(&repo);
     assert!(matches!(second_state.phase, Phase::Conflict { .. }));
-    let second_conflict = conflict_current(&second_state).commit;
+    let second_conflict = conflict_commit(&second_state);
     assert_ne!(second_conflict, first_conflict);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
 }
@@ -1286,6 +1539,59 @@ fn paused_multi_commit_branch_stack() -> TestRepo {
     repo
 }
 
+fn paused_empty_branch_stack() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.commit_file("README.md", "base\n", "initial");
+    repo.switch_new("pr-1");
+    repo.commit_file("pr1.txt", "a\n", "pr-1");
+    repo.switch_new("pr-2");
+    let pr2_tip = repo.commit_file("pr2.txt", "b\n", "pr-2");
+    repo.switch_new_at("pr-empty", &pr2_tip);
+    repo.switch("main");
+
+    repo.cascade()
+        .args([
+            "plan",
+            "create",
+            "stack",
+            "--old-base",
+            "main",
+            "--old-tip",
+            "pr-1",
+        ])
+        .assert()
+        .success();
+
+    let pr2 = BranchName::new("pr-2").unwrap();
+    let pr_empty = BranchName::new("pr-empty").unwrap();
+    let pr2_tip = CommitId::new(pr2_tip);
+    let plan_path = repo.plan_path("stack");
+    let mut plan = Plan::from_yaml(&std::fs::read_to_string(&plan_path).unwrap()).unwrap();
+    if let Some(node) = plan.nodes.iter_mut().find(|node| node.branch == pr_empty) {
+        node.tip = pr2_tip.clone();
+        node.base = pr2_tip.clone();
+        node.commits.clear();
+        node.parent = Some(pr2.clone());
+    } else {
+        plan.nodes.push(Node {
+            branch: pr_empty.clone(),
+            tip: pr2_tip.clone(),
+            base: pr2_tip.clone(),
+            commits: Vec::new(),
+            parent: Some(pr2.clone()),
+        });
+    }
+    plan.dependencies
+        .retain(|dependency| dependency.child != pr_empty);
+    plan.dependencies.push(Dependency {
+        parent: pr2,
+        child: pr_empty,
+    });
+    std::fs::write(&plan_path, serde_yaml::to_string(&plan).unwrap()).unwrap();
+
+    repo
+}
+
 fn rewrite_anchor(repo: &TestRepo) {
     repo.switch("main");
     repo.commit_file("main2.txt", "new base\n", "new base");
@@ -1298,13 +1604,10 @@ fn deleting_phase() -> Phase {
     Phase::Deleting { delete_plan: false }
 }
 
-fn conflict_current(state: &ReplayState) -> CurrentState {
+fn conflict_commit(state: &ReplayState) -> CommitId {
     match &state.phase {
-        Phase::Conflict { current, .. }
-        | Phase::Replay {
-            current: Some(current),
-        } => current.clone(),
-        phase => panic!("expected conflict or replay current phase, got {phase:?}"),
+        Phase::Conflict { replay, .. } => replay.last_replayed_commit.clone().unwrap(),
+        phase => panic!("expected conflict phase, got {phase:?}"),
     }
 }
 

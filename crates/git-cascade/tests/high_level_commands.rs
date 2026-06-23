@@ -505,7 +505,7 @@ fn stack_on_non_root_main_tip() -> TestRepo {
 
 fn conflict_worktree(state: &ReplayState) -> String {
     match &state.phase {
-        Phase::Conflict { current, .. } => current.worktree.clone(),
+        Phase::Conflict { .. } => state.worktree.path().to_owned(),
         phase => panic!("expected conflict phase, got {phase:?}"),
     }
 }

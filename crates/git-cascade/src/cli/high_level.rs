@@ -3,7 +3,7 @@ use super::landed as landed_inference;
 use crate::git::Git;
 use crate::model::{BranchName, GitRef, Strategy};
 use crate::plan::{GenerateOptions, PlanName, generate_plan, generate_stored_plan};
-use crate::replay::{ReplayOptions, dry_run, execute};
+use crate::replay::{ReplayOptions, ReplayPauseMode, dry_run, execute};
 use crate::storage::Storage;
 use crate::{Error, Result};
 
@@ -11,7 +11,7 @@ pub(super) struct RunOptions {
     pub(super) strategy: Strategy,
     pub(super) is_dry_run: bool,
     pub(super) in_place: bool,
-    pub(super) pause_at_checkpoints: bool,
+    pub(super) replay_mode: ReplayPauseMode,
 }
 
 pub(super) fn restack(
@@ -225,7 +225,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
                     new_tip_input: options.new_tip,
                     strategy: options.run.strategy,
                     in_place: options.run.in_place,
-                    pause_at_checkpoints: options.run.pause_at_checkpoints,
+                    replay_mode: options.run.replay_mode,
                 },
             )?
         );
@@ -243,7 +243,7 @@ fn generate_and_apply(options: GeneratedApply<'_>) -> Result<()> {
             new_tip_input: options.new_tip,
             strategy: options.run.strategy,
             in_place: options.run.in_place,
-            pause_at_checkpoints: options.run.pause_at_checkpoints,
+            replay_mode: options.run.replay_mode,
         },
     )?;
 

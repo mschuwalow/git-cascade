@@ -1,11 +1,13 @@
+use super::pause::PausePlan;
 use crate::model::Strategy;
 use crate::model::{BranchName, CommitId, GitRef};
 use crate::plan::{PlanCommit, PlanId, PlanName};
 use crate::storage::Storage;
 use crate::{Error, Result};
+use clap::ValueEnum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,16 +17,23 @@ use time::format_description::well_known::Rfc3339;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
-    Replay {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        current: Option<CurrentState>,
+    Replay,
+    ContinueReplay {
+        replay: BranchReplayState,
+    },
+    FinalizeBranch {
+        branch: BranchName,
+        temp_ref: GitRef,
+        mapped_commit: CommitId,
+        mapped_tip: CommitId,
+        branch_tip: CommitId,
     },
     Conflict {
-        current: CurrentState,
+        replay: BranchReplayState,
         message: String,
     },
     ContinueAfterConflict {
-        current: CurrentState,
+        replay: BranchReplayState,
     },
     Paused {
         paused: PausedState,
@@ -42,10 +51,20 @@ pub enum Phase {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BranchReplayState {
+    pub branch: BranchName,
+    pub commit_index: usize,
+    pub last_replayed_commit: Option<CommitId>,
+    pub last_rewritten: CommitId,
+}
+
 impl Phase {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Replay { .. } => "replay",
+            Self::Replay => "replay",
+            Self::ContinueReplay { .. } => "continue_replay",
+            Self::FinalizeBranch { .. } => "finalize_branch",
             Self::Conflict { .. } => "conflict",
             Self::ContinueAfterConflict { .. } => "continue_after_conflict",
             Self::Paused { .. } => "paused",
@@ -63,77 +82,98 @@ impl std::fmt::Display for Phase {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
-pub enum ReplayMode {
+pub enum ReplayPauseMode {
     #[default]
-    RunToCompletion,
-    PauseAtCheckpoints,
+    Never,
+    EveryCommit,
+    Checkpoints,
 }
 
-impl ReplayMode {
+impl ReplayPauseMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::RunToCompletion => "run-to-completion",
-            Self::PauseAtCheckpoints => "pause-at-checkpoints",
+            Self::Never => "never",
+            Self::EveryCommit => "every-commit",
+            Self::Checkpoints => "checkpoints",
         }
-    }
-
-    pub fn pauses_at_checkpoints(self) -> bool {
-        self == Self::PauseAtCheckpoints
     }
 }
 
-impl std::fmt::Display for ReplayMode {
+impl std::fmt::Display for ReplayPauseMode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum PauseReason {
+    Commit,
+    ChildBase,
+    BranchEnd,
+}
+
+impl PauseReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::ChildBase => "child-base",
+            Self::BranchEnd => "branch-end",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CurrentState {
+pub struct PausedState {
     pub branch: BranchName,
-    pub commit: CommitId,
+    pub rewritten_tip: CommitId,
     pub worktree: String,
+    pub reasons: BTreeSet<PauseReason>,
+    pub kind: PausedKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-pub enum PausedState {
+pub enum PausedKind {
+    MidBranch {
+        replay: BranchReplayState,
+    },
     BranchEnd {
-        branch: BranchName,
-        rewritten_tip: CommitId,
         temp_ref: GitRef,
         mapped_commit: CommitId,
-        worktree: String,
-    },
-    ChildBase {
-        branch: BranchName,
-        commit: CommitId,
-        rewritten_tip: CommitId,
-        worktree: String,
     },
 }
 
 impl PausedState {
     pub fn branch(&self) -> &str {
-        match self {
-            Self::BranchEnd { branch, .. } | Self::ChildBase { branch, .. } => branch.as_str(),
-        }
+        self.branch.as_str()
     }
 
     pub fn rewritten_tip(&self) -> &str {
-        match self {
-            Self::BranchEnd { rewritten_tip, .. } | Self::ChildBase { rewritten_tip, .. } => {
-                rewritten_tip.as_str()
-            }
-        }
+        self.rewritten_tip.as_str()
     }
 
     pub fn worktree(&self) -> &str {
-        match self {
-            Self::BranchEnd { worktree, .. } | Self::ChildBase { worktree, .. } => worktree,
-        }
+        &self.worktree
+    }
+
+    pub fn reasons(&self) -> &BTreeSet<PauseReason> {
+        &self.reasons
+    }
+
+    pub fn reason_list(&self) -> String {
+        self.reasons
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn is_branch_end(&self) -> bool {
+        matches!(self.kind, PausedKind::BranchEnd { .. })
     }
 }
 
@@ -190,11 +230,12 @@ pub struct ReplayState {
     pub updated_at: String,
     pub new_tip: CommitId,
     pub strategy: Strategy,
-    pub replay_mode: ReplayMode,
+    pub replay_mode: ReplayPauseMode,
+    pub(super) pause_plan: PausePlan,
     pub worktree: WorktreeState,
     pub completed_temp_refs: Vec<GitRef>,
-    pub branch_tips: BTreeMap<BranchName, CommitId>,
-    pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
+    pub(super) branch_tips: BTreeMap<BranchName, CommitId>,
+    pub(super) extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
     pub mappings: BTreeMap<CommitId, CommitId>,
     pub pending_branches: Vec<BranchName>,
 }
@@ -349,25 +390,25 @@ pub fn read_state(storage: &Storage) -> Result<Option<ReplayState>> {
     Ok(Some(serde_yaml::from_str(&content)?))
 }
 
-pub struct InitialReplayStateInput<'a> {
+pub(super) struct InitialReplayStateInput<'a> {
     pub plan_name: &'a PlanName,
     pub plan_id: &'a PlanId,
     pub new_tip: &'a CommitId,
     pub strategy: Strategy,
-    pub replay_mode: ReplayMode,
+    pub replay_mode: ReplayPauseMode,
+    pub pause_plan: PausePlan,
     pub pending_branches: Vec<BranchName>,
     pub branch_tips: BTreeMap<BranchName, CommitId>,
     pub extra_commits: BTreeMap<BranchName, Vec<PlanCommit>>,
-    pub mappings: BTreeMap<CommitId, CommitId>,
     pub worktree: WorktreeState,
 }
 
-pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<ReplayState> {
+pub(super) fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<ReplayState> {
     let now = timestamp()?;
 
     Ok(ReplayState {
         version: 1,
-        phase: Phase::Replay { current: None },
+        phase: Phase::Replay,
         plan_name: input.plan_name.clone(),
         plan_id: *input.plan_id,
         started_at: now.clone(),
@@ -375,11 +416,12 @@ pub fn initial_replay_state(input: InitialReplayStateInput<'_>) -> Result<Replay
         new_tip: input.new_tip.clone(),
         strategy: input.strategy,
         replay_mode: input.replay_mode,
+        pause_plan: input.pause_plan,
         worktree: input.worktree,
         completed_temp_refs: Vec::new(),
         branch_tips: input.branch_tips,
         extra_commits: input.extra_commits,
-        mappings: input.mappings,
+        mappings: BTreeMap::new(),
         pending_branches: input.pending_branches,
     })
 }

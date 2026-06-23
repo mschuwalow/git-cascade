@@ -4,7 +4,7 @@ use crate::git::Git;
 use crate::model::{GitRef, Strategy};
 use crate::plan::{GenerateOptions, Plan, PlanName, generate_stored_plan};
 use crate::replay::state::read_state;
-use crate::replay::{ReplayOptions, dry_run, execute};
+use crate::replay::{ReplayOptions, ReplayPauseMode, dry_run, execute};
 use crate::storage::Storage;
 use clap::Subcommand;
 
@@ -34,7 +34,7 @@ pub(super) enum Command {
         #[arg(long, value_name = "REF")]
         new_tip: GitRef,
         /// Replay strategy for dependent branches.
-        #[arg(long, value_enum, default_value_t = Strategy::PreserveForkPoints)]
+        #[arg(long, value_enum, default_value_t = Strategy::MoveToCurrentTips)]
         strategy: Strategy,
         /// Print the Git operations without mutating refs, worktrees, or state.
         #[arg(long)]
@@ -42,9 +42,9 @@ pub(super) enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
-        #[arg(long)]
-        pause_at_checkpoints: bool,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// List stored repository-local cascade plans by name.
     List,
@@ -76,15 +76,8 @@ pub(super) fn run(command: Command) -> Result<()> {
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
-        } => apply(
-            name,
-            new_tip,
-            strategy,
-            dry_run,
-            in_place,
-            pause_at_checkpoints,
-        ),
+            pause_at,
+        } => apply(name, new_tip, strategy, dry_run, in_place, pause_at),
         Command::List => list(),
         Command::Show { name } => show(&name),
         Command::Remove { name } => remove(name),
@@ -116,7 +109,7 @@ fn apply(
     strategy: Strategy,
     is_dry_run: bool,
     in_place: bool,
-    pause_at_checkpoints: bool,
+    replay_mode: ReplayPauseMode,
 ) -> Result<()> {
     let git = Git::current_dir()?;
     let storage = Storage::discover(&git)?;
@@ -126,7 +119,7 @@ fn apply(
         new_tip_input: new_tip,
         strategy,
         in_place,
-        pause_at_checkpoints,
+        replay_mode,
     };
 
     if is_dry_run {

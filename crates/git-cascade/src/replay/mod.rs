@@ -1,8 +1,10 @@
 mod backend;
 mod cleanup;
 mod context;
+mod pause;
 pub mod state;
 mod state_writer;
+mod strategy;
 
 use crate::git::Git;
 use crate::model::Strategy;
@@ -16,8 +18,10 @@ use crate::{Error, Result};
 use backend::{DryRunReplayBackend, GitReplayBackend};
 use cleanup::run_deleting_phase;
 use context::ReplayContext;
+use pause::PausePlan;
 pub use state::{
-    CurrentState, PausedState, Phase, ReplayMode, ReplayState, RestoreState, WorktreeState,
+    BranchReplayState, PauseReason, PausedKind, PausedState, Phase, ReplayPauseMode, ReplayState,
+    RestoreState, WorktreeState,
 };
 use state::{InitialReplayStateInput, StateFile, initial_replay_state};
 use state_writer::{LockedStateWriter, NoopStateWriter, StateWriter};
@@ -30,14 +34,16 @@ pub struct ReplayOptions {
     pub new_tip_input: GitRef,
     pub strategy: Strategy,
     pub in_place: bool,
-    pub pause_at_checkpoints: bool,
+    pub replay_mode: ReplayPauseMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplayOutcome {
     Complete,
     Conflict {
-        current: CurrentState,
+        branch: BranchName,
+        commit: CommitId,
+        worktree: String,
         message: String,
     },
     Paused {
@@ -77,20 +83,14 @@ pub fn dry_run(
             path: worktree.display().to_string(),
         }
     };
-    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
-    let mappings = BTreeMap::new();
-    let state = initial_replay_state(InitialReplayStateInput {
-        plan_name: &options.plan_name,
-        plan_id: &plan.plan_id,
-        new_tip: &new_tip,
-        strategy: options.strategy,
-        replay_mode: replay_mode(&options),
-        pending_branches: ordered,
-        branch_tips,
-        extra_commits,
-        mappings,
-        worktree: worktree_state,
-    })?;
+    let state = start_replay_state(
+        plan,
+        &options,
+        &new_tip,
+        ordered,
+        branch_refs,
+        worktree_state,
+    )?;
     let mut state_writer = NoopStateWriter;
     let mut backend = DryRunReplayBackend::new(git, storage, plan, &state)?;
     {
@@ -140,23 +140,18 @@ pub fn execute(
             worktree,
         )
     };
-    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
-    let mappings = BTreeMap::new();
-    let state = initial_replay_state(InitialReplayStateInput {
-        plan_name: &options.plan_name,
-        plan_id: &plan.plan_id,
-        new_tip: &new_tip,
-        strategy: options.strategy,
-        replay_mode: replay_mode(&options),
-        pending_branches: ordered,
-        branch_tips,
-        extra_commits,
-        mappings,
-        worktree: worktree_state.clone(),
-    })?;
+    let temporary_worktree = worktree_state.is_temporary();
+    let state = start_replay_state(
+        plan,
+        &options,
+        &new_tip,
+        ordered,
+        branch_refs,
+        worktree_state,
+    )?;
     let state_file = StateFile::create(storage, &state)?;
 
-    if worktree_state.is_temporary() {
+    if temporary_worktree {
         storage.ensure_worktrees_dir()?;
         cleanup_stale_worktree(git, &worktree)?;
     }
@@ -302,14 +297,6 @@ fn restore_state(git: &Git) -> Result<RestoreState> {
     })
 }
 
-fn replay_mode(options: &ReplayOptions) -> ReplayMode {
-    if options.pause_at_checkpoints {
-        ReplayMode::PauseAtCheckpoints
-    } else {
-        ReplayMode::RunToCompletion
-    }
-}
-
 fn ensure_target_branches_not_checked_out(git: &Git, branches: &[BranchName]) -> Result<()> {
     let checked_out = git.checked_out_branches()?;
     ensure_branches_not_checked_out(branches, &checked_out)
@@ -357,6 +344,43 @@ fn branch_tips_and_extra_commits(
     }
 
     (branch_tips, extra_commits)
+}
+
+fn start_replay_state(
+    plan: &Plan,
+    options: &ReplayOptions,
+    new_tip: &CommitId,
+    pending_branches: Vec<BranchName>,
+    branch_refs: BTreeMap<BranchName, BranchRef>,
+    worktree: WorktreeState,
+) -> Result<ReplayState> {
+    let (branch_tips, extra_commits) = branch_tips_and_extra_commits(branch_refs);
+    let pause_plan =
+        PausePlan::for_plan(options.replay_mode, options.strategy, plan, &extra_commits);
+
+    initial_replay_state(InitialReplayStateInput {
+        plan_name: &options.plan_name,
+        plan_id: &plan.plan_id,
+        new_tip,
+        strategy: options.strategy,
+        replay_mode: options.replay_mode,
+        pause_plan,
+        pending_branches,
+        branch_tips,
+        extra_commits,
+        worktree,
+    })
+}
+
+fn replay_commits_from_extra(
+    node: &crate::plan::Node,
+    extra_commits: &BTreeMap<BranchName, Vec<PlanCommit>>,
+) -> Vec<PlanCommit> {
+    let mut commits = node.commits().to_vec();
+    if let Some(extra) = extra_commits.get(&node.branch) {
+        commits.extend(extra.iter().cloned());
+    }
+    commits
 }
 
 fn cleanup_stale_worktree(git: &Git, worktree: &std::path::Path) -> Result<()> {

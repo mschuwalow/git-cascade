@@ -7,7 +7,8 @@ use crate::Result;
 use crate::git::Git;
 use crate::model::{BranchName, GitRef, Strategy};
 use crate::replay::{
-    AbortOutcome, PausedState, ReplayOutcome, abort as abort_apply, continue_replay,
+    AbortOutcome, PausedState, ReplayOutcome, ReplayPauseMode, abort as abort_apply,
+    continue_replay,
 };
 use crate::storage::Storage;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -48,9 +49,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
-        #[arg(long)]
-        pause_at_checkpoints: bool,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Replay dependents from an old root tip onto an arbitrary replacement tip.
     Replay {
@@ -72,9 +73,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
-        #[arg(long)]
-        pause_at_checkpoints: bool,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Update branches after the default branch advanced.
     Sync {
@@ -93,9 +94,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
-        #[arg(long)]
-        pause_at_checkpoints: bool,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Move dependents of a branch that landed on the default branch.
     Landed {
@@ -117,9 +118,9 @@ enum Command {
         /// Replay in the current worktree instead of a temporary worktree.
         #[arg(long)]
         in_place: bool,
-        /// Stop at child replay bases and branch ends so checks and fixes can be committed manually.
-        #[arg(long)]
-        pause_at_checkpoints: bool,
+        /// Pause mode for replay.
+        #[arg(long = "pause-at", value_enum, value_name = "MODE", default_value_t = ReplayPauseMode::Never)]
+        pause_at: ReplayPauseMode,
     },
     /// Show the active cascade operation, if any.
     Status,
@@ -160,7 +161,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::restack(
             branch,
             base,
@@ -168,7 +169,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Replay {
@@ -178,7 +179,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::replay(
             old_tip,
             old_base,
@@ -187,7 +188,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Sync {
@@ -196,7 +197,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::sync(
             base,
             oldest_branch,
@@ -204,7 +205,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Landed {
@@ -214,7 +215,7 @@ where
             strategy,
             dry_run,
             in_place,
-            pause_at_checkpoints,
+            pause_at,
         } => high_level::landed(
             old_tip,
             onto,
@@ -223,7 +224,7 @@ where
                 strategy,
                 is_dry_run: dry_run,
                 in_place,
-                pause_at_checkpoints,
+                replay_mode: pause_at,
             },
         ),
         Command::Status => status::status(),
@@ -251,14 +252,12 @@ pub(super) fn handle_replay_outcome(outcome: ReplayOutcome, success_message: &st
     match outcome {
         ReplayOutcome::Complete => println!("{success_message}"),
         ReplayOutcome::Paused { paused } => print_paused_message(&paused),
-        ReplayOutcome::Conflict { current, message } => {
-            print_conflict_message(
-                &current.branch,
-                &current.commit,
-                &current.worktree,
-                &message,
-            );
-        }
+        ReplayOutcome::Conflict {
+            branch,
+            commit,
+            worktree,
+            message,
+        } => print_conflict_message(&branch, &commit, &worktree, &message),
     }
 
     Ok(())
@@ -276,20 +275,35 @@ fn print_conflict_message(
 }
 
 pub(super) fn print_paused_message(paused: &PausedState) {
-    match paused {
-        PausedState::BranchEnd {
-            branch, worktree, ..
-        } => println!(
-            "paused after branch `{branch}`; run checks in {worktree}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`"
-        ),
-        PausedState::ChildBase {
-            branch,
-            commit,
-            worktree,
-            ..
-        } => println!(
-            "paused at child base `{commit}` on branch `{branch}`; run checks in {worktree}, commit any fixes, then run `git cascade continue`"
-        ),
+    if paused
+        .reasons()
+        .contains(&crate::replay::PauseReason::BranchEnd)
+    {
+        println!(
+            "paused after branch `{}`; run checks in {}, commit fixes or rewrite this branch while preserving child replay bases, then run `git cascade continue`\nstop reasons: {}",
+            paused.branch,
+            paused.worktree,
+            paused.reason_list(),
+        );
+    } else if let crate::replay::PausedKind::MidBranch { replay } = &paused.kind {
+        let commit = replay
+            .last_replayed_commit
+            .as_ref()
+            .expect("mid-branch pause has current commit");
+        let kind = if paused
+            .reasons()
+            .contains(&crate::replay::PauseReason::ChildBase)
+        {
+            "child base commit"
+        } else {
+            "commit"
+        };
+        println!(
+            "paused at {kind} `{commit}` on branch `{}`; run checks in {}, commit any fixes, then run `git cascade continue`\nstop reasons: {}",
+            paused.branch,
+            paused.worktree,
+            paused.reason_list(),
+        );
     }
 }
 

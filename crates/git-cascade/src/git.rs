@@ -506,6 +506,10 @@ impl Git {
         self.run_mutating(["reset", "--hard", commit.as_str()])
     }
 
+    pub fn reset_soft(&self, commit: &CommitId) -> Result<()> {
+        self.run_mutating(["reset", "--soft", commit.as_str()])
+    }
+
     pub fn switch_detached(&self, commit: &CommitId) -> Result<()> {
         self.run_mutating(["switch", "--detach", commit.as_str()])
     }
@@ -532,6 +536,10 @@ impl Git {
 
     pub fn cherry_pick_skip(&self) -> Result<()> {
         self.run_mutating(["cherry-pick", "--skip"])
+    }
+
+    pub fn commit_reusing(&self, commit: &CommitId) -> Result<()> {
+        self.run_mutating(["commit", "-C", commit.as_str()])
     }
 
     pub fn cherry_pick_in_progress(&self) -> Result<bool> {

@@ -1,7 +1,7 @@
 mod common;
 
 use common::repo::TestRepo;
-use git_cascade::replay::{Phase, ReplayState};
+use git_cascade::replay::ReplayState;
 use indoc::indoc;
 use std::os::unix::fs::PermissionsExt;
 
@@ -86,7 +86,7 @@ fn recovers_conflict_continuation_after_git_operation_interruptions() {
             .success();
 
         let state = read_state(&repo);
-        let worktree = std::path::PathBuf::from(conflict_current(&state).worktree);
+        let worktree = std::path::PathBuf::from(state.worktree.path());
         std::fs::write(worktree.join("conflict.txt"), "resolved\n").unwrap();
         repo.git_ok(["-C", worktree.to_str().unwrap(), "add", "conflict.txt"]);
 
@@ -236,16 +236,6 @@ fn assert_clean_cascade_state(repo: &TestRepo) {
     assert!(!repo.common_dir().join("cascade/state.yaml").exists());
     assert!(!repo.plan_path("stack").exists());
     assert!(repo.git_output(["for-each-ref", "refs/cascade"]).is_empty());
-}
-
-fn conflict_current(state: &ReplayState) -> git_cascade::replay::CurrentState {
-    match &state.phase {
-        Phase::Conflict { current, .. }
-        | Phase::Replay {
-            current: Some(current),
-        } => current.clone(),
-        phase => panic!("expected conflict or replay current phase, got {phase:?}"),
-    }
 }
 
 fn read_state(repo: &TestRepo) -> ReplayState {
