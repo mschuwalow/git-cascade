@@ -285,7 +285,7 @@ fn pause_at_checkpoints_allows_fix_before_replaying_child() {
     assert!(matches!(state.phase, Phase::Paused { .. }));
     assert_eq!(state.replay_mode, ReplayPauseMode::Checkpoints);
     assert_eq!(paused_state(&state).branch(), "pr-2");
-    assert_eq!(pending_branch_names(&state), vec!["pr-3"]);
+    assert_eq!(pending_branch_names(&state), vec!["pr-2", "pr-3"]);
     assert_eq!(repo.rev_parse("pr-2"), old_pr2);
     assert_eq!(repo.rev_parse("pr-3"), old_pr3);
 
