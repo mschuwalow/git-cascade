@@ -57,7 +57,6 @@ pub struct BranchReplayState {
     pub commit_index: usize,
     pub current_commit: Option<CommitId>,
     pub last_rewritten: CommitId,
-    pub was_resuming: bool,
 }
 
 impl Phase {

@@ -163,7 +163,7 @@ where
             &node,
             commits.len(),
             replay.commit_index,
-            replay.was_resuming,
+            replay.current_commit.is_some(),
         )?;
         for (commit_index, commit) in commits.iter().enumerate().skip(replay.commit_index) {
             match self.replay_commit(
@@ -194,7 +194,6 @@ where
             commit_index: commit_index + 1,
             current_commit: Some(current_commit),
             last_rewritten,
-            was_resuming: true,
         }
     }
 
@@ -220,7 +219,6 @@ where
             commit_index: 0,
             current_commit: None,
             last_rewritten: base,
-            was_resuming: false,
         })
     }
 
