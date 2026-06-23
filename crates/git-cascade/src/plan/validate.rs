@@ -120,13 +120,15 @@ fn validate_shape(plan: &Plan) -> Result<()> {
         if node.branch.is_empty() {
             return invalid("node branch names must not be empty");
         }
-        if node.commits().is_empty() {
+        if node.commits().is_empty() && node.base != node.tip {
             return invalid(format!(
-                "node `{}` must contain at least one commit",
+                "empty node `{}` must have matching base and tip",
                 node.branch
             ));
         }
-        if node.commits().last().map(|commit| commit.oid.as_str()) != Some(node.tip.as_str()) {
+        if !node.commits().is_empty()
+            && node.commits().last().map(|commit| commit.oid.as_str()) != Some(node.tip.as_str())
+        {
             return invalid(format!(
                 "node `{}` tip must match the last commit",
                 node.branch

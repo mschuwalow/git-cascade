@@ -27,6 +27,11 @@ struct BranchReplayStart {
     was_resuming: bool,
 }
 
+enum CommitReplay {
+    Continued(CommitId),
+    Stopped,
+}
+
 impl<'plan, 'state, B, W> ReplayContext<'plan, 'state, B, W>
 where
     B: ReplayBackend,
@@ -149,18 +154,17 @@ where
             start.was_resuming,
         )?;
         for (commit_index, commit) in commits.iter().enumerate().skip(start.commit_index) {
-            let Some(last_rewritten) = self.replay_commit(
+            match self.replay_commit(
                 &node,
                 commit,
                 commit_index,
                 commits.len(),
                 &start.last_rewritten,
                 branch_index,
-            )?
-            else {
-                return Ok(true);
-            };
-            start.last_rewritten = last_rewritten;
+            )? {
+                CommitReplay::Continued(last_rewritten) => start.last_rewritten = last_rewritten,
+                CommitReplay::Stopped => return Ok(true),
+            }
         }
 
         self.finish_branch(&node, &commits, branch_index)
@@ -227,11 +231,11 @@ where
         total_commits: usize,
         last_rewritten: &CommitId,
         branch_index: usize,
-    ) -> Result<Option<CommitId>> {
+    ) -> Result<CommitReplay> {
         let Some(rewritten_commit) =
             self.rewrite_commit(node, commit, commit_index, total_commits, last_rewritten)?
         else {
-            return Ok(None);
+            return Ok(CommitReplay::Stopped);
         };
         self.state
             .mappings
@@ -245,9 +249,9 @@ where
                 &rewritten_commit,
                 pause_reasons,
             )?;
-            return Ok(None);
+            return Ok(CommitReplay::Stopped);
         }
-        Ok(Some(rewritten_commit))
+        Ok(CommitReplay::Continued(rewritten_commit))
     }
 
     fn rewrite_commit(

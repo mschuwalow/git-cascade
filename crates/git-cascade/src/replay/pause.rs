@@ -37,13 +37,9 @@ impl PausePlan {
                     for commit in &commits {
                         pause_plan.add_commit_reason(commit.oid.clone(), PauseReason::Commit);
                     }
+                    pause_plan.add_branch_end_reason(node.branch.clone(), PauseReason::BranchEnd);
                     if matches!(strategy, Strategy::Squash) && !commits.is_empty() {
-                        pause_plan
-                            .add_branch_end_reason(node.branch.clone(), PauseReason::BranchEnd);
                         pause_plan.add_branch_end_reason(node.branch.clone(), PauseReason::Commit);
-                    } else if let Some(last_commit) = commits.last() {
-                        pause_plan
-                            .add_commit_reason(last_commit.oid.clone(), PauseReason::BranchEnd);
                     }
                 }
                 ReplayPauseMode::Checkpoints => {
@@ -52,13 +48,7 @@ impl PausePlan {
                     {
                         pause_plan.add_commit_reason(commit, PauseReason::ChildBase);
                     }
-                    if matches!(strategy, Strategy::Squash) && !commits.is_empty() {
-                        pause_plan
-                            .add_branch_end_reason(node.branch.clone(), PauseReason::BranchEnd);
-                    } else if let Some(last_commit) = commits.last() {
-                        pause_plan
-                            .add_commit_reason(last_commit.oid.clone(), PauseReason::BranchEnd);
-                    }
+                    pause_plan.add_branch_end_reason(node.branch.clone(), PauseReason::BranchEnd);
                 }
             }
         }
